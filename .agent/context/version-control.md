@@ -51,6 +51,7 @@ Co-Authored-By: <if collaboratively authored>
 **Subject line** (≤72 chars):
 
 - Lead with the task ID matching `.agent/tasks/`: `v3:`, `v4-presets:`, `bugfix-orphan-relink:`, etc.
+- For commits that don't tie to a task — repo hygiene, doc edits, refactors of cross-cutting code — use a topic prefix instead: `chore:` (gitignore, build, tooling), `docs:` (anything under `.agent/`, `README.md`, comments), `refactor:` (no behavior change). Borrowed from Conventional Commits but used loosely; we're not parsing these.
 - Imperative voice: `add`, `fix`, `refactor` — not "added" or "adds"
 - Specific: `v3: cross-track magnetic snap + multi-track lanes` beats `v3: timeline updates`
 
