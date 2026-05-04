@@ -1,7 +1,7 @@
 # Current Task
 
-**v2 — Drag a camera onto the canvas to create a shot**
+**Next: v4b — Play-range bar with I/O handles** *(not yet started)*
 
-See `tasks/active/v2-shot-on-drop.md`.
+The draggable in/out range at the top of the timeline (constitution principle 5). Spacebar play/pause plays from cursor to out-point. Once it exists, the right-click context menu (from v4a) gains "Set Range to This / Selection" items, and the deferred multi-shot drag-as-group can be planned alongside.
 
-Drop a Camera from the Object Manager onto the timeline canvas → a shot block appears, persists with the document, and is undoable. First feature where Shotblocks owns scene state.
+v4a (selection polish + right-click context menus) is complete and archived. See `tasks/archived/v4a-selection-and-context-menus.md`.

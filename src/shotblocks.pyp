@@ -27,6 +27,10 @@ SHOTBLOCKS_DAMPING = 1001
 ID_CANVAS      = 2000
 ID_SNAP_TOGGLE = 2001
 
+# Right-click context menu item IDs (plugin-internal; any unused int works).
+MENU_DELETE    = 3000
+MENU_DUPLICATE = 3001
+
 # BaseContainer keys on the helper null
 BCKEY_HELPER_MARKER = 1010   # str: identifies a null as our data carrier
 BCKEY_SHOTS_JSON    = 1011   # str: the JSON-serialized shot list + counters
@@ -449,6 +453,11 @@ _KEY_MLEFT   = getattr(c4d, "KEY_MLEFT",   61440)
 _KEY_MRIGHT  = getattr(c4d, "KEY_MRIGHT",  61441)
 _KEY_MMIDDLE = getattr(c4d, "KEY_MMIDDLE", 61442)
 
+# Keyboard keys we care about — values dumped at canvas init for verification.
+_KEY_DELETE    = getattr(c4d, "KEY_DELETE",    None)
+_KEY_BACKSPACE = getattr(c4d, "KEY_BACKSPACE", None)
+_KEY_D         = getattr(c4d, "KEY_D",         None)
+
 
 def _qualifier_mode(qualifier, snap_enabled=False):
     """Map a BFM_INPUT_QUALIFIER bitmask to overlap-policy mode string.
@@ -483,7 +492,8 @@ class ShotblocksTimelineCanvas(c4d.gui.GeUserArea):
                          "BFM_INPUT_MOUSELEFT", "BFM_INPUT_MOUSERIGHT",
                          "BFM_INPUT_MOUSEMIDDLE", "BFM_INPUT_MOUSEWHEEL",
                          "BFM_INPUT_QUALIFIER", "BFM_INPUT_VALUE",
-                         "KEY_MLEFT", "KEY_MMIDDLE", "KEY_MRIGHT"):
+                         "KEY_MLEFT", "KEY_MMIDDLE", "KEY_MRIGHT",
+                         "KEY_DELETE", "KEY_BACKSPACE", "KEY_D"):
                 v = getattr(c4d, name, "MISSING")
                 print("[Shotblocks] c4d.{} = {!r}".format(name, v))
 
@@ -496,8 +506,11 @@ class ShotblocksTimelineCanvas(c4d.gui.GeUserArea):
         self._drag_frame  = -1
         self._drag_track  = 0
 
-        # Selection
-        self._selected_id = None
+        # Selection — a set of shot ids. Empty = nothing selected.
+        self._selected_ids = set()
+
+        # Marquee drag state — non-None during a marquee, holds (x0, y0, x1, y1).
+        self._marquee_rect = None
 
         # Drag preview override — if non-None, DrawMsg uses this list instead of doc
         self._preview_shots = None
@@ -637,7 +650,18 @@ class ShotblocksTimelineCanvas(c4d.gui.GeUserArea):
         for shot in shots:
             track  = _shot_track(shot)
             yt     = self._track_y_top(track, lane_count)
-            self._draw_shot_block(shot, w, yt, shot["id"] == self._selected_id)
+            self._draw_shot_block(shot, w, yt, shot["id"] in self._selected_ids)
+
+        # Marquee selection rectangle (1px warm-yellow outline)
+        if self._marquee_rect is not None:
+            mx0, my0, mx1, my1 = self._marquee_rect
+            rx1, ry1 = min(mx0, mx1), min(my0, my1)
+            rx2, ry2 = max(mx0, mx1), max(my0, my1)
+            self.DrawSetPen(COL_SELECTION)
+            self.DrawLine(rx1, ry1, rx2, ry1)
+            self.DrawLine(rx1, ry2, rx2, ry2)
+            self.DrawLine(rx1, ry1, rx1, ry2)
+            self.DrawLine(rx2, ry1, rx2, ry2)
 
         # Drop hint: vertical line at drag frame position, in the dragged track
         if self._drag_over and self._drag_frame >= 0:
@@ -919,15 +943,102 @@ class ShotblocksTimelineCanvas(c4d.gui.GeUserArea):
             print("[Shotblocks] Alt+RMB at ({},{}) → zoom drag".format(x, y))
             self._drag_zoom(x, y)
             return True
-        # Plain right-click: reserved for v4 context menus.
-        return False
+        # Plain RMB → context menu.
+        return self._open_context_menu(x, y)
+
+    def _open_context_menu(self, x, y):
+        """Right-click context menu. v4a items: Delete, Duplicate."""
+        # One-time API probe — dump every popup-related and coord-related attr
+        # so we can see what's actually available in this C4D 2026 build.
+        if not ShotblocksTimelineCanvas._popup_api_logged:
+            ShotblocksTimelineCanvas._popup_api_logged = True
+            popup_attrs = [n for n in dir(c4d.gui)
+                           if ("popup" in n.lower() or "menu" in n.lower())]
+            pos_attrs = [n for n in dir(c4d.gui)
+                         if any(s in n.lower() for s in
+                                ("mouse", "cursor", "screen", "pointer"))]
+            ua_attrs = [n for n in dir(self)
+                        if any(s in n.lower() for s in
+                               ("local2", "global2", "screen", "screen2",
+                                "cursor"))]
+            print("[Shotblocks] popup attrs: {}".format(popup_attrs))
+            print("[Shotblocks] c4d.gui pos attrs: {}".format(pos_attrs))
+            print("[Shotblocks] GeUserArea coord attrs: {}".format(ua_attrs))
+
+        w = self.GetWidth()
+        doc = c4d.documents.GetActiveDocument()
+        shots, _ = _read_shots(doc)
+        shot_id, _region = self._hit_test(x, y, shots, w)
+        print("[Shotblocks] RMB press at ({},{}) hit={}".format(x, y, shot_id))
+
+        # Right-click on empty canvas: no menu in v4a.
+        if shot_id is None:
+            return True
+
+        # If clicked shot isn't in selection, replace selection with just it.
+        if shot_id not in self._selected_ids:
+            self._selected_ids = {shot_id}
+            self.Redraw()
+
+        # Build menu — counts reflect selection size when >1.
+        n = len(self._selected_ids)
+        suffix = " ({})".format(n) if n > 1 else ""
+        bc = c4d.BaseContainer()
+        bc.SetString(MENU_DELETE,    "Delete"    + suffix)
+        bc.SetString(MENU_DUPLICATE, "Duplicate" + suffix)
+
+        # Convert canvas-local coords to monitor screen coords. Verified in
+        # C4D 2026: GeUserArea.Local2Screen() returns {"x": ..., "y": ...} —
+        # the screen position of the canvas's (0,0). Local2Global only gives
+        # offset within the parent dialog, which is why the menu landed at
+        # top-left of the monitor before the fix.
+        sx, sy = x, y
+        try:
+            scr = self.Local2Screen()
+            if isinstance(scr, dict):
+                sx = x + scr.get("x", 0)
+                sy = y + scr.get("y", 0)
+            elif isinstance(scr, (list, tuple)) and len(scr) >= 2:
+                sx = x + int(scr[0])
+                sy = y + int(scr[1])
+        except Exception as e:
+            print("[Shotblocks] Local2Screen err: {}".format(e))
+
+        result = None
+        try:
+            result = c4d.gui.ShowPopupDialog(cd=None, bc=bc, x=sx, y=sy)
+        except Exception as e:
+            print("[Shotblocks] ShowPopupDialog raised: {}".format(e))
+        if result not in (None, 0):
+            print("[Shotblocks] popup → {}".format(
+                "DELETE" if result == MENU_DELETE else
+                "DUPLICATE" if result == MENU_DUPLICATE else result))
+
+        if result == MENU_DELETE:
+            self._delete_selected()
+        elif result == MENU_DUPLICATE:
+            self._duplicate_selected()
+        return True
 
     def _on_keyboard(self, msg):
         try:
-            channel = msg.GetInt32(c4d.BFM_INPUT_CHANNEL)
-            print("[Shotblocks] canvas key: channel={}".format(channel))
+            channel   = msg.GetInt32(c4d.BFM_INPUT_CHANNEL)
+            qualifier = msg.GetInt32(c4d.BFM_INPUT_QUALIFIER)
         except Exception:
-            pass
+            return False
+
+        # Delete / Backspace → delete selected. Verified empirically in C4D 2026:
+        # KEY_DELETE = 61823, KEY_BACKSPACE = 61704.
+        if channel in (_KEY_DELETE, _KEY_BACKSPACE):
+            self._delete_selected()
+            return True
+
+        # Ctrl+D → duplicate selected. KEY_D constant doesn't exist in 2026,
+        # but the channel is the ASCII code for 'D' (68 = 0x44).
+        if (qualifier & _QCTRL) and channel == ord('D'):
+            self._duplicate_selected(qualifier=qualifier)
+            return True
+
         return False
 
     # ------------------------------------------------------------------
@@ -946,16 +1057,32 @@ class ShotblocksTimelineCanvas(c4d.gui.GeUserArea):
         doc = c4d.documents.GetActiveDocument()
         shots, _ = _read_shots(doc)
         shot_id, region = self._hit_test(x, y, shots, w)
-        print("[Shotblocks] LMB press at ({},{}) hit={}/{}".format(x, y, shot_id, region))
+        shift_held = bool(qualifier & _QSHIFT)
+        print("[Shotblocks] LMB press at ({},{}) hit={}/{} shift={}".format(
+            x, y, shot_id, region, shift_held))
 
         if shot_id is None:
-            if self._selected_id is not None:
-                self._selected_id = None
-                self.Redraw()
+            # Plain LMB on empty canvas → marquee drag (Shift adds to selection).
+            self._drag_marquee(x, y, additive=shift_held)
             return True
 
-        self._selected_id = shot_id
-        self.Redraw()
+        # Hit a shot. Selection update depends on Shift.
+        if shift_held:
+            # Toggle this shot in/out of selection
+            if shot_id in self._selected_ids:
+                self._selected_ids.discard(shot_id)
+            else:
+                self._selected_ids.add(shot_id)
+            self.Redraw()
+            # Don't drag-move on shift-click — it's a selection gesture only.
+            return True
+
+        # Plain click → single-select if not already in selection.
+        if shot_id not in self._selected_ids:
+            self._selected_ids = {shot_id}
+            self.Redraw()
+        # If already in a multi-selection, leave selection alone — the user is
+        # about to drag a member; drag-move still operates on this single shot.
 
         if region == "body":
             self._drag_move(shot_id, x, y)
@@ -971,6 +1098,7 @@ class ShotblocksTimelineCanvas(c4d.gui.GeUserArea):
     _drag_shape_logged = False
     _constants_dumped  = False
     _channel_logged    = set()
+    _popup_api_logged  = False
 
     def _drag_loop(self, button_key, mx, my, on_tick):
         """Generic drag-poll loop. Calls on_tick(accum_dx, accum_dy, qualifier)
@@ -1198,6 +1326,121 @@ class ShotblocksTimelineCanvas(c4d.gui.GeUserArea):
         doc.EndUndo()
         c4d.EventAdd()
 
+
+    # ------------------------------------------------------------------
+    # Selection operations (delete, duplicate)
+    # ------------------------------------------------------------------
+
+    def _delete_selected(self):
+        if not self._selected_ids:
+            return
+        doc = c4d.documents.GetActiveDocument()
+        shots, next_id = _read_shots(doc)
+        target_ids = set(self._selected_ids)
+        new_shots = [s for s in shots if s["id"] not in target_ids]
+        if len(new_shots) == len(shots):
+            return  # nothing actually removed
+        doc.StartUndo()
+        _write_shots(doc, new_shots, next_id, with_undo=True)
+        doc.EndUndo()
+        self._selected_ids = set()
+        c4d.EventAdd()
+        self.Redraw()
+        print("[Shotblocks] deleted {} shot(s)".format(len(target_ids)))
+
+    def _duplicate_selected(self, qualifier=0):
+        """Duplicate every selected shot. Each copy lands on track+1 (auto-grow
+        up to MAX_TRACKS); at the cap, it falls back to same-track immediately
+        after the source. Active overlap policy applies. The new shots become
+        the selection."""
+        if not self._selected_ids:
+            return
+        doc = c4d.documents.GetActiveDocument()
+        shots, next_id = _read_shots(doc)
+        srcs = [s for s in shots if s["id"] in self._selected_ids]
+        if not srcs:
+            return
+
+        new_ids = set()
+        mode = _qualifier_mode(qualifier, self._snap_enabled)
+        snap_frames = self._snap_frames() if mode == "snap" else 0
+
+        doc.StartUndo()
+        for src in srcs:
+            dup_id    = next_id
+            next_id  += 1
+            src_track = _shot_track(src)
+            duration  = src["out_frame"] - src["in_frame"]
+            if src_track + 1 < MAX_TRACKS:
+                # Track above, same in/out range
+                copy = _make_shot(dup_id, src["in_frame"], src["out_frame"],
+                                  src["cam_name"], src_track + 1)
+                shots.append(copy)
+                shots = _resolve_position(shots, dup_id, copy["in_frame"],
+                                          copy["track"], mode, snap_frames)
+            else:
+                # At the track cap → place adjacent on the same track
+                new_in = src["out_frame"] + 1
+                copy = _make_shot(dup_id, new_in, new_in + duration,
+                                  src["cam_name"], src_track)
+                shots.append(copy)
+                shots = _resolve_position(shots, dup_id, copy["in_frame"],
+                                          copy["track"], mode, snap_frames)
+            new_ids.add(dup_id)
+        _write_shots(doc, shots, next_id, with_undo=True)
+        doc.EndUndo()
+        self._selected_ids = new_ids
+        c4d.EventAdd()
+        self.Redraw()
+        print("[Shotblocks] duplicated {} shot(s) → {}".format(len(srcs), new_ids))
+
+    def _drag_marquee(self, mx, my, additive):
+        """Plain LMB-drag-on-empty-canvas marquee. Selects shots whose body
+        bbox intersects the rectangle. Additive = Shift held = preserve the
+        existing selection and union with the marquee's hits."""
+        w = self.GetWidth()
+        doc = c4d.documents.GetActiveDocument()
+        shots, _ = _read_shots(doc)
+
+        base_selection = set(self._selected_ids) if additive else set()
+        # Apply baseline immediately so a click-without-drag deselects
+        # visually before MouseDrag returns terminal on first poll.
+        self._selected_ids = set(base_selection)
+        self._marquee_rect = None
+        self.Redraw()
+
+        def on_tick(adx, ady, _qual):
+            x1 = mx + adx
+            y1 = my + ady
+            self._marquee_rect = (mx, my, x1, y1)
+            rx1, ry1, rx2, ry2 = (min(mx, x1), min(my, y1),
+                                  max(mx, x1), max(my, y1))
+            hits = self._shots_in_rect(shots, rx1, ry1, rx2, ry2, w)
+            self._selected_ids = base_selection | hits
+            self.Redraw()
+
+        self._drag_loop(_KEY_MLEFT, mx, my, on_tick)
+        self._marquee_rect = None
+        self.Redraw()
+
+    def _shots_in_rect(self, shots, rx1, ry1, rx2, ry2, w):
+        """Return the set of shot ids whose body bbox intersects the rect."""
+        lane_count = _displayed_lane_count(shots)
+        hit = set()
+        for s in shots:
+            track = _shot_track(s)
+            sy_top = self._track_y_top(track, lane_count)
+            sy_bot = sy_top + SHOT_HEIGHT - 1
+            sx1 = self._frame_to_x(s["in_frame"], w)
+            sx2 = self._frame_to_x(s["out_frame"], w)
+            if sx2 < sx1 + 2:
+                sx2 = sx1 + 2
+            if sx2 < rx1 or sx1 > rx2:
+                continue
+            if sy_bot < ry1 or sy_top > ry2:
+                continue
+            hit.add(s["id"])
+        return hit
 
     def _drag_pan(self, mx, my):
         """Alt+LMB drag-pan. Held LMB so MouseDrag actually delivers motion
