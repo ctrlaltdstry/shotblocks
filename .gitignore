@@ -1,5 +1,9 @@
 # C4D
 *.c4d.bak
+# C4D 2026 auto-backup pattern (e.g. foo.c4d@20260504_141554)
+*.c4d@*
+# Auto-backup directory C4D writes to during dev iterations
+scenes/backup/
 *.tmp
 .DS_Store
 
