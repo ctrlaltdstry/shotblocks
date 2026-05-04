@@ -1,7 +1,7 @@
 # Current Task
 
-**Next: v4b — Play-range bar with I/O handles** *(not yet started)*
+**Next: v5** *(not yet scoped — start of a new conversation)*
 
-The draggable in/out range at the top of the timeline (constitution principle 5). Spacebar play/pause plays from cursor to out-point. Once it exists, the right-click context menu (from v4a) gains "Set Range to This / Selection" items, and the deferred multi-shot drag-as-group can be planned alongside.
+v4 is complete. v4a (selection polish + right-click menus), v4b (play-range bar + I/O hotkeys + playhead scrub), and v4c (module split into `sb_shot_model.py` + `sb_persistence.py` + `sb_canvas.py` + entry-point `shotblocks.pyp`) are all archived.
 
-v4a (selection polish + right-click context menus) is complete and archived. See `tasks/archived/v4a-selection-and-context-menus.md`.
+v5 candidates from the architecture: orphaned-shot handling (camera deletion intercept), audio subsystem (waveform + onset detection), spacebar playback engine, preset library, slate engine, bake-down. Pick one as v5 in the next session.
