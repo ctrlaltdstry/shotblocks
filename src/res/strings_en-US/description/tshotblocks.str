@@ -1,0 +1,6 @@
+STRINGTABLE Tshotblocks
+{
+    Tshotblocks         "Shotblocks";
+    SHOTBLOCKS_ENABLED  "Enabled";
+    SHOTBLOCKS_DAMPING  "Damping";
+}

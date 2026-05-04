@@ -1,0 +1,10 @@
+#ifndef TSHOTBLOCKS_H__
+#define TSHOTBLOCKS_H__
+
+enum
+{
+    SHOTBLOCKS_ENABLED  = 1000,
+    SHOTBLOCKS_DAMPING  = 1001,
+};
+
+#endif

@@ -1,0 +1,22 @@
+# C4D
+*.c4d.bak
+*.tmp
+.DS_Store
+
+# Python
+__pycache__/
+*.pyc
+.venv/
+
+# Plugin build artifacts
+build/
+dist/
+*.pyp.bak
+
+# Editor
+.vscode/
+.idea/
+
+# Generated thumbnails (regenerable; uncomment if you want to exclude)
+# presets/**/*.gif
+# presets/**/*.png

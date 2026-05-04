@@ -1,0 +1,6 @@
+// Plugin-wide string table. Required by C4D's resource subsystem alongside
+// c4d_symbols.h; without it, RegisterTagPlugin(description=...) fails with
+// "Could not initialize global resource for the plugin."
+STRINGTABLE 0
+{
+}
