@@ -25,12 +25,15 @@ The entry point for any agent working on this project. Read this first, then rea
 
 ## When designing or implementing UI
 
-1. `.agent/design/principles.md` — the "why" behind visual choices. Non-negotiable.
-2. `.agent/design/visual-language.md` — concrete tokens (colors, spacing, type) for the surfaces Shotblocks controls.
-3. `.agent/context/c4d-conventions.md` — for surfaces C4D's host owns; we follow rather than lead.
-4. `.agent/context/ui-conventions.md` — drag-primary affordances, optional hotkeys.
+Read in this order — each file's authority is bounded by the ones above it:
 
-The design files govern what Shotblocks *looks like*; the convention files govern what Shotblocks *feels like to operate*. Both need to be considered for any UI work.
+1. `.agent/design/principles.md` — the "why" behind visual choices. Non-negotiable.
+2. `.agent/design/design-system.md` — **authoritative C4D 2026 dark-theme tokens**: surface ramp, accent (Maxon blue `#2C7CD3`), semantic colors, text stops, typography, spacing scale, component patterns, anti-patterns. Every UI color/space/type decision either comes from here or has a written reason for deviating.
+3. `.agent/design/visual-language.md` — Shotblocks-specific applied tokens (state colors for shot blocks, edge bands, hover highlights, range bar, etc.) — derived from the design system but covers shape/layout decisions specific to the timeline.
+4. `.agent/context/c4d-conventions.md` — for surfaces C4D's host owns; we follow rather than lead.
+5. `.agent/context/ui-conventions.md` — drag-primary affordances, optional hotkeys.
+
+The design files govern what Shotblocks *looks like*; the convention files govern what Shotblocks *feels like to operate*. Both need to be considered for any UI work. When `visual-language.md` and `design-system.md` disagree, `design-system.md` wins and `visual-language.md` is the bug to fix.
 
 ## Then, by task type
 
@@ -67,12 +70,13 @@ Read at least the conventions file before designing anything that touches the us
 
 ### "Change the timeline UI"
 1. `.agent/design/principles.md` — the why
-2. `.agent/design/visual-language.md` — the tokens
-3. `.agent/context/architecture.md` — UI layer
-4. `.agent/context/ui-conventions.md` — affordances and hotkeys
-5. `.agent/context/c4d-conventions.md` — drag-and-drop conventions, hotkey expectations
-6. `.agent/context/c4d-plugin-development.md` — GeDialog and GeUserArea specifics
-7. `.agent/workflows/timeline-change.md`
+2. `.agent/design/design-system.md` — authoritative color/spacing/type tokens
+3. `.agent/design/visual-language.md` — Shotblocks-specific applied tokens
+4. `.agent/context/architecture.md` — UI layer
+5. `.agent/context/ui-conventions.md` — affordances and hotkeys
+6. `.agent/context/c4d-conventions.md` — drag-and-drop conventions, hotkey expectations
+7. `.agent/context/c4d-plugin-development.md` — GeDialog and GeUserArea specifics
+8. `.agent/workflows/timeline-change.md`
 
 ### "Audio subsystem work"
 1. `.agent/context/audio.md`

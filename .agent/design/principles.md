@@ -1,6 +1,13 @@
 # Design principles
 
-The "why" behind the visual choices in Shotblocks. Read this before making any UI decision; the concrete tokens in `visual-language.md` descend from these principles, and so should anything not yet specified.
+The "why" behind the visual choices in Shotblocks. Read this before making any UI decision.
+
+The concrete how lives in two files, in this authority order:
+
+1. **`design-system.md`** — the authoritative C4D 2026 dark-theme tokens (surface ramp, accent, semantic colors, text, typography, spacing). Every color, space, and type decision either comes from there or has a written reason for deviating.
+2. **`visual-language.md`** — Shotblocks-specific applied tokens (shot block state colors, edge bands, hover highlights, etc.). Derived from the design system; covers what the design system doesn't (timeline-specific composition).
+
+When the two files disagree, `design-system.md` wins and `visual-language.md` is the file to fix. Anything not yet specified in either should be filled in following the principles below.
 
 ## What surfaces we control
 

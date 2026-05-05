@@ -1,6 +1,14 @@
 # Visual language
 
-Concrete tokens for the surfaces Shotblocks controls. Read together with `principles.md`. When in doubt about a value, the principles dictate; when the principles don't decide, this file does.
+Concrete tokens for the surfaces Shotblocks controls. Read together with `principles.md` (the why) and `design-system.md` (the canonical color/spacing/typography for the C4D 2026 dark theme).
+
+**Authority order when making any UI decision:**
+
+1. `principles.md` dictates first.
+2. `design-system.md` is canonical for color, surface ramp, semantic palette, text stops, typography, spacing scale, and component patterns. Any color/space/type used in Shotblocks should map to a token from there or have a written reason for deviating.
+3. This file fills in what the design system doesn't cover — the *applied* tokens for Shotblocks-specific compositions (shot block state colors, edge bands, hover highlights, play range, etc.) — by deriving from the design system's palette.
+
+If a token here disagrees with `design-system.md`, this file is the bug. The values below are the in-code state of v4d; some predate the design system being added and need a reconciliation pass before v5 visual polish lands. Tracked as deferred work.
 
 This is a *starting point*. Values are placeholders informed by the references we've discussed (Railcut for After Effects, Final Cut Pro, DaVinci Resolve) but should be verified by drawing the actual timeline in C4D 2026.2.0 and looking at it. Adjust during the v0 task as the timeline takes shape.
 

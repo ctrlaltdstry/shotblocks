@@ -7,3 +7,5 @@ v4 is complete through v4d. v4a (selection polish + right-click menus), v4b (pla
 v5 candidates from the architecture (still unchanged): orphaned-shot handling (camera deletion intercept), audio subsystem (waveform + onset detection), spacebar playback engine, preset library, slate engine, bake-down. Pick one as v5 in the next session.
 
 The user has noted some small visual-design clean-up items they want to revisit later — defer until v5+ features (audio, orphans, presets, etc.) are landed and the visual language can be tuned holistically.
+
+A `design-system.md` was added under `.agent/design/` as the authoritative C4D 2026 dark-theme spec (Maxon-blue accent, surface ramp, semantic palette, text stops, typography, spacing). The current `visual-language.md` tokens predate it in places and should be reconciled against it during the deferred visual-polish pass. Until that pass lands, **any new UI decision must reference `design-system.md`** as the canonical source for colors/spacing/typography.
