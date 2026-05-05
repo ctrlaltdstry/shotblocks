@@ -20,6 +20,12 @@ BCKEY_HELPER_MARKER = 1010   # str: identifies a null as our data carrier
 BCKEY_SHOTS_JSON    = 1011   # str: the JSON-serialized shot list + counters
 BCKEY_RANGE_JSON    = 1012   # str: the JSON-serialized play range {in, out}
 
+# Per-shot BaseLink to the camera. Key is BCKEY_CAM_LINK_BASE + shot_id.
+# BaseLinks survive save/load and follow the camera even if it's renamed —
+# this is what lets in-Object-Manager renames reflect in the timeline after
+# a project has been closed and reopened.
+BCKEY_CAM_LINK_BASE = 2000
+
 HELPER_MARKER_VALUE = "shotblocks_v1"
 HELPER_NULL_NAME    = "Shotblocks Data (do not delete)"
 
@@ -115,6 +121,73 @@ def _write_shots(doc, shots, next_id, with_undo=True):
     if with_undo:
         doc.AddUndo(c4d.UNDOTYPE_CHANGE_SMALL, helper)
     bc.SetString(BCKEY_SHOTS_JSON, json.dumps({"shots": shots, "next_id": next_id}))
+
+
+# ---------------------------------------------------------------------------
+# Per-shot camera BaseLink — survives save/load and follows the camera
+# through renames in the Object Manager.
+# ---------------------------------------------------------------------------
+
+def _set_shot_cam_link(doc, shot_id, cam_obj):
+    """Persist a BaseLink to `cam_obj` keyed by shot_id."""
+    helper = _get_or_create_helper(doc)
+    bc = helper.GetDataInstance()
+    if bc is None:
+        return
+    key = BCKEY_CAM_LINK_BASE + int(shot_id)
+    # SetLink is the BaseContainer accessor for storing a BaseLink to
+    # another BaseList2D. Falls back to SetData with an explicit BaseLink
+    # object if SetLink isn't available in this SDK build.
+    try:
+        bc.SetLink(key, cam_obj)
+    except Exception:
+        try:
+            link = c4d.BaseLink()
+            link.SetLink(cam_obj)
+            bc.SetData(key, link)
+        except Exception as e:
+            print("[Shotblocks] _set_shot_cam_link failed: {}".format(e))
+
+
+def _get_shot_cam(doc, shot_id):
+    """Resolve and return the BaseObject for `shot_id`'s camera, or None
+    if the link is missing or its target has been deleted."""
+    helper = _find_helper(doc)
+    if helper is None:
+        return None
+    bc = helper.GetDataInstance()
+    if bc is None:
+        return None
+    key = BCKEY_CAM_LINK_BASE + int(shot_id)
+    try:
+        cam = bc.GetLink(key, doc)
+        if cam is not None:
+            return cam
+    except Exception:
+        pass
+    # Fallback: GetData might return the BaseLink directly.
+    try:
+        link = bc.GetData(key)
+        if isinstance(link, c4d.BaseLink):
+            return link.GetLink(doc)
+    except Exception:
+        pass
+    return None
+
+
+def _clear_shot_cam_link(doc, shot_id):
+    """Remove the BaseLink for a deleted shot. Called when shots are removed."""
+    helper = _find_helper(doc)
+    if helper is None:
+        return
+    bc = helper.GetDataInstance()
+    if bc is None:
+        return
+    key = BCKEY_CAM_LINK_BASE + int(shot_id)
+    try:
+        bc.RemoveData(key)
+    except Exception:
+        pass
 
 
 # ---------------------------------------------------------------------------

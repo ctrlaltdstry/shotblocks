@@ -91,6 +91,18 @@ class ShotblocksTimelineDialog(c4d.gui.GeDialog):
             return True
         return c4d.gui.GeDialog.Command(self, id, msg)
 
+    def CoreMessage(self, id, msg):
+        # Refresh the canvas on any document mutation — primarily to pick
+        # up camera renames in the Object Manager so timeline labels stay
+        # in sync. Cheap: a redraw just re-reads our shot list and resolves
+        # the camera names through the cache.
+        if id == c4d.EVMSG_CHANGE:
+            try:
+                self.canvas.Redraw()
+            except Exception:
+                pass
+        return c4d.gui.GeDialog.CoreMessage(self, id, msg)
+
 
 # ---------------------------------------------------------------------------
 # Command (opens the dialog)

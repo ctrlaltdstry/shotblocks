@@ -230,6 +230,70 @@ def _ripple_around(shots, target):
     return out
 
 
+def _resolve_group_move(shots, target_ids, anchor_id,
+                        delta_frames, delta_track,
+                        mode, snap_frames=0):
+    """Move every shot in target_ids by (delta_frames, delta_track) as a
+    rigid group. anchor_id is the shot the user grabbed — used as the
+    magnetic-snap reference in snap mode.
+
+    Behaviour:
+    - Replace (default): selected shots move as a unit; non-selected
+      same-track shots they pass through are trimmed or removed.
+    - Snap: magnetic snap is applied based on the anchor shot's edges
+      against non-selected shots' edit points; the whole group then
+      shifts by the snapped offset, then replace-trim runs.
+    - Ripple is treated as replace for v1. Proper group-ripple semantics
+      (push the rest of the timeline) is a future enhancement.
+
+    Deltas are clamped so the group never moves below frame 0 or out of
+    the [0, MAX_TRACKS-1] track range. Returns the new shot list.
+    """
+    target_ids = set(target_ids)
+    if not target_ids:
+        return [dict(s) for s in shots]
+    selected = [s for s in shots if s["id"] in target_ids]
+    if not selected:
+        return [dict(s) for s in shots]
+
+    min_in  = min(s["in_frame"] for s in selected)
+    min_trk = min(_shot_track(s) for s in selected)
+    max_trk = max(_shot_track(s) for s in selected)
+    if min_in + delta_frames < 0:
+        delta_frames = -min_in
+    if min_trk + delta_track < 0:
+        delta_track = -min_trk
+    if max_trk + delta_track > MAX_TRACKS - 1:
+        delta_track = MAX_TRACKS - 1 - max_trk
+
+    if mode == "snap" and snap_frames > 0:
+        anchor = next((s for s in selected if s["id"] == anchor_id), selected[0])
+        non_selected = [s for s in shots if s["id"] not in target_ids]
+        a_new_in  = anchor["in_frame"]  + delta_frames
+        a_new_out = anchor["out_frame"] + delta_frames
+        snapped_in, _ = _magnetic_snap_position(
+            non_selected, anchor_id, a_new_in, a_new_out, snap_frames)
+        delta_frames += (snapped_in - a_new_in)
+
+    moved = []
+    for s in selected:
+        m = dict(s)
+        m["in_frame"]  = s["in_frame"]  + delta_frames
+        m["out_frame"] = s["out_frame"] + delta_frames
+        m["track"]     = _shot_track(s) + delta_track
+        moved.append(m)
+
+    # Iteratively trim non-selected shots that collide with each moved
+    # shot. Selected shots maintain their relative arrangement (the rigid
+    # shift preserves the originally-valid layout), so they never collide
+    # with each other in the final list.
+    out = [dict(s) for s in shots if s["id"] not in target_ids]
+    for m in moved:
+        out.append(m)
+        out = _replace_overlap(out, m)
+    return out
+
+
 def _replace_overlap(shots, target):
     """Trim or remove same-track shots whose range intersects target's range."""
     out = []

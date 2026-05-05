@@ -35,7 +35,18 @@ These are the most consequential color decisions because they encode meaning. Pe
 | **Additive mode** (tagged camera, layered on user animation) | `#4a6f5f` (muted teal-green) | `#6a9f8f` | `#dceee5` | Distinct from replace mode but related. Teal-green vs blue suggests "blended with something underneath" rather than replaced. |
 | **Untagged passthrough** (no Shotblocks tag, just sequenced) | `#5a5a5a` (neutral gray) | `#7a7a7a` | `#dddddd` | Shotblocks is sequencing only, not directing. Neutral gray says "we're not doing anything to this camera." |
 | **Orphaned** (source camera deleted) | `#3a2a2a` (desaturated dark red) | `#7a4a4a` (dashed) | `#a08080` | Visibly broken. Dashed border per principle 4 — loud when it matters. |
-| **Selected (any state)** | original fill | `#ffd966` (warm yellow), 2px | original label | Selection is an overlay treatment, not a state change. Selected color sits on top of whatever the underlying state is. |
+| **Selected (any state)** | warm gold tint of fill (e.g., untagged-passthrough → `#8a7c4c`) | unchanged border | unchanged label | Selection swaps the body fill to a gold-tinted variant rather than adding a yellow outline. The earlier outline approach clashed visually with the marquee selection rectangle (which also uses warm yellow); the fill-color overlay is unambiguous and doesn't fight the marquee for attention. |
+
+### Edge grip bands
+
+Every shot block renders a 16 px-wide *edge grip band* at its leading and trailing edges, drawn in a tint slightly darker than the body fill. The band makes the resize zone visible — the user can aim at the band rather than at an invisible 1 px boundary. The 16 px width was chosen empirically: at narrower widths the band is smaller than typical mouse-motion samples (~9 px between consecutive events), so the cursor would flicker as the user crosses the boundary on every wiggle. The band width is clamped to one-third of the clip width for narrow clips so the bands never overlap or dominate the body.
+
+| State | Band tint |
+|---|---|
+| **Untagged passthrough** body `#5a5a5a` | `#4a4a4a` (band) |
+| Future states (replace, additive, orphaned) | one tone darker than that state's body fill |
+
+The 8 px band width matches the click hit-zone (`EDGE_HIT_PX`) and the cursor affordance zone (`CURSOR_EDGE_PX`) exactly — visual feedback equals interaction zone.
 
 These are the *placeholder* values. Verify by drawing the timeline and checking:
 - Can you tell additive from replace at a glance, or do they look too similar?
@@ -74,10 +85,11 @@ The cursor is the playhead — the current frame. The play range is the I/O-brac
 | Token | Value | Use |
 |---|---|---|
 | `cursor.line` | `#ff6b6b` (warm coral-red) | The thin vertical playhead line. Saturated enough to never get lost; warm enough to read on the dark bg. 1px wide. |
-| `cursor.head` | `#ff6b6b` | Small triangle/diamond at the top of the cursor for grabbing/scrubbing. |
+| `cursor.head` | `#4a90d9` (saturated blue) | Downward-pointing triangle at the top of the playhead; ~12px wide × 10px tall, apex on the line. The blue/red contrast makes the grab handle visually distinct from the line itself, and reads as a deliberate UI affordance rather than an extension of the line. |
 | `range.bar` | `#3a3a3a` | The play-range track at the top, in its inactive state. |
 | `range.active` | `#5a5a4a` | The lit portion of the range bar between in-point and out-point. Subtle but readable. |
 | `range.handle` | `#aaaa8a` | The draggable in-point and out-point handles. Lighter for grab affordance. |
+| `range.handle.hover` | `#e0e0c0` | Brighter highlight on the hovered handle. Same hover-affordance pattern as shot-edge bands. |
 
 Cursor red is reserved exclusively for the cursor. Nothing else uses that exact hue, so the cursor is always identifiable.
 
@@ -104,6 +116,8 @@ Sentence case throughout. Single-line, truncate with ellipsis when the label exc
 | `space.clip.gap.min` | 0px | Hard-cuts mean adjacent shot blocks touch with no gap. Visual separation comes from borders, not gaps. |
 | `space.ruler.height` | 24px | The ruler bar at the top showing time and beats. |
 | `space.range.height` | 16px | The play-range bar above the ruler. |
+
+**Vertical layout.** Track 0 (base video) sits vertically centered in the timeline area. Video tracks (1, 2, 3) stack *upward* from track 0; audio tracks will stack *downward*. The bottom edge of track 0 carries an emphasized 1px divider line (`border.emphasis`, `#444444`) to mark the video/audio boundary. This mirrors Premiere/FCP/Resolve's V1/A1 divider convention and the user's existing NLE muscle memory.
 
 ## Corner radii and stroke
 

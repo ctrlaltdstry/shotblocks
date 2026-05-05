@@ -132,11 +132,13 @@ Per-shot rig state is independent: shot A and shot B can both reference camera C
 
 ## Multi-track timeline
 
-The timeline has multiple stacked tracks. A shot lives on a specific track (`track: int`, 0 = bottom). Tracks exist for arrangement flexibility — the user can stack alternates, shift one shot up to compare timing, or park ideas above the active stack — not for layered rendering.
+The timeline has multiple stacked tracks. A shot lives on a specific track (`track: int`, 0 = base video). Tracks exist for arrangement flexibility — the user can stack alternates, shift one shot up to compare timing, or park ideas above the active stack — not for layered rendering.
+
+**Layout convention:** track 0 (the base video track) sits vertically centered in the timeline area. Higher-index video tracks (1, 2, 3) grow *upward* from there. The area below track 0 is reserved for audio tracks, which grow *downward*. This matches Premiere/FCP/Resolve, where V1/A1 anchor the divider and tracks fan out in both directions. A subtle horizontal divider line at the bottom of track 0 marks the video/audio boundary.
 
 **Active-shot resolution across tracks:** at frame N, the active shot is the shot covering N on the *highest* occupied track. Top wins. This is the standard NLE convention (Premiere V2 overrides V1, Resolve same). The result is always exactly one active shot at frame N (or none, in gaps), satisfying constitution principle 2.
 
-**Track lifecycle:** lanes auto-grow on demand up to a hard cap of 4. Fresh document opens with 1 visible lane; lanes appear as the user drags or drops shots into them. Empty top lanes do not collapse mid-session — that would destabilize the canvas while the user is mid-arrange.
+**Track lifecycle:** lanes auto-grow on demand up to a hard cap of 4. Fresh document opens with 1 visible lane (track 0); a preview lane appears above as soon as a shot exists on track 0, signalling that drop-into-new-track is available. Empty top lanes do not collapse mid-session — that would destabilize the canvas while the user is mid-arrange.
 
 **Cross-track overlap is legal.** Two shots on different tracks may cover the same frames; the resolver picks the top-track shot. Same-track overlap is illegal and resolved by the overlap policy below. The same-camera-in-two-shots-at-the-same-frame rule still applies *across all tracks*, regardless of which is on top.
 
