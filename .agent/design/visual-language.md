@@ -43,18 +43,18 @@ These are the most consequential color decisions because they encode meaning. Pe
 | **Additive mode** (tagged camera, layered on user animation) | `#4a6f5f` (muted teal-green) | `#6a9f8f` | `#dceee5` | Distinct from replace mode but related. Teal-green vs blue suggests "blended with something underneath" rather than replaced. |
 | **Untagged passthrough** (no Shotblocks tag, just sequenced) | `#5a5a5a` (neutral gray) | `#7a7a7a` | `#dddddd` | Shotblocks is sequencing only, not directing. Neutral gray says "we're not doing anything to this camera." |
 | **Orphaned** (source camera deleted) | `#3a2a2a` (desaturated dark red) | `#7a4a4a` (dashed) | `#a08080` | Visibly broken. Dashed border per principle 4 — loud when it matters. |
-| **Selected (any state)** | warm gold tint of fill (e.g., untagged-passthrough → `#8a7c4c`) | unchanged border | unchanged label | Selection swaps the body fill to a gold-tinted variant rather than adding a yellow outline. The earlier outline approach clashed visually with the marquee selection rectangle (which also uses warm yellow); the fill-color overlay is unambiguous and doesn't fight the marquee for attention. |
+| **Selected (any state)** | `accent` `#2C7CD3` (Maxon blue, from `design-system.md`) | unchanged border | white `#FFFFFF` (per design-system "text on accent" rule) | Selection swaps the body fill to the design-system accent rather than adding an outline. Per the design system's "one accent does all interactive work" principle, the same Maxon blue is also used for marquee, range-bar handles, and edge-band hover. |
 
 ### Edge grip bands
 
 Every shot block renders a 16 px-wide *edge grip band* at its leading and trailing edges, drawn in a tint slightly darker than the body fill. The band makes the resize zone visible — the user can aim at the band rather than at an invisible 1 px boundary. The 16 px width was chosen empirically: at narrower widths the band is smaller than typical mouse-motion samples (~9 px between consecutive events), so the cursor would flicker as the user crosses the boundary on every wiggle. The band width is clamped to one-third of the clip width for narrow clips so the bands never overlap or dominate the body.
 
-| State | Band tint |
-|---|---|
-| **Untagged passthrough** body `#5a5a5a` | `#4a4a4a` (band) |
-| Future states (replace, additive, orphaned) | one tone darker than that state's body fill |
+| State | Band tint | Hover tint |
+|---|---|---|
+| **Untagged passthrough** body `#5a5a5a` | `#4a4a4a` (≈ `surface-4`) | `accent-hover` `#3B8CE8` |
+| Future states (replace, additive, orphaned) | one tone darker than that state's body fill | `accent-hover` (consistent across all states — the affordance is "you can grab here," same color regardless of state) |
 
-The 8 px band width matches the click hit-zone (`EDGE_HIT_PX`) and the cursor affordance zone (`CURSOR_EDGE_PX`) exactly — visual feedback equals interaction zone.
+The 8 px band width matches the click hit-zone (`EDGE_HIT_PX`) and the cursor affordance zone (`CURSOR_EDGE_PX`) exactly — visual feedback equals interaction zone. Hover renders in `accent-hover` so the band lights up Maxon blue on cursor-over, distinct from the static accent-blue body of a selected clip.
 
 These are the *placeholder* values. Verify by drawing the timeline and checking:
 - Can you tell additive from replace at a glance, or do they look too similar?
@@ -95,9 +95,9 @@ The cursor is the playhead — the current frame. The play range is the I/O-brac
 | `cursor.line` | `#ff6b6b` (warm coral-red) | The thin vertical playhead line. Saturated enough to never get lost; warm enough to read on the dark bg. 1px wide. |
 | `cursor.head` | `#4a90d9` (saturated blue) | Downward-pointing triangle at the top of the playhead; ~12px wide × 10px tall, apex on the line. The blue/red contrast makes the grab handle visually distinct from the line itself, and reads as a deliberate UI affordance rather than an extension of the line. |
 | `range.bar` | `#3a3a3a` | The play-range track at the top, in its inactive state. |
-| `range.active` | `#5a5a4a` | The lit portion of the range bar between in-point and out-point. Subtle but readable. |
-| `range.handle` | `#aaaa8a` | The draggable in-point and out-point handles. Lighter for grab affordance. |
-| `range.handle.hover` | `#e0e0c0` | Brighter highlight on the hovered handle. Same hover-affordance pattern as shot-edge bands. |
+| `range.active` | `#4A4A4A` (`surface-4`) | Neutral lift between in/out handles. Mark-up is carried by the accent-blue handles at the boundaries. |
+| `range.handle` | `accent` `#2C7CD3` | The draggable in-point and out-point handles — Maxon blue per the design-system "interactive = accent" rule. |
+| `range.handle.hover` | `accent-hover` `#3B8CE8` | Brighter highlight on the hovered handle. Same hover-affordance pattern as shot-edge bands. |
 
 Cursor red is reserved exclusively for the cursor. Nothing else uses that exact hue, so the cursor is always identifiable.
 
@@ -131,9 +131,9 @@ Sentence case throughout. Single-line, truncate with ellipsis when the label exc
 
 | Token | Value | Use |
 |---|---|---|
-| `radius.clip` | 2px | Shot blocks and audio clips. Subtle softening, not pill-shaped. |
-| `stroke.clip` | 1px | Shot block border. |
-| `stroke.clip.selected` | 2px | Selected shot block border. |
+| `radius.clip` | 0px (hard edges) | **Documented divergence** from design-system's "3-4 px small-control radius". Foreclosed at this scale by C4D 2026 Python's draw API: stairstep DrawRectangle approximations were visibly stepped, BaseBitmap with alpha-aware modes (`BMP_ALLOWALPHA \| BMP_TRANSPARENTALPHA`) quantized alpha to a binary threshold (gradient alphas like `255, 215, 76, 8` collapsed to a hard mask in compositing), and per-pixel software AA was bumpy because 4 px is too few transitional pixels for the eye to perceive smoothness. Revisit when (a) shot blocks ever render at ≥ 48 px height with proportionally larger radius, (b) C4D adds anti-aliased shape primitives to the Python API, or (c) we move the timeline rendering off `GeUserArea.DrawRectangle` (e.g., to a Pillow-rendered final blit). Empirical findings recorded in memory under `reference_c4d2026_cursor_and_drawing.md`. |
+| `stroke.clip` | none | Shot blocks have no border — the rounded body against the lane background and the darker edge bands provide the delineation. Border-and-rounded-corners would clash visually. |
+| `stroke.clip.selected` | none | Selection is conveyed by the accent-blue body fill, not by a stroke. |
 | `stroke.cursor` | 1px | The cursor line. |
 | `stroke.beat.downbeat` | 1.5px | Slightly heavier than offbeats. |
 | `stroke.beat.offbeat` | 0.5px | Subtle. |

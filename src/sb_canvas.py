@@ -47,31 +47,37 @@ COL_RULER_TEXT    = _rgb("888888")
 COL_CURSOR        = _rgb("ff6b6b")
 COL_PLAYHEAD_HEAD = _rgb("4a90d9")  # Blue head — visual grab handle at top of playhead
 
+# Design-system accent (Maxon blue) — the single accent that does all
+# interactive work in the timeline: selection, hover-on-grab-zones, range
+# handles, marquee outline. Per `.agent/design/design-system.md`.
+COL_ACCENT        = _rgb("2C7CD3")
+COL_ACCENT_HOVER  = _rgb("3B8CE8")
+COL_ON_ACCENT     = _rgb("FFFFFF")  # text/label color on accent backgrounds
+
 # Untagged passthrough — every v3 shot still draws as untagged.
 COL_SHOT_FILL              = _rgb("5a5a5a")
-COL_SHOT_FILL_SELECTED     = _rgb("8a7c4c")  # warm gold-tint body when selected
-                                              # — replaces the previous yellow
-                                              # outline, which clashed with the
-                                              # marquee selection rectangle.
+COL_SHOT_FILL_SELECTED     = COL_ACCENT     # selected body uses Maxon blue
 COL_SHOT_BORDER            = _rgb("7a7a7a")
 COL_SHOT_LABEL             = _rgb("dddddd")
+COL_SHOT_LABEL_SELECTED    = COL_ON_ACCENT  # white label on accent body
 COL_SHOT_EDGE_BAND         = _rgb("4a4a4a")  # darker grip zone at each edge
-COL_SHOT_EDGE_BAND_HOVER   = _rgb("c8c8a8")  # warm highlight on cursor-over —
-                                              # the primary "you can drag here"
-                                              # affordance, replacing the
-                                              # unreliable Windows cursor change
+COL_SHOT_EDGE_BAND_HOVER   = COL_ACCENT_HOVER  # brighter blue when cursor is
+                                                # over the resize zone — primary
+                                                # "you can drag here" affordance.
 
-# Selection overlay (warm yellow, 2px) — sits on top of the state border.
-COL_SELECTION     = _rgb("ffd966")
+# Marquee selection rectangle — accent outline (transient interactive state).
+COL_SELECTION     = COL_ACCENT
 
 # Drop hint
 COL_DROP_HINT     = _rgb("aaaaaa")
 
 # Play-range bar
 COL_RANGE_BAR           = _rgb("3a3a3a")
-COL_RANGE_ACTIVE        = _rgb("5a5a4a")
-COL_RANGE_HANDLE        = _rgb("aaaa8a")
-COL_RANGE_HANDLE_HOVER  = _rgb("e0e0c0")  # brighter highlight on cursor-over
+COL_RANGE_ACTIVE        = _rgb("4A4A4A")    # surface-4 — neutral lift between
+                                             # handles; the accent-blue handles
+                                             # mark the boundaries.
+COL_RANGE_HANDLE        = COL_ACCENT
+COL_RANGE_HANDLE_HOVER  = COL_ACCENT_HOVER
 
 
 # ---------------------------------------------------------------------------
@@ -89,6 +95,16 @@ DEFAULT_SHOT_FRAMES = 48          # 2 s at 24 fps — good starting length
 EDGE_BAND_PX        = 8           # visible darker grip-band at each shot edge
 EDGE_HIT_PX         = 8           # click edge-drag zone — matches the band
 CURSOR_EDGE_PX      = 8           # cursor affordance — matches the band
+# Hard corners on shot blocks. The design system asks for 3-4 px corner
+# radius, but every rendering path we tried in C4D 2026 Python failed at
+# this small scale: stairstep DrawRectangle approximations were visibly
+# stepped, BaseBitmap with BMP_ALLOWALPHA / BMP_TRANSPARENTALPHA quantized
+# alpha to a binary threshold (so AA gradients collapsed to hard masks),
+# and per-pixel software AA produced bumpy results because 4 px is too
+# few transitional pixels for the eye to perceive a smooth curve.
+# Documented divergence — revisit if shot blocks ever render at >=48 px
+# height (where 8 px radius would have enough pixels to read smoothly),
+# or if C4D ships an anti-aliased shape primitive in its Python API.
 SNAP_PIXEL_RADIUS   = 8           # how close (in pixels) before magnetic snap pulls
 PLAYHEAD_HEAD_W     = 12          # blue triangle head — full width at top
 PLAYHEAD_HEAD_H     = 10          # blue triangle head — height (apex at line)
@@ -236,6 +252,7 @@ class ShotblocksTimelineCanvas(c4d.gui.GeUserArea):
         # finishes loading). Persistence still stores the name as a
         # fallback for the orphan case.
         self._cam_refs = {}
+
 
     # ------------------------------------------------------------------
     # Camera-reference cache (live name resolution)
@@ -560,20 +577,19 @@ class ShotblocksTimelineCanvas(c4d.gui.GeUserArea):
         sy1 = y_top
         sy2 = y_top + SHOT_HEIGHT - 1
 
-        # Body fill — selected shots use a warm gold-tinted fill instead of
-        # a yellow outline. Outline-based selection clashed with the marquee
-        # selection rectangle (also yellow); the fill-color overlay is
-        # unambiguous and doesn't fight the marquee for visual attention.
+        # Body fill — accent (Maxon blue) when selected, neutral fill
+        # otherwise. Hard-edged rectangle: C4D 2026's GeUserArea draw API
+        # has no anti-aliased primitives, so a stairstep approximation of
+        # rounded corners was visibly stepped at every radius we tried.
         body_color = COL_SHOT_FILL_SELECTED if selected else COL_SHOT_FILL
         self.DrawSetPen(body_color)
         self.DrawRectangle(sx1, sy1, sx2, sy2)
 
-        # Edge grip bands at the leading and trailing edges. Their width
-        # matches EDGE_HIT_PX / CURSOR_EDGE_PX so visual = behavioral.
-        # Clamped to a third of the clip width for narrow clips. The
-        # hovered band renders in a brighter highlight — this is our
-        # primary "you can drag here" affordance, replacing the unreliable
-        # Windows cursor change.
+        # Edge grip bands at the leading and trailing edges. Width matches
+        # EDGE_HIT_PX / CURSOR_EDGE_PX so visual = behavioral; clamped to
+        # one-third of clip width for narrow clips. Hovered band renders
+        # in accent-hover (Maxon blue) — primary "you can drag here"
+        # affordance.
         clip_w = sx2 - sx1
         band_w = max(1, min(EDGE_BAND_PX, clip_w // 3))
         if clip_w >= 4:
@@ -586,24 +602,21 @@ class ShotblocksTimelineCanvas(c4d.gui.GeUserArea):
             self.DrawSetPen(COL_SHOT_EDGE_BAND_HOVER if right_hovered else COL_SHOT_EDGE_BAND)
             self.DrawRectangle(sx2 - band_w, sy1, sx2, sy2)
 
-        # State border
+        # State border (1 px). Hard rectangular outline.
         self.DrawSetPen(COL_SHOT_BORDER)
         self.DrawLine(sx1, sy1, sx2, sy1)
         self.DrawLine(sx1, sy2, sx2, sy2)
         self.DrawLine(sx1, sy1, sx1, sy2)
         self.DrawLine(sx2, sy1, sx2, sy2)
 
-        # Label — drawn in the body region past the left band so the
-        # text background (which DrawText paints from DrawSetTextCol's bg
-        # color) sits over the body fill, never over a band. That keeps
-        # the bg transparent-looking against the body and prevents the
-        # gray "baked-in" rectangle that appeared when the label
-        # overlapped the darker/hover band area.
+        # Label — drawn in the body region past the left band so its
+        # text background sits over body fill, not over a band.
         label_x_start = sx1 + band_w + 4
         label_x_end   = sx2 - band_w - 4
         inner_w       = label_x_end - label_x_start
         if inner_w > 0:
-            self.DrawSetTextCol(COL_SHOT_LABEL, body_color)
+            label_color = COL_SHOT_LABEL_SELECTED if selected else COL_SHOT_LABEL
+            self.DrawSetTextCol(label_color, body_color)
             label = name
             if self.DrawGetTextWidth(label) > inner_w:
                 while len(label) > 1 and self.DrawGetTextWidth(label + "…") > inner_w:
