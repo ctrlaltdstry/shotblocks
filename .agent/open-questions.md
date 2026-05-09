@@ -28,9 +28,6 @@ Currently planning project-relative when possible, absolute fallback. Edge case:
 ### Bake-down output naming
 When a user bakes a shot or sequence, the output is a new C4D camera. Naming convention: append "_baked"? Use the shot name? Use the source camera name + suffix? **Decide before bake-down implementation.**
 
-### Orphaned shot relink — rig state compatibility
-When a user drags a different camera onto an orphaned shot, the original shot's rig state may not apply cleanly to the new camera (e.g., original camera was tagged in additive mode, new camera has no tag). What's the resolution rule — drop incompatible state silently, prompt the user, or refuse the relink? **Decide before orphan handling implementation.**
-
 ## Product questions not yet resolved
 
 ### Default operator personality

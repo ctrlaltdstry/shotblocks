@@ -44,6 +44,7 @@ These are the most consequential color decisions because they encode meaning. Pe
 | **Untagged passthrough** (no Shotblocks tag, just sequenced) | `#5a5a5a` (neutral gray) | `#7a7a7a` | `#dddddd` | Shotblocks is sequencing only, not directing. Neutral gray says "we're not doing anything to this camera." |
 | **Orphaned** (source camera deleted) | `#3a2a2a` (desaturated dark red) | `#7a4a4a` (dashed) | `#a08080` | Visibly broken. Dashed border per principle 4 — loud when it matters. |
 | **Selected (any state)** | `accent` `#2C7CD3` (Maxon blue, from `design-system.md`) | unchanged border | white `#FFFFFF` (per design-system "text on accent" rule) | Selection swaps the body fill to the design-system accent rather than adding an outline. Per the design system's "one accent does all interactive work" principle, the same Maxon blue is also used for marquee, range-bar handles, and edge-band hover. |
+| **Selected + orphaned** | `#8a3030` (saturated muted red) | dashed `#7a4a4a` (unchanged) | white `#FFFFFF` | **Documented divergence** from the universal accent-blue selection rule. Orphan body fill (`#3a2a2a`) and dashed border together carry the "broken" signal; if selection swapped the fill to Maxon blue, two of those three signals would disappear and a selected orphan would read as just-selected. Substituting a brighter red preserves the orphan signal under selection. Deliberately distinct from the playhead cursor `#ff6b6b` so cursor red stays exclusive. This is the only state that overrides the accent-blue selection rule. |
 
 ### Edge grip bands
 

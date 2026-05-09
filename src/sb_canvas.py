@@ -65,6 +65,22 @@ COL_SHOT_EDGE_BAND_HOVER   = COL_ACCENT_HOVER  # brighter blue when cursor is
                                                 # over the resize zone — primary
                                                 # "you can drag here" affordance.
 
+# Orphaned state — shot whose source camera has been deleted. Muted dark-red
+# palette per visual-language.md "Worked example" section. The dashed border
+# is the secondary signal; the body-fill desaturation is the primary one.
+COL_SHOT_FILL_ORPHAN       = _rgb("3a2a2a")
+COL_SHOT_BORDER_ORPHAN     = _rgb("7a4a4a")
+COL_SHOT_LABEL_ORPHAN      = _rgb("a08080")
+# Selected-orphan fill — a saturated muted red. This is a documented
+# divergence from the universal "selection = Maxon blue" rule: when a shot
+# is orphaned the orphan signal must survive selection (the muted dark-red
+# body and dashed border would both be lost under accent-blue), so we
+# substitute a brighter red instead. Deliberately distinct from the
+# playhead cursor `#ff6b6b` — cursor red stays exclusive to the playhead.
+COL_SHOT_FILL_ORPHAN_SEL   = _rgb("8a3030")
+DASH_ORPHAN_ON             = 4   # dashed border on-pixels
+DASH_ORPHAN_OFF            = 2   # dashed border off-pixels
+
 # Marquee selection rectangle — accent outline (transient interactive state).
 COL_SELECTION     = COL_ACCENT
 
@@ -253,28 +269,34 @@ class ShotblocksTimelineCanvas(c4d.gui.GeUserArea):
         # fallback for the orphan case.
         self._cam_refs = {}
 
+        # Orphan-transition tracking. Compared each redraw; on increase we
+        # log once to the console (we have no status-line widget yet — that
+        # arrives with the post-v5 visual-polish pass).
+        self._last_orphan_count = 0
+
 
     # ------------------------------------------------------------------
     # Camera-reference cache (live name resolution)
     # ------------------------------------------------------------------
 
     def _resolve_cam_name(self, shot, doc):
-        """Return the current display name for this shot's camera.
+        """Return the current display name for this shot's camera, or the
+        last-known stored name if the camera is gone (orphan).
 
         Resolution order:
-        1. Persistent BaseLink stored in the helper null. Survives
-           save/load and follows the camera through OM renames — this is
-           the path that lets a rename after reopening a project show up
-           in the timeline.
+        1. Persistent BaseLink stored in the helper null. Survives save/load
+           and follows the camera through OM renames — this is the path
+           that lets a rename after reopening a project show up.
         2. In-memory BaseObject cache (populated on drop or first
            successful resolution). Avoids re-resolving the BaseLink every
            draw within a session.
-        3. Fallback: the persisted `cam_name` string. Used when the
-           camera can't be found at all (orphaned shot).
+        3. Fallback: the persisted `cam_name` string. Used when the camera
+           is gone (orphan). NOTE: we deliberately do NOT walk the doc
+           by-name here. Re-binding to a same-named survivor would silently
+           heal an orphan and erase the user's signal that a delete
+           happened — the orphan visual is the point.
         """
         sid = shot.get("id")
-        # BaseLink path — re-resolve on every draw so OM renames take
-        # effect immediately. Cheap: just dereferences the stored link.
         if doc is not None and sid is not None:
             cam = _get_shot_cam(doc, sid)
             if cam is not None:
@@ -283,29 +305,38 @@ class ShotblocksTimelineCanvas(c4d.gui.GeUserArea):
                     return cam.GetName()
                 except Exception:
                     pass
-        # In-memory cache (legacy fallback for shots that pre-date the
-        # BaseLink storage).
+            else:
+                # BaseLink resolved to None → camera is gone. Drop any
+                # stale in-memory ref so the orphan state is consistent.
+                self._cam_refs.pop(sid, None)
         cam = self._cam_refs.get(sid)
         if cam is not None:
             try:
                 return cam.GetName()
             except Exception:
                 self._cam_refs.pop(sid, None)
-        # Last-resort: walk the doc by stored name. Will fail after a
-        # rename if no BaseLink is available — orphan handling territory.
-        target = shot.get("cam_name", "")
-        obj = doc.GetFirstObject() if doc else None
-        while obj is not None:
-            try:
-                if _is_camera_like(obj) and obj.GetName() == target:
-                    self._cam_refs[sid] = obj
-                    if doc is not None:
-                        _set_shot_cam_link(doc, sid, obj)
-                    return obj.GetName()
-            except Exception:
-                pass
-            obj = obj.GetNext()
-        return target
+        return shot.get("cam_name", "")
+
+    def _is_orphan(self, shot, doc):
+        """True when this shot's camera has been deleted from the document.
+        Resolution order matches `_resolve_cam_name` — if the BaseLink is
+        dead AND the in-memory cache is empty, the shot is orphaned."""
+        sid = shot.get("id")
+        if doc is None or sid is None:
+            return False
+        if _get_shot_cam(doc, sid) is not None:
+            return False
+        cam = self._cam_refs.get(sid)
+        if cam is None:
+            return True
+        # In-memory ref might still point to a freed object; calling
+        # GetName() on a deleted BaseObject raises in C4D Python.
+        try:
+            cam.GetName()
+            return False
+        except Exception:
+            self._cam_refs.pop(sid, None)
+            return True
 
     def _remember_cam(self, shot_id, cam_obj):
         """Cache the BaseObject reference for a freshly-created shot AND
@@ -514,6 +545,16 @@ class ShotblocksTimelineCanvas(c4d.gui.GeUserArea):
         self.DrawSetPen(COL_BORDER_EMPH)
         self.DrawLine(0, t0_bot, w, t0_bot)
 
+        # Orphan-count transition log. Cheap predicate per shot — just a
+        # BaseLink dereference. Logging happens *only* on increase so the
+        # user gets a single console message per camera deletion.
+        doc_for_orphans = c4d.documents.GetActiveDocument()
+        orphan_count = sum(1 for s in shots if self._is_orphan(s, doc_for_orphans))
+        if orphan_count > self._last_orphan_count:
+            print("[Shotblocks] camera deleted; {} shot(s) now orphaned. "
+                  "Cmd+Z to restore.".format(orphan_count))
+        self._last_orphan_count = orphan_count
+
         # Shots
         for shot in shots:
             track  = _shot_track(shot)
@@ -560,13 +601,44 @@ class ShotblocksTimelineCanvas(c4d.gui.GeUserArea):
             ww = max(0, int(round(half * (1.0 - ratio))))
             self.DrawRectangle(px - ww, r, px + ww, r + 1)
 
+    def _draw_dashed_hline(self, x1, x2, y, on_px, off_px):
+        """Horizontal dashed line via short DrawRectangle segments. C4D
+        2026 Python's draw API has no native dash support; this is the
+        simple approximation. Used for the orphan border."""
+        if x2 <= x1:
+            return
+        cursor = x1
+        on = True
+        while cursor <= x2:
+            seg = on_px if on else off_px
+            end = min(x2, cursor + seg - 1)
+            if on:
+                self.DrawRectangle(cursor, y, end, y)
+            cursor = end + 1
+            on = not on
+
+    def _draw_dashed_vline(self, x, y1, y2, on_px, off_px):
+        if y2 <= y1:
+            return
+        cursor = y1
+        on = True
+        while cursor <= y2:
+            seg = on_px if on else off_px
+            end = min(y2, cursor + seg - 1)
+            if on:
+                self.DrawRectangle(x, cursor, x, end)
+            cursor = end + 1
+            on = not on
+
     def _draw_shot_block(self, shot, w, y_top, selected):
         in_f  = shot.get("in_frame", 0)
         out_f = shot.get("out_frame", DEFAULT_SHOT_FRAMES)
         # Resolve the camera's current name through the live ref cache —
         # in-session renames in the Object Manager reflect on the next
         # redraw without needing the user to restage the shot.
-        name  = self._resolve_cam_name(shot, c4d.documents.GetActiveDocument())
+        doc   = c4d.documents.GetActiveDocument()
+        name  = self._resolve_cam_name(shot, doc)
+        orphan = self._is_orphan(shot, doc)
         if not name:
             name = shot.get("cam_name", "?")
 
@@ -577,19 +649,24 @@ class ShotblocksTimelineCanvas(c4d.gui.GeUserArea):
         sy1 = y_top
         sy2 = y_top + SHOT_HEIGHT - 1
 
-        # Body fill — accent (Maxon blue) when selected, neutral fill
-        # otherwise. Hard-edged rectangle: C4D 2026's GeUserArea draw API
-        # has no anti-aliased primitives, so a stairstep approximation of
-        # rounded corners was visibly stepped at every radius we tried.
-        body_color = COL_SHOT_FILL_SELECTED if selected else COL_SHOT_FILL
+        # Body fill. Selected orphans get the muted-red selection fill so
+        # the orphan signal survives selection (the dashed border alone
+        # would otherwise have to carry the whole "broken" message).
+        # Healthy selection still uses Maxon blue per design-system.
+        if selected and orphan:
+            body_color = COL_SHOT_FILL_ORPHAN_SEL
+        elif selected:
+            body_color = COL_SHOT_FILL_SELECTED
+        elif orphan:
+            body_color = COL_SHOT_FILL_ORPHAN
+        else:
+            body_color = COL_SHOT_FILL
         self.DrawSetPen(body_color)
         self.DrawRectangle(sx1, sy1, sx2, sy2)
 
-        # Edge grip bands at the leading and trailing edges. Width matches
-        # EDGE_HIT_PX / CURSOR_EDGE_PX so visual = behavioral; clamped to
-        # one-third of clip width for narrow clips. Hovered band renders
-        # in accent-hover (Maxon blue) — primary "you can drag here"
-        # affordance.
+        # Edge grip bands. We still show them on orphans so relink-by-drag
+        # remains discoverable as a grab affordance — the orphan label
+        # spells out the action, the bands say "you can do something here."
         clip_w = sx2 - sx1
         band_w = max(1, min(EDGE_BAND_PX, clip_w // 3))
         if clip_w >= 4:
@@ -602,22 +679,36 @@ class ShotblocksTimelineCanvas(c4d.gui.GeUserArea):
             self.DrawSetPen(COL_SHOT_EDGE_BAND_HOVER if right_hovered else COL_SHOT_EDGE_BAND)
             self.DrawRectangle(sx2 - band_w, sy1, sx2, sy2)
 
-        # State border (1 px). Hard rectangular outline.
-        self.DrawSetPen(COL_SHOT_BORDER)
-        self.DrawLine(sx1, sy1, sx2, sy1)
-        self.DrawLine(sx1, sy2, sx2, sy2)
-        self.DrawLine(sx1, sy1, sx1, sy2)
-        self.DrawLine(sx2, sy1, sx2, sy2)
+        # Border. Solid for healthy shots; dashed dark-red for orphans.
+        if orphan:
+            self.DrawSetPen(COL_SHOT_BORDER_ORPHAN)
+            self._draw_dashed_hline(sx1, sx2, sy1, DASH_ORPHAN_ON, DASH_ORPHAN_OFF)
+            self._draw_dashed_hline(sx1, sx2, sy2, DASH_ORPHAN_ON, DASH_ORPHAN_OFF)
+            self._draw_dashed_vline(sx1, sy1, sy2, DASH_ORPHAN_ON, DASH_ORPHAN_OFF)
+            self._draw_dashed_vline(sx2, sy1, sy2, DASH_ORPHAN_ON, DASH_ORPHAN_OFF)
+        else:
+            self.DrawSetPen(COL_SHOT_BORDER)
+            self.DrawLine(sx1, sy1, sx2, sy1)
+            self.DrawLine(sx1, sy2, sx2, sy2)
+            self.DrawLine(sx1, sy1, sx1, sy2)
+            self.DrawLine(sx2, sy1, sx2, sy2)
 
-        # Label — drawn in the body region past the left band so its
-        # text background sits over body fill, not over a band.
+        # Label.
         label_x_start = sx1 + band_w + 4
         label_x_end   = sx2 - band_w - 4
         inner_w       = label_x_end - label_x_start
         if inner_w > 0:
-            label_color = COL_SHOT_LABEL_SELECTED if selected else COL_SHOT_LABEL
+            if selected:
+                # Selected → white label, whether the body is accent-blue
+                # or muted-red (orphan). Both fills are dark enough that
+                # white reads cleanly.
+                label_color = COL_SHOT_LABEL_SELECTED
+            elif orphan:
+                label_color = COL_SHOT_LABEL_ORPHAN
+            else:
+                label_color = COL_SHOT_LABEL
             self.DrawSetTextCol(label_color, body_color)
-            label = name
+            label = "(missing) " + name if orphan else name
             if self.DrawGetTextWidth(label) > inner_w:
                 while len(label) > 1 and self.DrawGetTextWidth(label + "…") > inner_w:
                     label = label[:-1]
@@ -682,7 +773,21 @@ class ShotblocksTimelineCanvas(c4d.gui.GeUserArea):
 
         drop_frame = self._drag_frame if self._drag_frame >= 0 else self.visible_first
         drop_track = self._drag_track
+
+        # Drop-on-existing-shot → relink that shot's camera. Works on
+        # orphans (the architecture's primary use case) AND healthy shots
+        # (one-gesture re-camera). If the drop is on empty canvas space,
+        # fall through to the create path.
+        target_shot_id = None
+        if local_xy is not None:
+            x, y = local_xy
+            doc = c4d.documents.GetActiveDocument()
+            shots, _ = _read_shots(doc)
+            target_shot_id, _region = self._hit_test(x, y, shots, self.GetWidth())
+
         self._clear_drag()
+        if target_shot_id is not None and cameras:
+            return self._relink_shot(target_shot_id, cameras[0])
         return self._create_shots_at(drop_frame, drop_track, cameras)
 
     def _drag_cameras(self, msg):
@@ -773,6 +878,50 @@ class ShotblocksTimelineCanvas(c4d.gui.GeUserArea):
         doc.EndUndo()
         c4d.EventAdd()
         self.Redraw()
+        return True
+
+    def _relink_shot(self, shot_id, cam):
+        """Swap a shot's camera reference for `cam`. In/out range, track,
+        and id are preserved. Used both for healing orphans (drag a
+        replacement camera onto the broken block) and for one-gesture
+        re-cameraing of a healthy shot. Wrapped in undo.
+
+        Undo correctness note: a single `AddUndo(helper)` must precede ALL
+        helper-container writes inside the StartUndo/EndUndo block. Both
+        the shot-list JSON (`cam_name`) AND the BaseLink live on the
+        helper's BaseContainer — registering undo only around the JSON
+        write would snapshot the helper *after* the BaseLink was already
+        rewritten, leaving Cmd+Z unable to restore the previous link.
+        """
+        doc = c4d.documents.GetActiveDocument()
+        shots, next_id = _read_shots(doc)
+        target = next((s for s in shots if s["id"] == shot_id), None)
+        if target is None or cam is None:
+            return False
+
+        prev_name = target.get("cam_name", "")
+        new_name  = cam.GetName()
+        was_orphan = self._is_orphan(target, doc)
+
+        doc.StartUndo()
+        # Snapshot the helper BEFORE any container write so undo restores
+        # both the JSON shot list and the per-shot BaseLink.
+        helper = _get_or_create_helper(doc)
+        doc.AddUndo(c4d.UNDOTYPE_CHANGE_SMALL, helper)
+        target["cam_name"] = new_name
+        self._remember_cam(shot_id, cam)
+        _write_shots(doc, shots, next_id, with_undo=False)
+        doc.EndUndo()
+        # Recount orphans on next draw — relinking an orphan should
+        # reduce the count without re-triggering the upward-transition log.
+        # We pre-decrement here so DrawMsg doesn't see a phantom decrease.
+        if was_orphan and self._last_orphan_count > 0:
+            self._last_orphan_count -= 1
+        c4d.EventAdd()
+        self.Redraw()
+        print("[Shotblocks] relinked shot id={} '{}' → '{}'{}".format(
+            shot_id, prev_name, new_name,
+            " (was orphan)" if was_orphan else ""))
         return True
 
     def _clear_drag(self):
@@ -974,7 +1123,15 @@ class ShotblocksTimelineCanvas(c4d.gui.GeUserArea):
                 bc.SetString(MENU_SET_RANGE_SEL,  "Set Range to Selection" + suffix)
             else:
                 bc.SetString(MENU_SET_RANGE_THIS, "Set Range to This")
-            bc.SetString(MENU_DELETE,    "Delete"    + suffix)
+            # "Remove" verb on orphans matches architecture wording — the
+            # user is clearing a broken reference, not deleting a working
+            # shot. Falls back to "Delete" for healthy shots and any mixed
+            # selection (any healthy shot in selection wins).
+            sel_shots = [s for s in shots if s["id"] in self._selected_ids]
+            all_orphans = bool(sel_shots) and all(
+                self._is_orphan(s, doc) for s in sel_shots)
+            del_label = "Remove" if all_orphans else "Delete"
+            bc.SetString(MENU_DELETE,    del_label   + suffix)
             bc.SetString(MENU_DUPLICATE, "Duplicate" + suffix)
 
         result = self._show_popup(bc, x, y)

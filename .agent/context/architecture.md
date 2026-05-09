@@ -109,20 +109,22 @@ The default is *position only* in additive mode (respect the user's intent). The
 
 ## Camera lifecycle and orphaned shots
 
-When the user attempts to delete a camera that is referenced by one or more shots, Shotblocks intercepts the deletion attempt:
+When a camera referenced by one or more shots is deleted, Shotblocks **detects and surfaces** the deletion (we cannot intercept it pre-emptively — C4D 2026 Python exposes no deletion-veto path; `SceneHookData` is unavailable, `MessageData` is post-hoc only):
 
-1. A confirmation dialog appears: "This camera is referenced by N shot(s) in the Shotblocks timeline. Delete anyway?"
-2. If the user cancels, no deletion happens; nothing changes.
-3. If the user confirms, the camera is deleted *and* the affected shots become orphaned.
+1. On the next `EVMSG_CHANGE` after the deletion, the timeline recomputes which shots have dead camera references.
+2. Affected shots flip to the *orphan* visual state — dashed dark-red border, muted body fill, label prefixed `(missing) `.
+3. A console line names how many shots became orphaned and reminds the user that Cmd+Z restores the deleted camera. (A real status-line widget joins the post-v5 visual-polish pass.)
 
-Orphaned shots remain on the timeline as visible blocks but are rendered in a clearly distinct visual state (e.g., dashed outline, muted color, "missing camera" label). They cannot play back — when the cursor enters an orphaned shot, the viewport shows a placeholder frame and the status line names the missing camera.
+Orphaned shots remain on the timeline as visible blocks but are rendered in a clearly distinct visual state. They cannot play back — when the cursor enters an orphaned shot, the viewport shows a placeholder frame and the status line names the missing camera. (Playback engine is v5+.)
 
 The user has three resolution paths for an orphaned shot:
-- **Remove the shot** — context menu option; cleanly deletes the orphaned block
-- **Relink to another camera** — drag a different camera from the Object Manager onto the orphaned shot block; the shot adopts the new camera as its source while preserving its in/out range and rig state (if compatible)
-- **Restore via undo** — the standard C4D undo stack reverses the deletion and the shot is reattached
+- **Remove the shot** — right-click → `Remove` (the verb flips from `Delete` to `Remove` when the selection is all-orphan); cleanly deletes the orphaned block.
+- **Relink to another camera** — drag a different camera from the Object Manager onto the orphaned shot block; the shot adopts the new camera as its source while preserving its id, in/out range, track, and any future rig state (compatibility rules to be defined when per-shot rig state lands). The same gesture also re-cameras *healthy* shots — drop on existing block = relink, drop on empty space = create.
+- **Restore via undo** — the standard C4D undo stack reverses the deletion and the shot is reattached.
 
-Orphaned shots persist across save/load — the document remembers that the shot referenced a camera by name/ID and continues to display the placeholder until resolved. This is intentional. A user might delete a camera by accident, save the document, reopen it, and still have the option to restore via reimporting or relinking. Silently dropping orphaned shots on save would be hostile.
+Orphaned shots persist across save/load — the helper-null JSON stores the camera's last-known display name, and the BaseLink resolves to None when the camera is gone. The persisted name keeps the orphan label readable across sessions; the dead BaseLink keeps the orphan visual state consistent. This is intentional. A user might delete a camera by accident, save the document, reopen it, and still have the option to restore via reimporting or relinking. Silently dropping orphaned shots on save would be hostile.
+
+We deliberately do NOT walk the document by stored name to re-bind a same-named survivor camera. Re-binding by name would silently heal an orphan and erase the user's signal that a delete happened — the orphan visual is the point.
 
 ## A single camera in multiple shots
 

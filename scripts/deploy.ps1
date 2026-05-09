@@ -3,7 +3,9 @@
 
 $ErrorActionPreference = "Stop"
 
-$source = "Z:\02_MKE\2026\shotblocks\src"
+$here = Split-Path -Parent $MyInvocation.MyCommand.Path
+$repoRoot = Split-Path -Parent $here
+$source = Join-Path $repoRoot "src"
 
 # C4D 2026's prefs folder on this machine. The build-hash suffix
 # (_1ABCDC12) is install-specific; if the prefs folder name changes
