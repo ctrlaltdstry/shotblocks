@@ -23,7 +23,7 @@ import os
 
 import c4d
 
-from sb_audio_decode import load_wav, AudioDecodeError
+from sb_audio_decode import load_audio, AudioDecodeError
 from sb_audio_peaks  import build as build_peaks, should_rebuild
 from sb_persistence  import _read_audio, _write_audio
 
@@ -105,9 +105,10 @@ class AudioTrack(object):
     # ------------------------------------------------------------------
 
     def import_file(self, abs_path, doc, drop_in_frame=0):
-        """User dragged a WAV onto the timeline. Decode, build peaks,
-        compute initial timeline range from the audio's duration,
-        persist, and replace any existing track.
+        """User dragged an audio file (.wav or .mp3) onto the timeline.
+        Decode via the format-agnostic dispatcher, build peaks, compute
+        initial timeline range from the audio's duration, persist, and
+        replace any existing track.
 
         `drop_in_frame` is the timeline frame the drop landed on; the
         clip's in-point starts there. The default in-block runs to
@@ -116,7 +117,7 @@ class AudioTrack(object):
         Raises `AudioTrackError` on failure.
         """
         try:
-            decoded = load_wav(abs_path)
+            decoded = load_audio(abs_path)
         except AudioDecodeError as e:
             raise AudioTrackError(str(e))
 
@@ -161,7 +162,7 @@ class AudioTrack(object):
         abs_path = self._from_persisted_path(stored, is_rel, doc)
 
         try:
-            decoded = load_wav(abs_path)
+            decoded = load_audio(abs_path)
         except AudioDecodeError as e:
             print("[Shotblocks] audio re-load failed: {}".format(e))
             self._reset()

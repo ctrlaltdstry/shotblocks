@@ -16,6 +16,17 @@ __pycache__/
 build/
 dist/
 *.pyp.bak
+# Vendor rebuild source — the project-wide `build/` rule above would
+# otherwise hide minimp3's headers and our shim, which need to ship so
+# the DLL can be rebuilt from clone. Excluded from deployment via
+# robocopy /XD build in scripts/deploy.ps1.
+!src/vendor/build/
+!src/vendor/build/**
+
+# Local-only test audio. Test fixtures for the v7/v8 audio work — kept
+# out of the repo because they're large and not redistributable.
+scenes/ES_*.wav
+scenes/ES_*.mp3
 
 # Editor
 .vscode/

@@ -14,12 +14,20 @@ The audio handling deserves its own document because it is novel territory for C
 
 ## Decoder choice
 
-_(decision pending — options: pure Python WAV + bundled lightweight MP3/AAC decoder, or a small C extension)_
+**Decided.** WAV via stdlib `wave`. MP3 via bundled minimp3 (CC0)
+loaded with ctypes from `src/vendor/minimp3.dll`. The dispatcher
+`sb_audio_decode.load_audio(path)` picks by extension and returns the
+same `DecodedAudio` shape regardless of source format.
 
-Constraints:
-- Must work on the current target (C4D 2026.2.0 on Windows). macOS support returns to the requirements list when macOS is added to the target list.
-- Must not require system codec installation
-- License must be compatible with plugin distribution
+AAC is shelved — no permissively-licensed decoder of decent quality
+exists, and Shotblocks is MIT-licensed (see `.agent/licensing.md`).
+FLAC (dr_flac) and Vorbis (stb_vorbis) are cheap to add later if
+needed.
+
+Constraints honored:
+- Works on C4D 2026.2.0 / Windows. macOS returns when macOS is back on the target list.
+- No system codec installation required — the decoder DLL ships with the plugin.
+- License is MIT-compatible (CC0 is public-domain-equivalent).
 
 ## Caching strategy
 

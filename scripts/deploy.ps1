@@ -23,10 +23,12 @@ if (-not (Test-Path $c4dPrefs)) {
 New-Item -ItemType Directory -Path $dest -Force | Out-Null
 
 # /MIR mirrors source to dest (deletes orphaned files in dest)
+# /XD build excludes the vendor build directory (rebuild sources kept
+#     under version control but not needed at runtime)
 # /NFL /NDL suppress per-file/dir output
 # /NJH /NJS suppress job header/summary
 # /NP no progress percentage
-robocopy $source $dest /MIR /NFL /NDL /NJH /NJS /NP | Out-Null
+robocopy $source $dest /MIR /XD build /NFL /NDL /NJH /NJS /NP | Out-Null
 
 # robocopy exit codes 0-7 are success; 8+ are failures
 if ($LASTEXITCODE -ge 8) {

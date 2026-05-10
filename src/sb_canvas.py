@@ -28,7 +28,7 @@ from sb_persistence import (
     _set_shot_cam_link, _get_shot_cam, _clear_shot_cam_link,
 )
 from sb_toolbar import load_bitmap, tinted_copy, blend_two_bitmaps, HOVER_LIGHTEN, PRESS_DARKEN
-from sb_audio_decode import is_wav_path
+from sb_audio_decode import is_audio_path
 from sb_audio_track  import AudioTrack, AudioTrackError
 from sb_audio_render import draw_waveform
 from sb_audio_playback import AudioPlayback
@@ -212,6 +212,7 @@ MENU_DUPLICATE      = 3001
 MENU_SET_RANGE_THIS = 3002
 MENU_SET_RANGE_SEL  = 3003
 MENU_RANGE_TO_ALL   = 3004
+MENU_DELETE_AUDIO   = 3005
 
 
 # ---------------------------------------------------------------------------
@@ -1433,8 +1434,8 @@ class ShotblocksTimelineCanvas(c4d.gui.GeUserArea):
             return True
 
         cameras  = self._drag_cameras(msg)
-        wav_path = None if cameras else self._drag_wav_path(msg)
-        if not cameras and wav_path is None:
+        audio_path = None if cameras else self._drag_audio_path(msg)
+        if not cameras and audio_path is None:
             self._clear_drag()
             return False
 
@@ -1463,9 +1464,9 @@ class ShotblocksTimelineCanvas(c4d.gui.GeUserArea):
         # WAV file drop (v7) — import as the doc's audio track. No
         # hit-test relink path; v7 ships one audio per doc and a second
         # drop replaces the first.
-        if wav_path is not None:
+        if audio_path is not None:
             self._clear_drag()
-            return self._import_audio_wav(wav_path, drop_frame)
+            return self._import_audio_file(audio_path, drop_frame)
 
         # Drop-on-existing-shot → relink that shot's camera. Works on
         # orphans (the architecture's primary use case) AND healthy shots
@@ -1483,11 +1484,12 @@ class ShotblocksTimelineCanvas(c4d.gui.GeUserArea):
             return self._relink_shot(target_shot_id, cameras[0])
         return self._create_shots_at(drop_frame, drop_track, cameras)
 
-    def _drag_wav_path(self, msg):
-        """Pull a `.wav` file path out of a drag message, if the drag
-        type is DRAGTYPE_FILES. Returns None on miss. Tolerates the
-        several shapes GetDragObject returns for file drops in
-        different C4D builds (string, list of strings, dict)."""
+    def _drag_audio_path(self, msg):
+        """Pull a supported audio file path (`.wav` or `.mp3`) out of a
+        drag message, if the drag type is one of the file-drop types.
+        Returns None on miss. Tolerates the several shapes
+        GetDragObject returns for file drops in different C4D builds
+        (string, list of strings, dict)."""
         try:
             drag_info = self.GetDragObject(msg)
         except Exception:
@@ -1523,29 +1525,29 @@ class ShotblocksTimelineCanvas(c4d.gui.GeUserArea):
             paths = []
 
         for p in paths:
-            if is_wav_path(p):
+            if is_audio_path(p):
                 return p
         return None
 
-    def _import_audio_wav(self, wav_path, drop_frame):
-        """Bring a WAV file in as the document's audio track. Replaces
-        any existing track. Wraps the persistence write in undo so the
-        user can Cmd+Z back to no-audio."""
+    def _import_audio_file(self, audio_path, drop_frame):
+        """Bring a WAV or MP3 file in as the document's audio track.
+        Replaces any existing track. Wraps the persistence write in
+        undo so the user can Cmd+Z back to no-audio."""
         doc = c4d.documents.GetActiveDocument()
         try:
             doc.StartUndo()
             _get_or_create_helper(doc)
-            self._audio_track.import_file(wav_path, doc, drop_in_frame=drop_frame)
+            self._audio_track.import_file(audio_path, doc, drop_in_frame=drop_frame)
             doc.EndUndo()
         except AudioTrackError as e:
-            print("[Shotblocks] WAV import failed: {}".format(e))
+            print("[Shotblocks] audio import failed: {}".format(e))
             try:
                 doc.EndUndo()
             except Exception:
                 pass
             return False
         except Exception as e:
-            print("[Shotblocks] WAV import unexpected error: {}".format(e))
+            print("[Shotblocks] audio import unexpected error: {}".format(e))
             try:
                 doc.EndUndo()
             except Exception:
@@ -1561,7 +1563,7 @@ class ShotblocksTimelineCanvas(c4d.gui.GeUserArea):
         c4d.EventAdd()
         self.Redraw()
         print("[Shotblocks] audio imported: {} ({:.2f}s)".format(
-            os.path.basename(wav_path),
+            os.path.basename(audio_path),
             self._audio_track.decoded.duration_s))
         return True
 
@@ -1895,14 +1897,33 @@ class ShotblocksTimelineCanvas(c4d.gui.GeUserArea):
     def _open_context_menu(self, x, y):
         """Right-click context menu. v4b items: Set Range to This / Selection /
         All, Delete, Duplicate (Set-Range-to-All is the only entry on empty
-        canvas)."""
+        canvas). v8 adds a Delete entry when the click lands on the audio
+        block."""
         w = self.GetWidth()
         doc = c4d.documents.GetActiveDocument()
         shots, _ = _read_shots(doc)
         shot_id, _region = self._hit_test(x, y, shots, w)
-        print("[Shotblocks] RMB press at ({},{}) hit={}".format(x, y, shot_id))
+
+        # If the click missed every shot, see if it landed on the audio
+        # block instead — RMB on the waveform should offer Delete.
+        audio_hit = None
+        if shot_id is None:
+            audio_hit = self._hit_test_audio(x, y, w)
+        print("[Shotblocks] RMB press at ({},{}) hit={} audio_hit={}".format(
+            x, y, shot_id, bool(audio_hit)))
 
         bc = c4d.BaseContainer()
+
+        if audio_hit is not None:
+            # Make the audio block the active selection so Delete (and any
+            # later audio menu items) are unambiguous about what they target.
+            self._audio_selected = True
+            self._selected_ids.clear()
+            self.Redraw()
+            bc.SetString(MENU_DELETE_AUDIO, "Delete Audio Track")
+            result = self._show_popup(bc, x, y)
+            self._dispatch_menu_result(result, doc, shots)
+            return True
 
         if shot_id is None:
             # Empty-canvas menu: just "Range to All" for v4b.
@@ -1960,6 +1981,8 @@ class ShotblocksTimelineCanvas(c4d.gui.GeUserArea):
             return
         if result == MENU_DELETE:
             self._delete_selected()
+        elif result == MENU_DELETE_AUDIO:
+            self._delete_selected_audio()
         elif result == MENU_DUPLICATE:
             self._duplicate_selected()
         elif result == MENU_SET_RANGE_THIS:
@@ -2036,6 +2059,17 @@ class ShotblocksTimelineCanvas(c4d.gui.GeUserArea):
         # but the channel is the ASCII code for 'D' (68 = 0x44).
         if (qualifier & _QCTRL) and channel == ord('D'):
             self._duplicate_selected(qualifier=qualifier)
+            return True
+
+        # Ctrl+= / Ctrl+- → zoom in / out, anchored on the playhead so the
+        # user's focal point stays put. C4D delivers '=' as channel 0x3D
+        # and '-' as 0x2D regardless of Shift state, so Ctrl++ (Shift+=)
+        # and Ctrl+_ (Shift+-) hit the same handler.
+        if (qualifier & _QCTRL) and channel in (ord('='), ord('-')):
+            w = self.GetWidth()
+            anchor_x = self._frame_to_x(self.playhead_frame, w)
+            # _zoom_around_cursor: delta>0 → zoom in, delta<0 → zoom out
+            self._zoom_around_cursor(anchor_x, +1 if channel == ord('=') else -1)
             return True
 
         # I / O → set in/out at the current playhead frame (no qualifier required).
@@ -2366,6 +2400,11 @@ class ShotblocksTimelineCanvas(c4d.gui.GeUserArea):
             print("[Shotblocks] audio load_from_doc raised: {}".format(e))
             return
         self._audio_loaded_sig = sig_persisted
+        # Hand the buffer to the playback engine — without this, spacebar
+        # after a fresh doc-open plays silence even though the waveform is
+        # visible (the import path wires this up at the call site; the
+        # load path used to skip it).
+        self._audio_playback.set_audio(track.decoded if loaded else None)
         if loaded:
             print("[Shotblocks] audio loaded for doc: {} ({:.2f}s, {} Hz)".format(
                 track.path,
@@ -2941,6 +2980,12 @@ class ShotblocksTimelineCanvas(c4d.gui.GeUserArea):
     # ------------------------------------------------------------------
 
     def _delete_selected(self):
+        # Audio block selection takes precedence — its hit-test clears
+        # _selected_ids before setting _audio_selected, so the two are
+        # mutually exclusive at any moment.
+        if self._audio_selected:
+            self._delete_selected_audio()
+            return
         if not self._selected_ids:
             return
         doc = c4d.documents.GetActiveDocument()
@@ -2960,6 +3005,32 @@ class ShotblocksTimelineCanvas(c4d.gui.GeUserArea):
         c4d.EventAdd()
         self.Redraw()
         print("[Shotblocks] deleted {} shot(s)".format(len(target_ids)))
+
+    def _delete_selected_audio(self):
+        """Delete the selected audio track. Mirrors _delete_selected's
+        undo bracketing so Cmd+Z restores the import."""
+        doc = c4d.documents.GetActiveDocument()
+        if self._audio_track.decoded is None:
+            self._audio_selected = False
+            return
+        try:
+            doc.StartUndo()
+            self._audio_track.clear(doc)
+            doc.EndUndo()
+        except Exception as e:
+            print("[Shotblocks] audio delete failed: {}".format(e))
+            try:
+                doc.EndUndo()
+            except Exception:
+                pass
+            return
+        # Stop any in-progress playback and drop the buffer reference.
+        self._audio_playback.set_audio(None)
+        self._refresh_audio_loaded_sig(doc)
+        self._audio_selected = False
+        c4d.EventAdd()
+        self.Redraw()
+        print("[Shotblocks] audio track deleted")
 
     def _duplicate_selected(self, qualifier=0):
         """Duplicate every selected shot. Each copy lands on track+1 (auto-grow
@@ -3106,6 +3177,11 @@ class ShotblocksTimelineCanvas(c4d.gui.GeUserArea):
         current frame and only follows the drag delta — clicking off-center
         on the handle won't yank the playhead to the click point.
 
+        When snap is enabled (toolbar toggle), the playhead is magnetically
+        pulled to nearby edit points (shot ins/outs and audio in/out) within
+        the same SNAP_PIXEL_RADIUS the body-drag uses. Holding Shift during
+        the drag suppresses snap (matches the body-drag inversion).
+
         Each scrub step also pushes doc time and routes the active shot's
         camera to the active BaseDraw, so the viewport switches cameras
         live during scrubbing — not just during spacebar playback."""
@@ -3114,6 +3190,39 @@ class ShotblocksTimelineCanvas(c4d.gui.GeUserArea):
         doc = c4d.documents.GetActiveDocument()
         fps = self._doc_fps(doc) if doc is not None else 24
         doc_first, doc_last = self._doc_bounds()
+
+        # Build the snap-target set once at drag start. Edit points: every
+        # shot's in_frame and (out_frame + 1), plus the audio block's edges
+        # if one is loaded. Cheap to assemble; doesn't change mid-scrub.
+        shots, _ = _read_shots(doc) if doc is not None else ([], 0)
+        edit_points = set()
+        for s in shots:
+            edit_points.add(int(s["in_frame"]))
+            edit_points.add(int(s["out_frame"]) + 1)
+        if self._audio_track.decoded is not None:
+            edit_points.add(int(self._audio_track.in_frame))
+            edit_points.add(int(self._audio_track.out_frame) + 1)
+
+        def snap_frame(f, qual):
+            """Pull `f` to the nearest edit point if snap is on and we're
+            within radius. Updates _snap_indicator_frames as a side effect
+            so the canvas draws indicator lines during the scrub."""
+            mode = _qualifier_mode(qual, self._snap_enabled)
+            if mode != "snap" or not edit_points:
+                self._snap_indicator_frames = ()
+                return f
+            radius = self._snap_frames()
+            best = f
+            best_dist = radius + 1
+            for ep in edit_points:
+                d = abs(ep - f)
+                if d < best_dist:
+                    best_dist, best = d, ep
+            if best_dist <= radius:
+                self._snap_indicator_frames = (best,)
+                return best
+            self._snap_indicator_frames = ()
+            return f
 
         def push_to_doc(frame):
             if doc is None:
@@ -3148,21 +3257,27 @@ class ShotblocksTimelineCanvas(c4d.gui.GeUserArea):
                 c4d.EventAdd()
 
         if snap_on_click:
-            self.playhead_frame = max(doc_first, min(doc_last,
-                                                     self._x_to_frame(mx, w)))
+            raw = self._x_to_frame(mx, w)
+            snapped = snap_frame(raw, 0)
+            self.playhead_frame = max(doc_first, min(doc_last, snapped))
             push_to_doc(self.playhead_frame)
             self.Redraw()
         orig_frame = self.playhead_frame
 
-        def on_tick(adx, _ady, _qual):
-            new_frame = max(doc_first, min(doc_last,
-                                           orig_frame + int(round(adx * fpp))))
+        def on_tick(adx, _ady, qual):
+            raw = orig_frame + int(round(adx * fpp))
+            snapped = snap_frame(raw, qual)
+            new_frame = max(doc_first, min(doc_last, snapped))
             if new_frame != self.playhead_frame:
                 self.playhead_frame = new_frame
                 push_to_doc(new_frame)
                 self.Redraw()
 
         self._drag_loop(_KEY_MLEFT, mx, my, on_tick)
+        # Clear the snap indicator now that the scrub is done — matches
+        # the body-drag convention.
+        self._snap_indicator_frames = ()
+        self.Redraw()
 
     def _commit_range_drag(self, doc, orig_in, orig_out):
         """Shared commit logic for range-bar drag handlers."""

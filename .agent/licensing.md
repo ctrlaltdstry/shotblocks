@@ -4,7 +4,10 @@ Decisions about how Shotblocks is licensed and distributed. Empty when work bega
 
 ## Status
 
-**Undecided.** No licensing decision has been made. This file exists to host the decision when it's made and to flag the work that depends on it.
+**MIT, decided 2026-05-10.** Made to unblock the v8 audio decoder choice.
+The `LICENSE` file at the repo root carries the canonical text and the
+copyright line `Copyright (c) 2026 Michael Slater`. Distribution and
+contributor-agreement decisions are still open (see below).
 
 ## Why this matters now
 
@@ -67,3 +70,18 @@ This is a decision for the project owner, not for the agent. The agent's job is 
 2. Update this document to record the decision and date
 3. Resolve the audio decoder choice (which depends on this)
 4. Update any third-party code references in the codebase to match
+
+## Implications now that MIT is chosen
+
+Bundled dependencies must be MIT/BSD/Apache/CC0/PD compatible with MIT
+redistribution. LGPL is excluded (its dynamic-link + notice obligations
+clash with how Shotblocks ships); GPL/AGPL is excluded outright.
+
+Audio decoder fallout: WAV via stdlib `wave`, MP3 via bundled minimp3
+(CC0). AAC is effectively shelved — no permissively-licensed AAC
+decoder of decent quality exists. FLAC (dr_flac) and Vorbis
+(stb_vorbis) are cheap to add later if user demand justifies them.
+
+Each vendored binary gets its own license file under `src/vendor/`
+and an entry in `src/vendor/README.md` with source URL and pinned
+revision.

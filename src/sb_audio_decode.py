@@ -1,8 +1,10 @@
-"""WAV decoding for the v7 audio subsystem.
+"""WAV decoding for the v7 audio subsystem (and a format-agnostic
+dispatcher used since v8).
 
 Pure Python — no `c4d` import, no third-party deps. Uses the stdlib
 `wave` module, which the v7 spike confirmed is bundled with C4D 2026's
-Python build (3.11.4).
+Python build (3.11.4). MP3 support lives in `sb_audio_decode_mp3` and
+is dispatched from `load_audio()` below.
 
 Scope is intentionally narrow: open a WAV file, return raw samples plus
 the metadata downstream modules need. Channel mixdown to mono and the
@@ -113,3 +115,40 @@ def is_wav_path(path):
     if not path:
         return False
     return os.path.splitext(path)[1].lower() == ".wav"
+
+
+def is_audio_path(path):
+    """True if the path's extension matches any decoder we ship.
+    Drag-receive uses this to pick which paths to accept.
+
+    The MP3 branch only returns True when the bundled minimp3 DLL
+    actually loaded — drops of `.mp3` files are silently rejected on
+    a build where the DLL is missing or unloadable, instead of
+    failing mid-import."""
+    if is_wav_path(path):
+        return True
+    try:
+        from sb_audio_decode_mp3 import is_mp3_path, is_available
+        if is_mp3_path(path) and is_available():
+            return True
+    except ImportError:
+        pass
+    return False
+
+
+def load_audio(path):
+    """Format-agnostic decode dispatcher. Picks `load_wav` or
+    `load_mp3` by extension. Raises `AudioDecodeError` if no decoder
+    is available for the file's extension."""
+    if is_wav_path(path):
+        return load_wav(path)
+    ext = os.path.splitext(path)[1].lower()
+    if ext == ".mp3":
+        try:
+            from sb_audio_decode_mp3 import load_mp3
+        except ImportError as e:
+            raise AudioDecodeError(
+                "MP3 decoder module not available: {}".format(e))
+        return load_mp3(path)
+    raise AudioDecodeError(
+        "unsupported audio format: {} (only .wav and .mp3)".format(ext))
