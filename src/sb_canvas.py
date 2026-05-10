@@ -28,6 +28,10 @@ from sb_persistence import (
     _set_shot_cam_link, _get_shot_cam, _clear_shot_cam_link,
 )
 from sb_toolbar import load_bitmap, tinted_copy, blend_two_bitmaps, HOVER_LIGHTEN, PRESS_DARKEN
+from sb_audio_decode import is_wav_path
+from sb_audio_track  import AudioTrack, AudioTrackError
+from sb_audio_render import draw_waveform
+from sb_audio_playback import AudioPlayback
 
 
 # ---------------------------------------------------------------------------
@@ -115,6 +119,15 @@ COL_DROP_HINT     = _rgb("aaaaaa")
 # against both the dark canvas and any state's body color, and to
 # avoid clashing with our blue/orange/red state palette.
 COL_SNAP_INDICATOR = _rgb("ffd60a")
+
+# Audio block — body fill is a deep teal so the waveform reads cleanly
+# against it and the block is unmistakably distinct from a video shot.
+COL_AUDIO_BODY          = _rgb("1d3a44")  # deep teal, mid-saturation
+COL_AUDIO_BODY_SELECTED = _rgb("2a5666")  # lighter teal when selected
+COL_AUDIO_BORDER        = _rgb("3a6a78")
+COL_AUDIO_WAVEFORM      = _rgb("9be0f0")  # light cyan; pops on the teal body
+COL_AUDIO_CENTERLINE    = _rgb("3a6a78")  # same as border — subtle reference
+COL_AUDIO_LABEL         = _rgb("c0e8f0")
 
 # Play-range bar
 COL_RANGE_BAR           = _rgb("3a3a3a")
@@ -387,6 +400,18 @@ class ShotblocksTimelineCanvas(c4d.gui.GeUserArea):
         # exactly where the magnetic snap pulled the shot.
         self._snap_indicator_frames   = ()
 
+        # v7 audio. One track per document. `_audio_doc_id` is the
+        # `id(doc)` we last sync'd against — when it changes (the user
+        # opened a different document), we reload from the helper null.
+        self._audio_track    = AudioTrack()
+        self._audio_playback = AudioPlayback()
+        self._audio_doc_id   = None
+        # Selection / hover for the audio block. Keys parallel to the
+        # shot-block conventions: 'audio' is the singleton id (we have
+        # one audio block per document in v7).
+        self._audio_selected = False
+        self._audio_drag_logged_types = set()
+
         # Left-rail toggle buttons. We load the off/on bitmaps once and
         # bake hover/press tinted copies. The rail-button list is a list
         # of dicts — easy to extend later (zoom controls, tool palette)
@@ -612,6 +637,15 @@ class ShotblocksTimelineCanvas(c4d.gui.GeUserArea):
 
     def _track_y_top(self, track):
         return self._track_0_top() - track * (SHOT_HEIGHT + LANE_GAP)
+
+    # v7: audio renders below track 0, separated by LANE_GAP. Returns
+    # the (top, bottom) Y bounds of the audio block in canvas pixels.
+    # Used by both the draw path and audio-block hit-test.
+    def _audio_y_bounds(self):
+        t0_bot   = self._track_0_top() + SHOT_HEIGHT
+        audio_top = t0_bot + LANE_GAP
+        audio_bot = audio_top + AUDIO_HEIGHT
+        return audio_top, audio_bot
 
     def _y_to_track(self, y, lane_count):
         t0_top = self._track_0_top()
@@ -987,6 +1021,12 @@ class ShotblocksTimelineCanvas(c4d.gui.GeUserArea):
             track  = _shot_track(shot)
             yt     = self._track_y_top(track)
             self._draw_shot_block(shot, w, yt, shot["id"] in self._selected_ids)
+
+        # Audio block (v7) — re-syncs from the doc on first draw or on
+        # doc switch, then renders below track 0.
+        self._sync_audio_for_active_doc()
+        if self._audio_track.decoded is not None:
+            self._draw_audio_block(w)
 
         # Marquee selection rectangle (1px warm-yellow outline)
         if self._marquee_rect is not None:
@@ -1392,8 +1432,9 @@ class ShotblocksTimelineCanvas(c4d.gui.GeUserArea):
             self._clear_drag()
             return True
 
-        cameras = self._drag_cameras(msg)
-        if not cameras:
+        cameras  = self._drag_cameras(msg)
+        wav_path = None if cameras else self._drag_wav_path(msg)
+        if not cameras and wav_path is None:
             self._clear_drag()
             return False
 
@@ -1419,6 +1460,13 @@ class ShotblocksTimelineCanvas(c4d.gui.GeUserArea):
         drop_frame = self._drag_frame if self._drag_frame >= 0 else self.visible_first
         drop_track = self._drag_track
 
+        # WAV file drop (v7) — import as the doc's audio track. No
+        # hit-test relink path; v7 ships one audio per doc and a second
+        # drop replaces the first.
+        if wav_path is not None:
+            self._clear_drag()
+            return self._import_audio_wav(wav_path, drop_frame)
+
         # Drop-on-existing-shot → relink that shot's camera. Works on
         # orphans (the architecture's primary use case) AND healthy shots
         # (one-gesture re-camera). If the drop is on empty canvas space,
@@ -1434,6 +1482,88 @@ class ShotblocksTimelineCanvas(c4d.gui.GeUserArea):
         if target_shot_id is not None and cameras:
             return self._relink_shot(target_shot_id, cameras[0])
         return self._create_shots_at(drop_frame, drop_track, cameras)
+
+    def _drag_wav_path(self, msg):
+        """Pull a `.wav` file path out of a drag message, if the drag
+        type is DRAGTYPE_FILES. Returns None on miss. Tolerates the
+        several shapes GetDragObject returns for file drops in
+        different C4D builds (string, list of strings, dict)."""
+        try:
+            drag_info = self.GetDragObject(msg)
+        except Exception:
+            return None
+
+        if isinstance(drag_info, dict):
+            drag_type = drag_info.get("type", drag_info.get("dragtype"))
+            drag_obj  = drag_info.get("object", drag_info.get("dragobject"))
+        elif isinstance(drag_info, (list, tuple)) and len(drag_info) >= 2:
+            drag_type, drag_obj = drag_info[0], drag_info[1]
+        else:
+            return None
+
+        # Log unknown drag types once to help diagnose v7 file-drop
+        # behavior on the user's actual machine. Removed once we
+        # confirm DRAGTYPE_FILES is what fires for OS file explorer drops.
+        if drag_type not in self._audio_drag_logged_types:
+            self._audio_drag_logged_types.add(drag_type)
+            print("[Shotblocks] drag-receive type={} obj-type={}".format(
+                drag_type, type(drag_obj).__name__))
+
+        if drag_type not in (c4d.DRAGTYPE_FILES,
+                             c4d.DRAGTYPE_FILENAME_OTHER,
+                             getattr(c4d, "DRAGTYPE_BROWSER_SOUND", -1)):
+            return None
+
+        # Normalize to a list of path strings.
+        if isinstance(drag_obj, str):
+            paths = [drag_obj]
+        elif isinstance(drag_obj, (list, tuple)):
+            paths = [p for p in drag_obj if isinstance(p, str)]
+        else:
+            paths = []
+
+        for p in paths:
+            if is_wav_path(p):
+                return p
+        return None
+
+    def _import_audio_wav(self, wav_path, drop_frame):
+        """Bring a WAV file in as the document's audio track. Replaces
+        any existing track. Wraps the persistence write in undo so the
+        user can Cmd+Z back to no-audio."""
+        doc = c4d.documents.GetActiveDocument()
+        try:
+            doc.StartUndo()
+            _get_or_create_helper(doc)
+            self._audio_track.import_file(wav_path, doc, drop_in_frame=drop_frame)
+            doc.EndUndo()
+        except AudioTrackError as e:
+            print("[Shotblocks] WAV import failed: {}".format(e))
+            try:
+                doc.EndUndo()
+            except Exception:
+                pass
+            return False
+        except Exception as e:
+            print("[Shotblocks] WAV import unexpected error: {}".format(e))
+            try:
+                doc.EndUndo()
+            except Exception:
+                pass
+            return False
+        # Hand the new audio data to the playback engine immediately so
+        # the next spacebar press kicks off correctly without waiting
+        # for a full reload cycle.
+        self._audio_playback.set_audio(self._audio_track.decoded)
+        # Update the loaded-signature so the next draw's sync is a
+        # no-op rather than re-decoding what we just loaded.
+        self._refresh_audio_loaded_sig(doc)
+        c4d.EventAdd()
+        self.Redraw()
+        print("[Shotblocks] audio imported: {} ({:.2f}s)".format(
+            os.path.basename(wav_path),
+            self._audio_track.decoded.duration_s))
+        return True
 
     def _drag_cameras(self, msg):
         try:
@@ -1975,6 +2105,7 @@ class ShotblocksTimelineCanvas(c4d.gui.GeUserArea):
             self._playing = False
             if dlg is not None:
                 dlg.stop_playback_timer()
+            self._audio_playback.pause()
             print("[Shotblocks] playback paused at frame {}".format(self.playhead_frame))
             return
 
@@ -1984,8 +2115,29 @@ class ShotblocksTimelineCanvas(c4d.gui.GeUserArea):
             self.playhead_frame = range_in
         fps = self._doc_fps(doc)
         self._playing = True
+        # Wall-clock anchor — used by _playback_tick to compute
+        # playhead_frame from elapsed time. This gives a video clock
+        # accurate to wall time within ±1 frame and prevents the
+        # accumulating drift of the previous "advance by 1 each tick"
+        # approach, which silently absorbed timer jitter and made
+        # video drift slower than audio over a long clip.
+        self._playback_anchor_t       = _monotonic()
+        self._playback_anchor_frame   = self.playhead_frame
         if dlg is not None:
             dlg.start_playback_timer(fps)
+        # Audio: kick off async playback starting at the audio frame
+        # corresponding to the current timeline frame. If the playhead is
+        # outside the audio block, doc_frame_to_audio_frame returns -1
+        # and we don't start audio at all (silence until the user moves
+        # the playhead inside the clip — same as a video-only timeline).
+        # We deliberately do NOT call set_audio() here: that would tear
+        # down the in-flight DecodedAudio reference and re-bind it to the
+        # same data, just to re-issue the temp-file write. The data was
+        # bound on import; spacebar should be near-instant.
+        start_af = self._audio_track.doc_frame_to_audio_frame(
+            self.playhead_frame, fps)
+        if self._audio_track.decoded is not None and start_af >= 0:
+            self._audio_playback.play(start_af)
         print("[Shotblocks] playback started at frame {} ({} fps)".format(
             self.playhead_frame, fps))
 
@@ -2088,10 +2240,11 @@ class ShotblocksTimelineCanvas(c4d.gui.GeUserArea):
         return st[side + "_t"]
 
     def _playback_tick(self):
-        """Called by the dialog's Timer (which runs at ~60 fps to share
-        with hover-fade animation). Internally rate-limits to the doc's
-        fps so playback advances at the right speed regardless of the
-        host timer rate."""
+        """Called by the dialog's Timer (~60 Hz). Computes the current
+        video frame from wall-clock elapsed time since spacebar press,
+        which keeps the video clock locked to monotonic() the same way
+        Windows audio is. The two clocks share one time source so they
+        cannot drift relative to each other."""
         if not self._playing:
             return
         doc = c4d.documents.GetActiveDocument()
@@ -2102,21 +2255,40 @@ class ShotblocksTimelineCanvas(c4d.gui.GeUserArea):
                 dlg.stop_playback_timer()
             return
 
-        # Internal rate limit: only advance every 1/fps seconds.
         fps = self._doc_fps(doc)
-        frame_dt = 1.0 / max(1, fps)
-        now = _monotonic()
-        last = getattr(self, "_last_playback_advance_t", 0.0)
-        if now - last < frame_dt:
+        anchor_t      = getattr(self, "_playback_anchor_t",     _monotonic())
+        anchor_frame  = getattr(self, "_playback_anchor_frame", self.playhead_frame)
+        now           = _monotonic()
+        target_frame  = anchor_frame + int((now - anchor_t) * fps)
+
+        # Skip the per-tick work when the wall-clock target hasn't
+        # moved past the previous frame — equivalent to the old
+        # rate-limit, but anchored to a fixed start time so jitter
+        # doesn't accumulate.
+        if target_frame == self.playhead_frame:
             return
-        self._last_playback_advance_t = now
 
         range_in, range_out = _read_range(doc)
-        self.playhead_frame += 1
-        if self.playhead_frame >= range_out:
+        if target_frame >= range_out:
             if self._loop_enabled:
-                # Wrap to in-point and keep going.
-                self.playhead_frame = range_in
+                # Wrap. Re-anchor so the next frame computation starts
+                # from range_in at a wall time corresponding to the
+                # frame the wrap happened on (preserves audio sync
+                # across the wrap).
+                wrap_overflow_frames = target_frame - range_out
+                wrap_overflow_t      = wrap_overflow_frames / float(fps)
+                self.playhead_frame  = range_in
+                self._playback_anchor_t     = now - wrap_overflow_t
+                self._playback_anchor_frame = range_in
+                # Audio: tell playback to re-issue from the new audio
+                # frame (sync() detects the backward jump and reissues
+                # PlaySound). Forward-only sync below would miss the wrap.
+                if self._audio_track.decoded is not None and self._audio_playback.is_playing():
+                    target_af = self._audio_track.doc_frame_to_audio_frame(
+                        self.playhead_frame, fps)
+                    if target_af < 0:
+                        target_af = 0
+                    self._audio_playback.sync(target_af)
             else:
                 # Stop at out.
                 self.playhead_frame = range_out
@@ -2124,6 +2296,9 @@ class ShotblocksTimelineCanvas(c4d.gui.GeUserArea):
                 dlg = self._playback_owner_dialog
                 if dlg is not None:
                     dlg.stop_playback_timer()
+                self._audio_playback.pause()
+        else:
+            self.playhead_frame = target_frame
 
         # Order matters: set camera FIRST, then time, then post the redraw.
         # If we set time before camera, C4D can render the next frame with
@@ -2137,6 +2312,250 @@ class ShotblocksTimelineCanvas(c4d.gui.GeUserArea):
             print("[Shotblocks] SetTime failed: {}".format(e))
         c4d.EventAdd()
         self.Redraw()
+
+    # ------------------------------------------------------------------
+    # Audio block (v7) — sync, draw, hit-test, drag handlers
+    # ------------------------------------------------------------------
+
+    def _sync_audio_for_active_doc(self):
+        """Load the audio track from the helper null if our in-memory
+        state doesn't match what's persisted. Idempotent — called on
+        every draw, but only re-decodes when the persisted-vs-loaded
+        signature changes (path / in / out / trim). C4D 2026 returns
+        a fresh Python wrapper for `GetActiveDocument()` on each call
+        so id()-based caching is unreliable; comparing the persisted
+        dict against the in-memory state is the safe signal."""
+        try:
+            doc = c4d.documents.GetActiveDocument()
+        except Exception:
+            doc = None
+        if doc is None:
+            return
+
+        from sb_persistence import _read_audio
+        persisted = _read_audio(doc)
+        track     = self._audio_track
+
+        if persisted is None:
+            # Doc has no audio. If we currently hold one, drop it.
+            if track.decoded is not None:
+                self._audio_playback.stop()
+                track._reset()
+                print("[Shotblocks] audio cleared (doc has no audio)")
+            return
+
+        # Build a cheap signature from the persisted dict and compare.
+        # Path resolution differs between persisted (project-relative
+        # string) and in-memory (absolute) so we can't compare path
+        # strings directly. Compare the placement keys instead — they
+        # uniquely identify the audio state for our purposes.
+        sig_persisted = (
+            bool(persisted.get("path_is_relative", False)),
+            persisted.get("path", ""),
+            int(persisted.get("in_frame",  0)),
+            int(persisted.get("out_frame", 0)),
+            int(persisted.get("trim_start_audio_frames", 0)),
+        )
+        sig_loaded = getattr(self, "_audio_loaded_sig", None)
+        if sig_persisted == sig_loaded:
+            return
+
+        try:
+            loaded = track.load_from_doc(doc)
+        except Exception as e:
+            print("[Shotblocks] audio load_from_doc raised: {}".format(e))
+            return
+        self._audio_loaded_sig = sig_persisted
+        if loaded:
+            print("[Shotblocks] audio loaded for doc: {} ({:.2f}s, {} Hz)".format(
+                track.path,
+                track.decoded.duration_s,
+                track.decoded.sample_rate))
+
+    def _audio_x_bounds(self, w):
+        """Pixel bounds of the audio block on screen. Mirrors
+        `_shot_x_bounds` for shots."""
+        return self._shot_x_bounds(self._audio_track.in_frame,
+                                   self._audio_track.out_frame, w)
+
+    def _draw_audio_block(self, w):
+        track = self._audio_track
+        ax1, ax2 = self._audio_x_bounds(w)
+        ay1, ay2 = self._audio_y_bounds()
+
+        # Body fill — no bitmap nine-slice in v7. We render the audio
+        # block procedurally because the existing audio bitmap PNGs
+        # were authored at the v6 height and don't account for trim
+        # offsets affecting the x_offset of the waveform start.
+        body_color = COL_AUDIO_BODY_SELECTED if self._audio_selected else COL_AUDIO_BODY
+        self.DrawSetPen(body_color)
+        self.DrawRectangle(ax1, ay1, ax2, ay2)
+        # 1-pixel border
+        self.DrawSetPen(COL_AUDIO_BORDER)
+        self.DrawLine(ax1, ay1, ax2, ay1)
+        self.DrawLine(ax1, ay2, ax2, ay2)
+        self.DrawLine(ax1, ay1, ax1, ay2)
+        self.DrawLine(ax2, ay1, ax2, ay2)
+
+        # Waveform inset (small padding so the line never overlaps
+        # the body border).
+        wf_x1 = ax1 + 2
+        wf_x2 = ax2 - 2
+        wf_y1 = ay1 + 4
+        wf_y2 = ay2 - 4
+        if wf_x2 <= wf_x1 or wf_y2 <= wf_y1 or track.peaks is None:
+            return
+
+        # Compute the audio-frame range that actually maps to the
+        # currently-visible block, then slice the peak cache. The cache
+        # is built once at import time at a fixed high resolution
+        # (samples_per_column=256 — see AudioTrack.import_file). We
+        # never rebuild during draw — that put a multi-hundred-ms
+        # full-file scan into every zoom-drag tick, freezing the UI.
+        # Instead the renderer downsamples the cache slice to
+        # `block_pixels` via nearest-neighbor below.
+        doc      = c4d.documents.GetActiveDocument()
+        fps      = self._doc_fps(doc)
+        af0, af1 = track.audio_frames_for_visible_window(fps)
+        block_pixels = max(1, wf_x2 - wf_x1)
+
+        from sb_audio_peaks import slice_peaks
+        peaks_slice, _col_offset = slice_peaks(track.peaks, af0, af1)
+        if not peaks_slice:
+            return
+
+        # Downsample/upsample the slice to exactly block_pixels columns
+        # so 1 list entry = 1 pixel column. Cheap nearest-neighbor pick.
+        n = len(peaks_slice)
+        if n != block_pixels:
+            scaled = [None] * block_pixels
+            for x in range(block_pixels):
+                scaled[x] = peaks_slice[(x * n) // block_pixels]
+            peaks_slice = scaled
+
+        draw_waveform(self,
+                      peaks_slice,
+                      (wf_x1, wf_y1, wf_x2, wf_y2),
+                      fg_rgb=COL_AUDIO_WAVEFORM,
+                      mid_rgb=COL_AUDIO_CENTERLINE,
+                      x_offset=0)
+
+        # Label — file basename, top-left of the block.
+        try:
+            base = os.path.basename(track.path) or "audio"
+        except Exception:
+            base = "audio"
+        self.DrawSetTextCol(COL_AUDIO_LABEL, _TEXT_BG_TRANS or body_color)
+        self.DrawText(base, ax1 + 6, ay1 + 4)
+
+    def _hit_test_audio(self, x, y, w):
+        """Return None, ('audio', 'left'|'right'|'body') for clicks on
+        the audio block. Used by left-press to dispatch to the right
+        drag handler."""
+        if self._audio_track.decoded is None:
+            return None
+        ay1, ay2 = self._audio_y_bounds()
+        if y < ay1 or y > ay2:
+            return None
+        ax1, ax2 = self._audio_x_bounds(w)
+        if x < ax1 or x > ax2:
+            return None
+        if x < ax1 + EDGE_HIT_PX:
+            return ("audio", "left")
+        if x > ax2 - EDGE_HIT_PX:
+            return ("audio", "right")
+        return ("audio", "body")
+
+    def _drag_audio_move(self, mx, my):
+        """Drag the entire audio block horizontally. Preserves duration
+        and trim. Persists once at drag-end."""
+        track = self._audio_track
+        if track.decoded is None:
+            return
+        doc = c4d.documents.GetActiveDocument()
+        orig_in = track.in_frame
+        w = self.GetWidth()
+        start_frame = self._x_to_frame(mx, w)
+
+        def on_tick(adx, _ady, _qual):
+            cur_frame = self._x_to_frame(mx + adx, w)
+            new_in = orig_in + (cur_frame - start_frame)
+            if new_in < 0:
+                new_in = 0
+            track.set_in_frame(new_in, doc, persist=False)
+            self.Redraw()
+
+        self._drag_loop(_KEY_MLEFT, mx, my, on_tick)
+        # Persist once at end with undo.
+        try:
+            doc.StartUndo()
+            _get_or_create_helper(doc)
+            track._persist_current(doc)
+            doc.EndUndo()
+        except Exception as e:
+            print("[Shotblocks] audio move persist failed: {}".format(e))
+        self._refresh_audio_loaded_sig(doc)
+        c4d.EventAdd()
+
+    def _drag_audio_resize(self, edge, mx, my):
+        """Edge-drag the audio block. `edge` is 'left' or 'right'."""
+        track = self._audio_track
+        if track.decoded is None:
+            return
+        doc = c4d.documents.GetActiveDocument()
+        w = self.GetWidth()
+        start_frame = self._x_to_frame(mx, w)
+        orig_in   = track.in_frame
+        orig_out  = track.out_frame
+        orig_trim = track.trim_start_audio_frames
+
+        def on_tick(adx, _ady, _qual):
+            cur_frame = self._x_to_frame(mx + adx, w)
+            delta = cur_frame - start_frame
+            if edge == "left":
+                # Reset to original each tick so the trim math is
+                # absolute against the drag's start point, not cumulative.
+                track.in_frame                = orig_in
+                track.trim_start_audio_frames = orig_trim
+                track.resize_left_edge(orig_in + delta, doc, persist=False)
+            else:
+                track.resize_right_edge(orig_out + delta, doc, persist=False)
+            self.Redraw()
+
+        self._drag_loop(_KEY_MLEFT, mx, my, on_tick)
+        try:
+            doc.StartUndo()
+            _get_or_create_helper(doc)
+            track._persist_current(doc)
+            doc.EndUndo()
+        except Exception as e:
+            print("[Shotblocks] audio resize persist failed: {}".format(e))
+        self._refresh_audio_loaded_sig(doc)
+        c4d.EventAdd()
+
+    def _refresh_audio_loaded_sig(self, doc):
+        """Update the persistence-signature cache after an in-place
+        mutation (drag move/resize). Without this, the next draw's
+        sync would see the persisted-vs-loaded mismatch and trigger
+        an expensive re-decode of the same file.
+        Mirrors how `_sync_audio_for_active_doc` builds its signature
+        from the persisted dict — read it back rather than assemble
+        from in-memory state, so we're guaranteed to match."""
+        try:
+            from sb_persistence import _read_audio
+            persisted = _read_audio(doc)
+        except Exception:
+            persisted = None
+        if persisted is None:
+            self._audio_loaded_sig = None
+            return
+        self._audio_loaded_sig = (
+            bool(persisted.get("path_is_relative", False)),
+            persisted.get("path", ""),
+            int(persisted.get("in_frame",  0)),
+            int(persisted.get("out_frame", 0)),
+            int(persisted.get("trim_start_audio_frames", 0)),
+        )
 
     # ------------------------------------------------------------------
     # Click / drag — left button
@@ -2182,6 +2601,30 @@ class ShotblocksTimelineCanvas(c4d.gui.GeUserArea):
         if RULER_Y_TOP <= y < RULER_Y_TOP + RULER_HEIGHT:
             self._drag_playhead(x, y)
             return True
+
+        # Audio block (v7) — hit-test before shots since the audio block
+        # lives in its own Y band below track 0; hit_test_audio returns
+        # None unless y is inside that band, so this never misroutes a
+        # shot click.
+        audio_hit = self._hit_test_audio(x, y, w)
+        if audio_hit is not None:
+            _kind, region = audio_hit
+            self._audio_selected = True
+            # Clear shot selection so only the audio block reads selected.
+            self._selected_ids.clear()
+            self.Redraw()
+            if region == "left":
+                self._drag_audio_resize("left", x, y)
+            elif region == "right":
+                self._drag_audio_resize("right", x, y)
+            else:
+                self._drag_audio_move(x, y)
+            return True
+
+        # Click anywhere else clears audio selection.
+        if self._audio_selected:
+            self._audio_selected = False
+            self.Redraw()
 
         doc = c4d.documents.GetActiveDocument()
         shots, _ = _read_shots(doc)

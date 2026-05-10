@@ -19,6 +19,8 @@ import c4d
 BCKEY_HELPER_MARKER = 1010   # str: identifies a null as our data carrier
 BCKEY_SHOTS_JSON    = 1011   # str: the JSON-serialized shot list + counters
 BCKEY_RANGE_JSON    = 1012   # str: the JSON-serialized play range {in, out}
+BCKEY_AUDIO_JSON    = 1013   # str: the JSON-serialized audio track state
+                              # (path, timeline placement, trim offsets)
 
 # Per-shot BaseLink to the camera. Key is BCKEY_CAM_LINK_BASE + shot_id.
 # BaseLinks survive save/load and follow the camera even if it's renamed —
@@ -231,3 +233,63 @@ def _write_range(doc, in_frame, out_frame, with_undo=True):
         doc.AddUndo(c4d.UNDOTYPE_CHANGE_SMALL, helper)
     bc.SetString(BCKEY_RANGE_JSON,
                  json.dumps({"in": int(in_frame), "out": int(out_frame)}))
+
+
+# ---------------------------------------------------------------------------
+# Audio track (v7)
+# ---------------------------------------------------------------------------
+#
+# v7 ships one audio track per document. The serialized blob holds:
+#   path             — string. Project-relative when the doc is saved
+#                      and the audio file lives under the doc's folder;
+#                      absolute otherwise. The audio-track module
+#                      resolves to absolute on read.
+#   path_is_relative — bool. True when `path` should be joined to the
+#                      doc folder; False = treat as absolute. Stored
+#                      explicitly because re-deriving from the string
+#                      alone is ambiguous (Windows absolute paths look
+#                      relative on macOS and vice versa).
+#   in_frame         — int. Timeline frame where audio frame 0 plays.
+#   out_frame        — int. Last timeline frame the clip covers
+#                      (inclusive). End-of-audio cap is enforced
+#                      separately by the playback module (silence
+#                      past the last sample).
+#   trim_start_audio_frames — int. Audio frames trimmed off the head;
+#                      the clip plays starting at this audio-frame
+#                      offset within the source file.
+#
+# Absent / corrupt blob → returns None and the caller renders no
+# waveform. There is intentionally no default audio.
+
+def _read_audio(doc):
+    """Return the serialized audio-track dict, or None if absent."""
+    helper = _find_helper(doc)
+    if helper is None:
+        return None
+    bc = helper.GetDataInstance()
+    if bc is None:
+        return None
+    raw = bc.GetString(BCKEY_AUDIO_JSON)
+    if not raw:
+        return None
+    try:
+        d = json.loads(raw)
+    except (ValueError, TypeError):
+        return None
+    if not isinstance(d, dict) or not d.get("path"):
+        return None
+    return d
+
+
+def _write_audio(doc, audio_dict, with_undo=True):
+    """Persist the audio-track dict to the helper null. Pass None to clear."""
+    helper = _get_or_create_helper(doc)
+    bc = helper.GetDataInstance()
+    if bc is None:
+        return
+    if with_undo:
+        doc.AddUndo(c4d.UNDOTYPE_CHANGE_SMALL, helper)
+    if audio_dict is None:
+        bc.SetString(BCKEY_AUDIO_JSON, "")
+    else:
+        bc.SetString(BCKEY_AUDIO_JSON, json.dumps(audio_dict))

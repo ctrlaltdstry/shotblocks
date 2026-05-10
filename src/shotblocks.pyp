@@ -71,7 +71,9 @@ class ShotblocksTimelineDialog(c4d.gui.GeDialog):
             id=ID_CANVAS,
             flags=c4d.BFH_SCALEFIT | c4d.BFV_SCALEFIT,
             initw=700,
-            inith=240,
+            inith=320,  # v7: 240 was too short — audio block (96 px below
+                       # track 0) clipped at the default size. 320 fits
+                       # the full audio block in.
         )
         self.AttachUserArea(self.canvas, ID_CANVAS)
         # Back-ref so the canvas can ask us to start/stop the playback timer
@@ -169,7 +171,7 @@ class OpenShotblocksTimelineCommand(c4d.plugins.CommandData):
             dlgtype=c4d.DLG_TYPE_ASYNC,
             pluginid=PLUGIN_ID_DIALOG,
             defaultw=600,
-            defaulth=240,
+            defaulth=320,  # match dialog inith (see CreateLayout)
         )
 
     def RestoreLayout(self, sec_ref):
