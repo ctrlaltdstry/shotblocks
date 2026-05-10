@@ -414,25 +414,16 @@ class ShotblocksTimelineCanvas(c4d.gui.GeUserArea):
         self._audio_selected = False
         self._audio_drag_logged_types = set()
 
-        # Left-rail toggle buttons. We load the off/on bitmaps once and
-        # bake hover/press tinted copies. The rail-button list is a list
-        # of dicts — easy to extend later (zoom controls, tool palette)
-        # without changing the draw/hit code shape.
-        self._rail_buttons = self._build_rail_buttons()
-
-        # Shot/audio block bitmaps — 3-slice (left/mid/right) per state.
-        # Loaded once at construction and looked up at draw time. Map
-        # shape: {(kind, state): {"left": bmp, "mid": bmp, "right": bmp}}.
-        # `kind` is "shot" or "audio"; `state` is "normal", "hover",
-        # "selected", or "orphan". Built from PNGs that the icon-build
-        # script slices from the SVGs in src/res/svg/.
-        self._block_bitmaps = self._load_block_bitmaps()
-
-        # Procedural-overlay glyphs (camera, etc.). Loaded from
-        # src/res/icons/shots/glyphs/. Each entry is a single PNG
-        # (no slicing). Missing files are silently tolerated — the
-        # canvas just doesn't draw the glyph.
-        self._glyph_bitmaps = self._load_glyph_bitmaps()
+        # Bitmap caches are loaded lazily on first read (typically the
+        # first DrawMsg). Doing the file I/O + BaseBitmap work in
+        # __init__ during a docked-dialog RestoreLayout — which fires
+        # very early in C4D startup — could fail silently and leave
+        # C4D showing "plugin not found" in the saved layout slot.
+        # Deferring keeps construction trivial and runs the loads only
+        # after the doc + resources are ready.
+        self._block_bitmaps_cache = None
+        self._glyph_bitmaps_cache = None
+        self._rail_buttons_cache  = None
         # Name of the rail button under the cursor (or None) — set by
         # _on_cursor_info, drives the hover tint in _draw_rail.
         self._rail_hover = None
@@ -440,6 +431,40 @@ class ShotblocksTimelineCanvas(c4d.gui.GeUserArea):
         # the press tint while the user holds before release.
         self._rail_pressed = None
 
+
+    # ------------------------------------------------------------------
+    # Lazy bitmap caches — see __init__ for why these defer.
+    # ------------------------------------------------------------------
+
+    @property
+    def _block_bitmaps(self):
+        if self._block_bitmaps_cache is None:
+            try:
+                self._block_bitmaps_cache = self._load_block_bitmaps()
+            except Exception as e:
+                print("[Shotblocks] block bitmaps load failed: {}".format(e))
+                self._block_bitmaps_cache = {}
+        return self._block_bitmaps_cache
+
+    @property
+    def _glyph_bitmaps(self):
+        if self._glyph_bitmaps_cache is None:
+            try:
+                self._glyph_bitmaps_cache = self._load_glyph_bitmaps()
+            except Exception as e:
+                print("[Shotblocks] glyph bitmaps load failed: {}".format(e))
+                self._glyph_bitmaps_cache = {}
+        return self._glyph_bitmaps_cache
+
+    @property
+    def _rail_buttons(self):
+        if self._rail_buttons_cache is None:
+            try:
+                self._rail_buttons_cache = self._build_rail_buttons()
+            except Exception as e:
+                print("[Shotblocks] rail buttons load failed: {}".format(e))
+                self._rail_buttons_cache = []
+        return self._rail_buttons_cache
 
     # ------------------------------------------------------------------
     # Camera-reference cache (live name resolution)
@@ -1791,14 +1816,27 @@ class ShotblocksTimelineCanvas(c4d.gui.GeUserArea):
         return None
 
     def _compute_hover_band(self, x, y):
-        """Return (shot_id, 'left'|'right') if the cursor is over an edge
-        band, else None. Identifies which band so DrawMsg can highlight
-        only the hovered side."""
+        """Return (id, 'left'|'right') if the cursor is over an edge
+        band, else None. `id` is a shot id (int) for shot blocks or the
+        sentinel string "audio" for the audio block. DrawMsg uses this
+        to highlight only the hovered side."""
         w = self.GetWidth()
         if w <= 0:
             return None
         Y_BUFFER = 2
         doc = c4d.documents.GetActiveDocument()
+
+        if self._audio_track.decoded is not None:
+            ay1, ay2 = self._audio_y_bounds()
+            if ay1 - Y_BUFFER <= y <= ay2 + Y_BUFFER:
+                ax1, ax2 = self._audio_x_bounds(w)
+                if ax1 <= x <= ax2:
+                    edge_zone = min(CURSOR_EDGE_PX, max(1, (ax2 - ax1) // 3))
+                    if (x - ax1) <= edge_zone:
+                        return ("audio", "left")
+                    if (ax2 - x) <= edge_zone:
+                        return ("audio", "right")
+
         shots, _ = _read_shots(doc)
         for shot in shots:
             track  = _shot_track(shot)
@@ -2413,24 +2451,32 @@ class ShotblocksTimelineCanvas(c4d.gui.GeUserArea):
         ax1, ax2 = self._audio_x_bounds(w)
         ay1, ay2 = self._audio_y_bounds()
 
-        # Body fill — no bitmap nine-slice in v7. We render the audio
-        # block procedurally because the existing audio bitmap PNGs
-        # were authored at the v6 height and don't account for trim
-        # offsets affecting the x_offset of the waveform start.
         body_color = COL_AUDIO_BODY_SELECTED if self._audio_selected else COL_AUDIO_BODY
-        self.DrawSetPen(body_color)
-        self.DrawRectangle(ax1, ay1, ax2, ay2)
-        # 1-pixel border
-        self.DrawSetPen(COL_AUDIO_BORDER)
-        self.DrawLine(ax1, ay1, ax2, ay1)
-        self.DrawLine(ax1, ay2, ax2, ay2)
-        self.DrawLine(ax1, ay1, ax1, ay2)
-        self.DrawLine(ax2, ay1, ax2, ay2)
+        state = "selected" if self._audio_selected else "normal"
+        left_t  = self._hover_t_for("audio", "left")
+        right_t = self._hover_t_for("audio", "right")
+        rendered_via_bitmap = self._draw_block_bitmap(
+            "audio", state,
+            left_t=left_t, right_t=right_t,
+            sx1=ax1, sy1=ay1, sx2=ax2, sy2=ay2)
 
-        # Waveform inset (small padding so the line never overlaps
-        # the body border).
-        wf_x1 = ax1 + 2
-        wf_x2 = ax2 - 2
+        if not rendered_via_bitmap:
+            self.DrawSetPen(body_color)
+            self.DrawRectangle(ax1, ay1, ax2, ay2)
+            self.DrawSetPen(COL_AUDIO_BORDER)
+            self.DrawLine(ax1, ay1, ax2, ay1)
+            self.DrawLine(ax1, ay2, ax2, ay2)
+            self.DrawLine(ax1, ay1, ax1, ay2)
+            self.DrawLine(ax2, ay1, ax2, ay2)
+
+        # Waveform inset — keep it inside the body's mid slice so the
+        # left/right edge handles (and their dot grips) stay visible.
+        # Mirrors the shot-label band-clamp so a very narrow block
+        # gracefully shrinks the inset.
+        clip_w = ax2 - ax1
+        band_w = max(1, min(EDGE_BAND_PX, clip_w // 3))
+        wf_x1 = ax1 + band_w
+        wf_x2 = ax2 - band_w
         wf_y1 = ay1 + 4
         wf_y2 = ay2 - 4
         if wf_x2 <= wf_x1 or wf_y2 <= wf_y1 or track.peaks is None:

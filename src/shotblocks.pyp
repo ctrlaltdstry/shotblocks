@@ -26,10 +26,17 @@ if _HERE not in sys.path:
 from sb_canvas import ShotblocksTimelineCanvas
 
 
-# Plugin IDs (testing range)
+# Plugin IDs (testing range).
+#
+# The command and the dialog share a single ID. C4D's layout-restore
+# tags each docked/floating async dialog slot with the plugin ID we
+# passed to GeDialog.Open(); on restart C4D iterates registered command
+# plugins by ID looking for the owner of each slot. Different IDs here
+# means C4D never matches our command to the saved slot and the user
+# sees "Plugin not found" until they reopen via the menu.
 PLUGIN_ID_TAG     = 1000001
-PLUGIN_ID_DIALOG  = 1000002
 PLUGIN_ID_COMMAND = 1000003
+PLUGIN_ID_DIALOG  = PLUGIN_ID_COMMAND
 
 # Tag parameter IDs
 SHOTBLOCKS_ENABLED = 1000
@@ -168,16 +175,18 @@ class OpenShotblocksTimelineCommand(c4d.plugins.CommandData):
         if self.dialog is None:
             self.dialog = ShotblocksTimelineDialog()
         return self.dialog.Open(
-            dlgtype=c4d.DLG_TYPE_ASYNC,
-            pluginid=PLUGIN_ID_DIALOG,
-            defaultw=600,
-            defaulth=320,  # match dialog inith (see CreateLayout)
+            c4d.DLG_TYPE_ASYNC, PLUGIN_ID_DIALOG,
+            defaultw=600, defaulth=320,
         )
 
     def RestoreLayout(self, sec_ref):
-        if self.dialog is None:
-            self.dialog = ShotblocksTimelineDialog()
-        return self.dialog.Restore(pluginid=PLUGIN_ID_DIALOG, secret=sec_ref)
+        try:
+            if self.dialog is None:
+                self.dialog = ShotblocksTimelineDialog()
+            return self.dialog.Restore(PLUGIN_ID_DIALOG, sec_ref)
+        except Exception as e:
+            print("[Shotblocks] RestoreLayout raised: {}".format(e))
+            return False
 
 
 # ---------------------------------------------------------------------------
