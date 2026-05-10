@@ -10,6 +10,8 @@ null persistence from `sb_persistence`. Does NOT import anything from
 """
 
 import math
+import os
+from time import monotonic as _monotonic
 
 import c4d
 
@@ -17,6 +19,7 @@ from sb_shot_model import (
     MAX_TRACKS, MIN_SHOT_FRAMES,
     _make_shot, _shot_track, _displayed_lane_count,
     _resolve_position, _resolve_resize, _resolve_group_move,
+    _active_shot_at,
 )
 from sb_persistence import (
     _read_shots, _write_shots,
@@ -24,6 +27,7 @@ from sb_persistence import (
     _get_or_create_helper,
     _set_shot_cam_link, _get_shot_cam, _clear_shot_cam_link,
 )
+from sb_toolbar import load_bitmap, tinted_copy, blend_two_bitmaps, HOVER_LIGHTEN, PRESS_DARKEN
 
 
 # ---------------------------------------------------------------------------
@@ -37,9 +41,22 @@ def _rgb(hex6):
         int(hex6[4:6], 16) / 255.0,
     )
 
-COL_BG_TIMELINE   = _rgb("1a1a1a")
-COL_BG_TRACK      = _rgb("222222")
-COL_BG_TRACK_ALT  = _rgb("1e1e1e")
+# Canvas bg matches the bitmap shot-body fill (#1C1C1C) so the
+# transparent rounded-corner cutouts in the body bitmaps blend
+# seamlessly with the surrounding canvas. Without this match, you'd
+# see a sharp rectangle of body color against a slightly different
+# canvas bg through every corner cutout.
+COL_BG_TIMELINE   = _rgb("1C1C1C")
+COL_BG_RAIL       = _rgb("141414")  # rail still distinguishably darker than timeline
+COL_RAIL_BORDER   = _rgb("2a2a2a")  # vertical divider between rail and timeline
+COL_RAIL_LABEL    = _rgb("888888")
+# Lane backgrounds. Both colors match the bitmap shot-body fill (#1C1C1C
+# in src/res/svg/shot-*.svg) so the bitmap's rounded-corner cutouts blend
+# seamlessly with the lane behind them — without this, the lane bg would
+# show through the partially-transparent corner pixels as a square halo.
+# Track separation is carried by the COL_BORDER_SUB lines between lanes.
+COL_BG_TRACK      = _rgb("1C1C1C")
+COL_BG_TRACK_ALT  = _rgb("1C1C1C")
 COL_BG_RULER      = _rgb("2a2a2a")
 COL_BORDER_SUB    = _rgb("333333")
 COL_BORDER_EMPH   = _rgb("444444")
@@ -53,6 +70,11 @@ COL_PLAYHEAD_HEAD = _rgb("4a90d9")  # Blue head — visual grab handle at top of
 COL_ACCENT        = _rgb("2C7CD3")
 COL_ACCENT_HOVER  = _rgb("3B8CE8")
 COL_ON_ACCENT     = _rgb("FFFFFF")  # text/label color on accent backgrounds
+
+# Body fill of the bitmap shot block — must match the SVG <rect fill="#1C1C1C"/>
+# in src/res/svg/shot-*.svg. Used as the label-text antialiasing bg so glyphs
+# don't paint over gray. If the SVG body fill ever changes, update both.
+COL_SHOT_BODY_FILL         = _rgb("1C1C1C")
 
 # Untagged passthrough — every v3 shot still draws as untagged.
 COL_SHOT_FILL              = _rgb("5a5a5a")
@@ -78,14 +100,21 @@ COL_SHOT_LABEL_ORPHAN      = _rgb("a08080")
 # substitute a brighter red instead. Deliberately distinct from the
 # playhead cursor `#ff6b6b` — cursor red stays exclusive to the playhead.
 COL_SHOT_FILL_ORPHAN_SEL   = _rgb("8a3030")
-DASH_ORPHAN_ON             = 4   # dashed border on-pixels
-DASH_ORPHAN_OFF            = 2   # dashed border off-pixels
+DASH_ORPHAN_ON             = 12  # dashed border on-pixels — matches the
+                                  # rhythm baked into shot-orphan-body.png
+DASH_ORPHAN_OFF            = 8   # dashed border off-pixels — matches design
 
 # Marquee selection rectangle — accent outline (transient interactive state).
 COL_SELECTION     = COL_ACCENT
 
 # Drop hint
 COL_DROP_HINT     = _rgb("aaaaaa")
+
+# Snap indicator — vertical yellow line drawn at each snap target while
+# a drag is currently magnetized to it. Yellow chosen to stand out
+# against both the dark canvas and any state's body color, and to
+# avoid clashing with our blue/orange/red state palette.
+COL_SNAP_INDICATOR = _rgb("ffd60a")
 
 # Play-range bar
 COL_RANGE_BAR           = _rgb("3a3a3a")
@@ -105,12 +134,31 @@ RANGE_HANDLE_PX     = 6           # in/out handle hit-zone width
 RULER_HEIGHT        = 24
 RULER_Y_TOP         = RANGE_HEIGHT
 SHOT_Y_TOP          = RANGE_HEIGHT + RULER_HEIGHT + 4
-SHOT_HEIGHT         = 32
+SHOT_HEIGHT         = 48
+AUDIO_HEIGHT        = 96   # audio tracks render at 2x shot height per design;
+                           # not yet wired into track-Y math (waits for the
+                           # audio subsystem in v7+).
 LANE_GAP            = 2
+# Horizontal interior padding. The visible frame range maps to
+# [LEFT_RAIL_WIDTH + TIMELINE_PAD_X, w - TIMELINE_PAD_X] so the playhead,
+# range handles, and tick marks at the doc's first/last frame stay
+# visibly inside the timeline column (right of the rail) instead of
+# touching the very edge.
+TIMELINE_PAD_X      = 8
+
+# Left rail. A fixed-width column on the left side of the canvas hosts
+# the global tools (Snap, Loop) and per-track labels ("Track 0", etc.).
+# The frame-to-x mapping starts AFTER this column. NLE convention —
+# Premiere/Resolve put track headers on the left.
+LEFT_RAIL_WIDTH     = 80
+RAIL_BTN_SIZE       = 24
+RAIL_BTN_GAP        = 4
+RAIL_BTN_TOP        = 6   # vertical inset of the first button row
 DEFAULT_SHOT_FRAMES = 48          # 2 s at 24 fps — good starting length
-EDGE_BAND_PX        = 8           # visible darker grip-band at each shot edge
-EDGE_HIT_PX         = 8           # click edge-drag zone — matches the band
-CURSOR_EDGE_PX      = 8           # cursor affordance — matches the band
+EDGE_BAND_PX        = 24          # visible darker grip-band at each shot edge
+                                  # (matches the edge PNG width in design space)
+EDGE_HIT_PX         = 24          # click edge-drag zone — matches the band
+CURSOR_EDGE_PX      = 24          # cursor affordance — matches the band
 # Hard corners on shot blocks. The design system asks for 3-4 px corner
 # radius, but every rendering path we tried in C4D 2026 Python failed at
 # this small scale: stairstep DrawRectangle approximations were visibly
@@ -124,6 +172,22 @@ CURSOR_EDGE_PX      = 8           # cursor affordance — matches the band
 SNAP_PIXEL_RADIUS   = 8           # how close (in pixels) before magnetic snap pulls
 PLAYHEAD_HEAD_W     = 12          # blue triangle head — full width at top
 PLAYHEAD_HEAD_H     = 10          # blue triangle head — height (apex at line)
+
+# Hover fade — N pre-baked intermediate frames blended between
+# normal and hover at construction time. At draw time we look up the
+# frame matching the current animation t. 5 levels = 4 transitions
+# spread over HOVER_FADE_MS — perceptually smooth.
+HOVER_FADE_LEVELS = 5
+HOVER_FADE_MS     = 200  # full normal → hover transition duration
+
+
+# Sentinel passed to DrawSetTextCol(fg, bg) to suppress the solid bg-rect
+# behind glyphs. Without this, the bg color paints a square block that
+# overwrites the bitmap's anti-aliased rounded corners with a sharp
+# rectangle (visible as a halo where the label sits near the corner).
+# `c4d.COLOR_TRANS` exists in 2026; resolved with getattr so the module
+# still loads on builds where the constant is named differently.
+_TEXT_BG_TRANS = getattr(c4d, "COLOR_TRANS", None)
 
 
 # ---------------------------------------------------------------------------
@@ -156,6 +220,24 @@ _KEY_MMIDDLE = getattr(c4d, "KEY_MMIDDLE", 61442)
 _KEY_DELETE    = getattr(c4d, "KEY_DELETE",    None)
 _KEY_BACKSPACE = getattr(c4d, "KEY_BACKSPACE", None)
 _KEY_D         = getattr(c4d, "KEY_D",         None)
+
+# Spacebar channel — verified empirically in C4D 2026: channel 61728 (0xf120),
+# matching c4d.KEY_SPACE. ASCII 32 is included as a fallback for older builds.
+_SPACE_CHANNELS = tuple(c for c in (
+    ord(' '),
+    getattr(c4d, "KEY_SPACE", None),
+) if c is not None)
+
+# Auto-repeat debounce for spacebar play/pause. C4D fires keyboard events
+# repeatedly while a key is held; without a debounce, a single physical
+# press toggles playback many times. 0.25 s is well above the typical
+# repeat cadence and well below a deliberate second press.
+_PLAY_TOGGLE_DEBOUNCE_S = 0.25
+
+# Loop mode is a Shotblocks-owned toggle. C4D 2026 exposes no Python API
+# for the native transport's "cycle" button — we verified empirically by
+# scanning every c4d.* constant containing LOOP/CYCLE/PLAYMODE/PINGPONG.
+# The toolbar checkbox controls it; the value persists with the play range.
 
 
 # ---------------------------------------------------------------------------
@@ -209,6 +291,9 @@ class ShotblocksTimelineCanvas(c4d.gui.GeUserArea):
     _constants_dumped  = False
     _channel_logged    = set()
     _popup_api_logged  = False
+    _kb_channel_logged = set()
+    _scrub_logged      = False
+    _block_draw_logged = False
 
     def __init__(self):
         super().__init__()
@@ -273,6 +358,60 @@ class ShotblocksTimelineCanvas(c4d.gui.GeUserArea):
         # log once to the console (we have no status-line widget yet — that
         # arrives with the post-v5 visual-polish pass).
         self._last_orphan_count = 0
+
+        # v6 playback state. _playback_owner_dialog is set by the dialog
+        # right after AttachUserArea — the canvas asks the dialog to
+        # start/stop its Timer rather than owning timer mechanics itself.
+        # _loop_enabled is the Shotblocks-owned cycle toggle (the toolbar
+        # checkbox); on by default so playback feels alive on first launch.
+        self._playing                 = False
+        self._playback_owner_dialog   = None
+        self._last_play_toggle_t      = 0.0
+        self._loop_enabled            = True
+
+        # Per-shot hover-fade animation state.
+        # Map shot_id -> {"left_t":  current animation 0..1,
+        #                 "left_target": target 0..1,
+        #                 "right_t": ...,
+        #                 "right_target": ...}.
+        # Cursor entering an edge sets that side's target to 1.0;
+        # leaving sets it to 0.0. The timer tick advances `*_t` toward
+        # `*_target` by dt / HOVER_FADE_MS each frame. Entries are
+        # culled when both t and target are 0.0 (back at rest).
+        self._shot_hover_anim         = {}
+        self._last_anim_tick_t        = _monotonic()
+
+        # Frames the in-flight drag's snap is currently aligned with.
+        # A tuple of frame integers; empty when no snap is active.
+        # Drawn in DrawMsg as vertical yellow lines so the user sees
+        # exactly where the magnetic snap pulled the shot.
+        self._snap_indicator_frames   = ()
+
+        # Left-rail toggle buttons. We load the off/on bitmaps once and
+        # bake hover/press tinted copies. The rail-button list is a list
+        # of dicts — easy to extend later (zoom controls, tool palette)
+        # without changing the draw/hit code shape.
+        self._rail_buttons = self._build_rail_buttons()
+
+        # Shot/audio block bitmaps — 3-slice (left/mid/right) per state.
+        # Loaded once at construction and looked up at draw time. Map
+        # shape: {(kind, state): {"left": bmp, "mid": bmp, "right": bmp}}.
+        # `kind` is "shot" or "audio"; `state` is "normal", "hover",
+        # "selected", or "orphan". Built from PNGs that the icon-build
+        # script slices from the SVGs in src/res/svg/.
+        self._block_bitmaps = self._load_block_bitmaps()
+
+        # Procedural-overlay glyphs (camera, etc.). Loaded from
+        # src/res/icons/shots/glyphs/. Each entry is a single PNG
+        # (no slicing). Missing files are silently tolerated — the
+        # canvas just doesn't draw the glyph.
+        self._glyph_bitmaps = self._load_glyph_bitmaps()
+        # Name of the rail button under the cursor (or None) — set by
+        # _on_cursor_info, drives the hover tint in _draw_rail.
+        self._rail_hover = None
+        # Name of the rail button held down with LMB (or None) — drives
+        # the press tint while the user holds before release.
+        self._rail_pressed = None
 
 
     # ------------------------------------------------------------------
@@ -352,17 +491,41 @@ class ShotblocksTimelineCanvas(c4d.gui.GeUserArea):
     # Coordinate helpers
     # ------------------------------------------------------------------
 
+    def _timeline_x0(self):
+        """Left edge of the timeline content area (right of the rail,
+        accounting for interior padding)."""
+        return LEFT_RAIL_WIDTH + TIMELINE_PAD_X
+
+    def _timeline_x1(self, w):
+        """Right edge of the timeline content area (interior of the right
+        padding)."""
+        return w - TIMELINE_PAD_X
+
     def _frame_to_x(self, frame, w):
         span = max(1, self.visible_last - self.visible_first)
-        return int((frame - self.visible_first) / span * w)
+        inner_w = max(1, self._timeline_x1(w) - self._timeline_x0())
+        return self._timeline_x0() + int((frame - self.visible_first) / span * inner_w)
+
+    def _shot_x_bounds(self, in_f, out_f, w):
+        """Return (sx1, sx2) — the inclusive pixel range of a shot whose
+        frame range is [in_f, out_f]. The right edge maps to the pixel
+        just before frame (out_f + 1) so adjacent shots' pixel ranges
+        abut perfectly: if shot A ends at out=N and shot B starts at
+        in=N+1, A's sx2 == B's sx1 - 1 and the visible gap is zero."""
+        sx1 = self._frame_to_x(in_f, w)
+        sx2 = self._frame_to_x(out_f + 1, w) - 1
+        if sx2 < sx1 + 2:
+            sx2 = sx1 + 2
+        return sx1, sx2
 
     def _x_to_frame(self, x, w):
         span = max(1, self.visible_last - self.visible_first)
-        return self.visible_first + int(x / max(1, w) * span)
+        inner_w = max(1, self._timeline_x1(w) - self._timeline_x0())
+        return self.visible_first + int((x - self._timeline_x0()) / inner_w * span)
 
     def _frames_per_pixel(self, w):
         span = max(1, self.visible_last - self.visible_first)
-        return span / max(1, w)
+        return span / max(1, self._timeline_x1(w) - self._timeline_x0())
 
     def _snap_frames(self):
         """Convert SNAP_PIXEL_RADIUS to a frame count at the current zoom."""
@@ -386,14 +549,66 @@ class ShotblocksTimelineCanvas(c4d.gui.GeUserArea):
                 return s
         return self._NICE_STEPS[-1]
 
+    def _pick_minor_substeps(self, major_step):
+        """Return (minor_step, sub_step) — the un-numbered subdivisions
+        between major numbered ticks. Picks divisors that make the major
+        step land on a clean grid: 5 sub-divisions for steps that are
+        multiples of 5 or 10 (the common case at most zooms), 4 for
+        24-frame second-multiples, 2 as a fallback. sub_step further
+        subdivides minor and is suppressed (returned as 0) when it would
+        produce sub-pixel ticks at the current zoom."""
+        if major_step <= 1:
+            return 0, 0
+        if major_step % 10 == 0:
+            return major_step // 10, major_step // 10  # 10 minor / 0 sub
+        if major_step % 5 == 0:
+            return major_step // 5, 0
+        if major_step % 4 == 0:
+            return major_step // 4, 0
+        if major_step % 3 == 0:
+            return major_step // 3, 0
+        if major_step % 2 == 0:
+            return major_step // 2, 0
+        return 0, 0
+
     # Track-lane Y geometry — track 0 is vertically centered in the timeline
     # content area (NLE convention: Premiere/FCP/Resolve anchor V1/A1 at the
     # divider, video grows up, audio grows down). The area below track 0 is
     # reserved for audio tracks (added in a later version).
+    #
+    # Sizing rules in priority order:
+    #   1. Track 0 is centered when the canvas is tall enough.
+    #   2. The top of the highest displayed track must not go above
+    #      SHOT_Y_TOP (the bottom of the ruler). When the canvas shrinks,
+    #      we slide track 0 *down* so the upper tracks dock against the
+    #      ruler rather than disappearing under it.
+    #   3. Track 0's top never falls below SHOT_Y_TOP (no negative case).
     def _track_0_top(self):
         h = self.GetHeight()
-        center = (SHOT_Y_TOP + h) // 2
-        return max(SHOT_Y_TOP, center - SHOT_HEIGHT // 2)
+        # Determine how many lanes we'll be drawing — the top one sets the
+        # ceiling. _displayed_lane_count needs the current shots; we read
+        # them from the doc once per draw, but for the Y math here we just
+        # use the cached top track count via a helper.
+        top_track = max(0, self._displayed_top_track())
+        natural_center = (SHOT_Y_TOP + h) // 2
+        natural_top = natural_center - SHOT_HEIGHT // 2
+        # Lowest allowed t0_top so top_track's top stays >= SHOT_Y_TOP.
+        min_t0_top = SHOT_Y_TOP + top_track * (SHOT_HEIGHT + LANE_GAP)
+        return max(SHOT_Y_TOP, max(natural_top, min_t0_top))
+
+    def _displayed_top_track(self):
+        """Index of the highest track currently being displayed (0-based).
+        Reads the doc; returns 0 when there are no shots or the doc is
+        unavailable. Used by the Y-geometry helpers to dock the stack
+        against the ruler when the canvas is short."""
+        try:
+            doc = c4d.documents.GetActiveDocument()
+            shots = self._preview_shots
+            if shots is None:
+                shots, _ = _read_shots(doc)
+            return _displayed_lane_count(shots) - 1
+        except Exception:
+            return 0
 
     def _track_y_top(self, track):
         return self._track_0_top() - track * (SHOT_HEIGHT + LANE_GAP)
@@ -404,6 +619,188 @@ class ShotblocksTimelineCanvas(c4d.gui.GeUserArea):
             return 0
         diff = (t0_top + SHOT_HEIGHT - 1 - y) // (SHOT_HEIGHT + LANE_GAP)
         return max(0, min(lane_count - 1, int(diff)))
+
+    # ------------------------------------------------------------------
+    # Left rail — tools and per-track labels (Premiere-style layout)
+    # ------------------------------------------------------------------
+
+    def _build_rail_buttons(self):
+        """Load bitmaps for each rail toggle button and bake hover/press
+        tinted copies. Returns a list of dicts with 'name', 'state_attr'
+        (the canvas attribute name holding bool state), bitmaps, and an
+        x/y rect computed at draw/hit-test time from the button index."""
+        here = os.path.dirname(os.path.abspath(__file__))
+        icons = os.path.join(here, "res", "icons")
+
+        def make(name, state_attr):
+            off = load_bitmap(os.path.join(icons, name + "-off.png"))
+            on  = load_bitmap(os.path.join(icons, name + "-on.png"))
+            return {
+                "name":        name,
+                "state_attr":  state_attr,
+                "off":         off,
+                "on":          on,
+                "off_hover":   tinted_copy(off, (255, 255, 255), HOVER_LIGHTEN),
+                "on_hover":    tinted_copy(on,  (255, 255, 255), HOVER_LIGHTEN),
+                "off_press":   tinted_copy(off, (0,   0,   0),   PRESS_DARKEN),
+                "on_press":    tinted_copy(on,  (0,   0,   0),   PRESS_DARKEN),
+            }
+
+        return [
+            make("snap", "_snap_enabled"),
+            make("loop", "_loop_enabled"),
+        ]
+
+    def _load_block_bitmaps(self):
+        """Load all shot/audio block PNGs into an in-memory dict. The
+        build script (`scripts/build-icons.py`) writes them under
+        src/res/icons/shots/. Missing files are tolerated — _draw_shot_block
+        falls back to the procedural rect path when a state's bitmap set
+        isn't available.
+
+        Per state we load five bitmaps:
+          left, mid, right                — body 3-slice with edge
+                                            decoration baked in
+          left_hover, right_hover         — same bitmaps darkened 50% by
+                                            the build script for hover
+
+        The build script does the body+edge composition and edge mirror
+        at build time, so the plugin only does straight DrawBitmap
+        calls."""
+        here = os.path.dirname(os.path.abspath(__file__))
+        icons = os.path.join(here, "res", "icons", "shots")
+        result = {}
+        plan = [
+            ("shot",  ["normal", "selected", "orphan", "orphan-selected"]),
+            ("audio", ["normal", "selected"]),
+        ]
+        for kind, states in plan:
+            for state in states:
+                key  = (kind, state)
+                base = "{}-{}".format(kind, state)
+                left        = load_bitmap(os.path.join(icons, base + "-left.png"))
+                mid         = load_bitmap(os.path.join(icons, base + "-mid.png"))
+                right       = load_bitmap(os.path.join(icons, base + "-right.png"))
+                left_hover  = load_bitmap(os.path.join(icons, base + "-left-hover.png"))
+                right_hover = load_bitmap(os.path.join(icons, base + "-right-hover.png"))
+                if left is None or mid is None or right is None:
+                    continue
+                # Pre-bake N intermediate fade frames per side, blending
+                # between the normal edge and the full-hover edge. Frame
+                # 0 == normal, frame N-1 == full hover. Draw time picks
+                # the frame matching the current animation t. Avoids
+                # any per-frame compositing in the draw path.
+                left_frames  = self._bake_fade_frames(left,  left_hover  or left)
+                right_frames = self._bake_fade_frames(right, right_hover or right)
+                result[key] = {
+                    "left":         left,
+                    "mid":          mid,
+                    "right":        right,
+                    "left_hover":   left_hover  or left,
+                    "right_hover":  right_hover or right,
+                    "left_frames":  left_frames,
+                    "right_frames": right_frames,
+                }
+        return result
+
+    def _bake_fade_frames(self, normal_bmp, hover_bmp):
+        """Return a list of HOVER_FADE_LEVELS bitmaps blending from
+        normal (frame 0) to hover (frame N-1). When normal == hover
+        (no authored hover variant), returns N copies of normal."""
+        if normal_bmp is None:
+            return []
+        if hover_bmp is None or hover_bmp is normal_bmp:
+            return [normal_bmp] * HOVER_FADE_LEVELS
+        frames = [normal_bmp]
+        for i in range(1, HOVER_FADE_LEVELS - 1):
+            t = i / float(HOVER_FADE_LEVELS - 1)
+            blended = blend_two_bitmaps(normal_bmp, hover_bmp, t)
+            frames.append(blended if blended is not None else normal_bmp)
+        frames.append(hover_bmp)
+        return frames
+
+    def _load_glyph_bitmaps(self):
+        """Load the procedural-overlay glyphs (camera icon and any
+        future siblings). Returns a dict keyed by glyph name. Missing
+        files are tolerated — caller just skips drawing that glyph."""
+        here = os.path.dirname(os.path.abspath(__file__))
+        glyph_dir = os.path.join(here, "res", "icons", "shots", "glyphs")
+        names = ["camera", "camera-selected", "camera-orphan", "camera-orphan-selected"]
+        result = {}
+        for n in names:
+            bmp = load_bitmap(os.path.join(glyph_dir, n + ".png"))
+            if bmp is not None:
+                result[n] = bmp
+        return result
+
+    def _rail_button_rect(self, idx):
+        """Return (x1, y1, x2, y2) — bbox of the button at index `idx`
+        in canvas-local coords. Buttons are stacked vertically along
+        the top of the rail, then wrap if the rail ever needs more
+        than one column (not yet)."""
+        # Single-column layout for now: one button per row.
+        x1 = (LEFT_RAIL_WIDTH - RAIL_BTN_SIZE) // 2  # centered horizontally
+        y1 = RAIL_BTN_TOP + idx * (RAIL_BTN_SIZE + RAIL_BTN_GAP)
+        return x1, y1, x1 + RAIL_BTN_SIZE, y1 + RAIL_BTN_SIZE
+
+    def _rail_button_at(self, x, y):
+        """Return the button dict (and its index) under (x, y), or
+        (None, None) if the cursor isn't over a rail button."""
+        if x >= LEFT_RAIL_WIDTH:
+            return None, None
+        for i, btn in enumerate(self._rail_buttons):
+            bx1, by1, bx2, by2 = self._rail_button_rect(i)
+            if bx1 <= x < bx2 and by1 <= y < by2:
+                return btn, i
+        return None, None
+
+    def _handle_rail_click(self, x, y):
+        """Process a click in the rail area. Hit-tests against the rail
+        buttons; on release, commits the toggle ONLY if the cursor is
+        still over the same button. Dragging off cancels: the press tint
+        is removed and the button doesn't toggle. Standard "click vs.
+        cancel" gesture."""
+        btn, idx = self._rail_button_at(x, y)
+        if btn is None:
+            return  # rail empty space — nothing to do
+        bx1, by1, bx2, by2 = self._rail_button_rect(idx)
+        self._rail_pressed = btn["name"]
+        self.Redraw()
+        # MouseDrag returns per-tick deltas (not absolute from press), so
+        # we accumulate them — same convention as _drag_loop. Track
+        # accumulated cursor position; if it crosses the button rect,
+        # clear the press tint so the user sees that release will cancel.
+        accum_dx = 0
+        accum_dy = 0
+        inside = True
+        try:
+            self.MouseDragStart(_KEY_MLEFT, x, y, _MOUSE_DRAG_FLAG)
+            while True:
+                state = self.MouseDrag()
+                drag_state, dx, dy, _q = self._parse_drag_state(state)
+                if self._is_drag_terminal(drag_state):
+                    break
+                accum_dx += int(dx or 0)
+                accum_dy += int(dy or 0)
+                cur_x = x + accum_dx
+                cur_y = y + accum_dy
+                still_inside = (bx1 <= cur_x < bx2 and by1 <= cur_y < by2)
+                if still_inside != inside:
+                    inside = still_inside
+                    self._rail_pressed = btn["name"] if inside else None
+                    self.Redraw()
+            self.MouseDragEnd()
+        except Exception as e:
+            print("[Shotblocks] rail drag loop raised: {}".format(e))
+        # Final commit decision: only if release was inside the button.
+        committed = inside
+        self._rail_pressed = None
+        if committed:
+            attr = btn["state_attr"]
+            new_val = not bool(getattr(self, attr, False))
+            setattr(self, attr, new_val)
+            print("[Shotblocks] {} = {}".format(attr.lstrip("_"), new_val))
+        self.Redraw()
 
     # ------------------------------------------------------------------
     # Hit testing
@@ -447,10 +844,7 @@ class ShotblocksTimelineCanvas(c4d.gui.GeUserArea):
             sy_bot = sy_top + SHOT_HEIGHT - 1
             if y < sy_top or y > sy_bot:
                 continue
-            sx1 = self._frame_to_x(shot["in_frame"], w)
-            sx2 = self._frame_to_x(shot["out_frame"], w)
-            if sx2 < sx1 + 2:
-                sx2 = sx1 + 2
+            sx1, sx2 = self._shot_x_bounds(shot["in_frame"], shot["out_frame"], w)
             if x < sx1 or x > sx2:
                 continue
             edge_zone = min(EDGE_HIT_PX, max(1, (sx2 - sx1) // 3))
@@ -470,14 +864,15 @@ class ShotblocksTimelineCanvas(c4d.gui.GeUserArea):
         w = self.GetWidth()
         h = self.GetHeight()
 
-        # Background
+        # Background — the timeline area only. The rail paints itself
+        # at the end so its content lands on top of any chrome.
         self.DrawSetPen(COL_BG_TIMELINE)
-        self.DrawRectangle(0, 0, w, h)
+        self.DrawRectangle(LEFT_RAIL_WIDTH, 0, w, h)
 
-        # Play-range bar at the very top
+        # Play-range bar at the very top (starts after the rail)
         range_in, range_out = self._get_preview_range_or_doc()
         self.DrawSetPen(COL_RANGE_BAR)
-        self.DrawRectangle(0, 0, w, RANGE_HEIGHT)
+        self.DrawRectangle(LEFT_RAIL_WIDTH, 0, w, RANGE_HEIGHT)
         rin_x  = self._frame_to_x(range_in,  w)
         rout_x = self._frame_to_x(range_out, w)
         if rout_x < rin_x:
@@ -491,28 +886,60 @@ class ShotblocksTimelineCanvas(c4d.gui.GeUserArea):
         out_handle_color = (COL_RANGE_HANDLE_HOVER if self._hover_range == "out"
                             else COL_RANGE_HANDLE)
         self.DrawSetPen(in_handle_color)
-        self.DrawRectangle(max(0, rin_x  - 2), 0, rin_x  + 1, RANGE_HEIGHT)
+        self.DrawRectangle(max(LEFT_RAIL_WIDTH, rin_x - 2), 0, rin_x + 1, RANGE_HEIGHT)
         self.DrawSetPen(out_handle_color)
         self.DrawRectangle(rout_x - 1, 0, min(w, rout_x + 2), RANGE_HEIGHT)
         # Bottom border separating range bar from ruler
         self.DrawSetPen(COL_BORDER_SUB)
-        self.DrawLine(0, RANGE_HEIGHT, w, RANGE_HEIGHT)
+        self.DrawLine(LEFT_RAIL_WIDTH, RANGE_HEIGHT, w, RANGE_HEIGHT)
 
         # Ruler band (now starts below the range bar)
         ruler_top = RULER_Y_TOP
         ruler_bot = RULER_Y_TOP + RULER_HEIGHT
         self.DrawSetPen(COL_BG_RULER)
-        self.DrawRectangle(0, ruler_top, w, ruler_bot)
+        self.DrawRectangle(LEFT_RAIL_WIDTH, ruler_top, w, ruler_bot)
         self.DrawSetPen(COL_BORDER_SUB)
-        self.DrawLine(0, ruler_bot, w, ruler_bot)
+        self.DrawLine(LEFT_RAIL_WIDTH, ruler_bot, w, ruler_bot)
 
-        # Frame ticks and labels
+        # Frame ticks: three tiers — major (numbered, tall), minor
+        # (un-numbered, medium), and sub (un-numbered, short, only when
+        # the spacing stays >= ~3 px so they don't visually merge into
+        # a smear). Mirrors the C4D native timeline's tick density.
+        major_step = self._pick_tick_step(w)
+        minor_step, sub_step = self._pick_minor_substeps(major_step)
+        fpp = self._frames_per_pixel(w) or 1.0
+        # Draw sub-ticks first (lightest), then minor, then major + labels —
+        # so longer ticks paint over shorter ones at coincident positions.
+        if sub_step > 0 and sub_step < minor_step and (sub_step / fpp) >= 3.0:
+            self.DrawSetPen(COL_BORDER_SUB)
+            first_sub = ((self.visible_first + sub_step - 1) // sub_step) * sub_step
+            for frame in range(first_sub, self.visible_last + 1, sub_step):
+                if minor_step and frame % minor_step == 0:
+                    continue
+                if frame % major_step == 0:
+                    continue
+                tx = self._frame_to_x(frame, w)
+                self.DrawLine(tx, ruler_bot - 2, tx, ruler_bot - 1)
+        if minor_step > 0 and (minor_step / fpp) >= 4.0:
+            self.DrawSetPen(COL_RULER_TEXT)
+            first_min = ((self.visible_first + minor_step - 1) // minor_step) * minor_step
+            for frame in range(first_min, self.visible_last + 1, minor_step):
+                if frame % major_step == 0:
+                    continue
+                tx = self._frame_to_x(frame, w)
+                self.DrawLine(tx, ruler_bot - 4, tx, ruler_bot - 1)
+        # Major ticks + labels. Always draw a tick at visible_last so the
+        # right edge of the ruler shows the actual project end frame even
+        # when it's not a multiple of major_step.
+        self.DrawSetPen(COL_RULER_TEXT)
         self.DrawSetTextCol(COL_RULER_TEXT, COL_BG_RULER)
-        step = self._pick_tick_step(w)
-        first_tick = ((self.visible_first + step - 1) // step) * step
-        for frame in range(first_tick, self.visible_last + 1, step):
+        first_maj = ((self.visible_first + major_step - 1) // major_step) * major_step
+        major_frames = list(range(first_maj, self.visible_last + 1, major_step))
+        if not major_frames or major_frames[-1] != self.visible_last:
+            major_frames.append(self.visible_last)
+        for frame in major_frames:
             tx = self._frame_to_x(frame, w)
-            self.DrawLine(tx, ruler_bot - 6, tx, ruler_bot - 1)
+            self.DrawLine(tx, ruler_bot - 7, tx, ruler_bot - 1)
             label = str(frame)
             text_w = self.DrawGetTextWidth(label)
             label_x = tx + 3
@@ -535,15 +962,15 @@ class ShotblocksTimelineCanvas(c4d.gui.GeUserArea):
             yb = yt + SHOT_HEIGHT
             bg = COL_BG_TRACK if (track % 2 == 0) else COL_BG_TRACK_ALT
             self.DrawSetPen(bg)
-            self.DrawRectangle(0, yt, w, yb)
+            self.DrawRectangle(LEFT_RAIL_WIDTH, yt, w, yb)
             self.DrawSetPen(COL_BORDER_SUB)
-            self.DrawLine(0, yb, w, yb)
+            self.DrawLine(LEFT_RAIL_WIDTH, yb, w, yb)
 
         # Video/audio divider — emphasized line directly under track 0 marking
         # where audio tracks will appear.
         t0_bot = self._track_0_top() + SHOT_HEIGHT
         self.DrawSetPen(COL_BORDER_EMPH)
-        self.DrawLine(0, t0_bot, w, t0_bot)
+        self.DrawLine(LEFT_RAIL_WIDTH, t0_bot, w, t0_bot)
 
         # Orphan-count transition log. Cheap predicate per shot — just a
         # BaseLink dereference. Logging happens *only* on increase so the
@@ -579,16 +1006,74 @@ class ShotblocksTimelineCanvas(c4d.gui.GeUserArea):
             self.DrawLine(dx, RULER_Y_TOP + RULER_HEIGHT, dx, h)
             # Highlight target lane
             yt = self._track_y_top(self._drag_track)
-            self.DrawLine(0, yt, w, yt)
-            self.DrawLine(0, yt + SHOT_HEIGHT, w, yt + SHOT_HEIGHT)
+            self.DrawLine(LEFT_RAIL_WIDTH, yt, w, yt)
+            self.DrawLine(LEFT_RAIL_WIDTH, yt + SHOT_HEIGHT, w, yt + SHOT_HEIGHT)
 
-        # Playhead (always on top): red vertical line through the timeline,
-        # blue downward-pointing triangle head at y=0 as a visual grab handle
-        # (matches Premiere/Resolve playhead-with-handle convention).
+        # Playhead (always on top, but only over the timeline area —
+        # the rail paints later and covers any stem that strays left).
         px = self._frame_to_x(self.playhead_frame, w)
         self.DrawSetPen(COL_CURSOR)
         self.DrawLine(px, 0, px, h)
         self._draw_playhead_head(px)
+
+        # Snap indicator — yellow vertical lines at each frame the
+        # in-flight drag is currently magnetized to. Drawn after the
+        # playhead so a snap-to-playhead overrides the playhead line
+        # visually with the snap signal. Cleared when the drag commits.
+        if self._snap_indicator_frames:
+            self.DrawSetPen(COL_SNAP_INDICATOR)
+            for frame in self._snap_indicator_frames:
+                ix = self._frame_to_x(frame, w)
+                self.DrawLine(ix, 0, ix, h)
+
+        # Left rail — drawn last so its background covers any chrome that
+        # extends to x=0 (e.g. range-bar leftover, ruler leftover, lane
+        # tail). The rail owns columns x ∈ [0, LEFT_RAIL_WIDTH).
+        self._draw_rail(w, h, lane_count)
+
+    def _draw_rail(self, w, h, lane_count):
+        """Paint the left rail: background, divider, toggle buttons,
+        and per-track labels aligned with each track row."""
+        # Background and right-edge divider
+        self.DrawSetPen(COL_BG_RAIL)
+        self.DrawRectangle(0, 0, LEFT_RAIL_WIDTH, h)
+        self.DrawSetPen(COL_RAIL_BORDER)
+        self.DrawLine(LEFT_RAIL_WIDTH - 1, 0, LEFT_RAIL_WIDTH - 1, h)
+
+        # Toggle buttons
+        for i, btn in enumerate(self._rail_buttons):
+            bx1, by1, bx2, by2 = self._rail_button_rect(i)
+            state = bool(getattr(self, btn["state_attr"], False))
+            if self._rail_pressed == btn["name"]:
+                bmp = btn["on_press"] if state else btn["off_press"]
+            elif self._rail_hover == btn["name"]:
+                bmp = btn["on_hover"] if state else btn["off_hover"]
+            else:
+                bmp = btn["on"] if state else btn["off"]
+            if bmp is None:
+                # Bitmap missing — fall back to a colored rect so the
+                # button is still clickable / debuggable.
+                self.DrawSetPen(COL_ACCENT if state else COL_BORDER_EMPH)
+                self.DrawRectangle(bx1, by1, bx2, by2)
+                continue
+            try:
+                bw = bmp.GetBw()
+                bh = bmp.GetBh()
+                self.DrawBitmap(bmp, bx1, by1, bx2 - bx1, by2 - by1,
+                                0, 0, bw, bh,
+                                c4d.BMP_NORMALSCALED | c4d.BMP_ALLOWALPHA)
+            except Exception as e:
+                print("[Shotblocks] rail bitmap draw failed: {}".format(e))
+
+        # Per-track labels — "Track N" left-aligned in the rail, vertically
+        # centered with each track row. Only labels for tracks that are
+        # currently displayed (lane_count comes from the active shot list).
+        self.DrawSetTextCol(COL_RAIL_LABEL, COL_BG_RAIL)
+        for track in range(lane_count):
+            yt = self._track_y_top(track)
+            label = "Track {}".format(track)
+            label_y = yt + (SHOT_HEIGHT - 12) // 2
+            self.DrawText(label, 8, label_y)
 
     def _draw_playhead_head(self, px):
         # Filled downward triangle. DrawRectangle with y1==y2 is degenerate in
@@ -642,17 +1127,204 @@ class ShotblocksTimelineCanvas(c4d.gui.GeUserArea):
         if not name:
             name = shot.get("cam_name", "?")
 
-        sx1 = self._frame_to_x(in_f, w)
-        sx2 = self._frame_to_x(out_f, w)
-        if sx2 < sx1 + 2:
-            sx2 = sx1 + 2
+        sx1, sx2 = self._shot_x_bounds(in_f, out_f, w)
         sy1 = y_top
         sy2 = y_top + SHOT_HEIGHT - 1
 
-        # Body fill. Selected orphans get the muted-red selection fill so
-        # the orphan signal survives selection (the dashed border alone
-        # would otherwise have to carry the whole "broken" message).
-        # Healthy selection still uses Maxon blue per design-system.
+        # Body state (drives mid + the non-hovered edges):
+        #   orphan > selected > normal
+        # Hover does NOT change the body state — it only swaps the
+        # specific edge slice the cursor is over. The user discovers
+        # which edge is grabbable; the body stays informative about
+        # selection / orphan.
+        shot_id = shot.get("id")
+        # Hover animation t (0..1) per side. The animation system
+        # (driven by _set_hover_target / _anim_tick) decouples the raw
+        # hover-band signal from the rendered fade.
+        left_t  = self._hover_t_for(shot_id, "left")
+        right_t = self._hover_t_for(shot_id, "right")
+        if orphan and selected:
+            base_state = "orphan-selected"
+        elif orphan:
+            base_state = "orphan"
+        elif selected:
+            base_state = "selected"
+        else:
+            base_state = "normal"
+
+        rendered_via_bitmap = self._draw_block_bitmap(
+            "shot", base_state,
+            left_t, right_t,
+            sx1, sy1, sx2, sy2)
+
+        # Procedural fallback — the old rect/border path. Triggered when
+        # a state's bitmaps failed to load (build script not run, or
+        # missing PNGs). Keeps the timeline functional even when assets
+        # are out of sync with the code.
+        if not rendered_via_bitmap:
+            self._draw_shot_block_procedural(
+                shot_id, sx1, sy1, sx2, sy2, selected, orphan)
+
+        # Orphan dashed border is now baked into the bitmap (the body's
+        # mid slice is wide enough to capture one full dash cycle and
+        # the plugin tiles it). Procedural dash drawing only kicks in
+        # when bitmaps fail to load, via the procedural fallback path.
+
+        # Camera glyph — bottom-left of the body, just inside the left
+        # handle. Drawn procedurally because the SVG glyph falls outside
+        # the slice boundaries (and would only render in the body's
+        # 1-px-wide middle anyway). Orphan state uses a separate red
+        # glyph variant if available; otherwise the regular glyph is
+        # drawn anyway (the dashed border + label prefix still signal
+        # the orphan state).
+        if rendered_via_bitmap and not self._block_too_narrow_for_glyph(sx1, sx2):
+            # Glyph picks its own state: orphan-selected > orphan >
+            # selected > normal. Each variant falls back to the next-most-
+            # specific glyph if absent (orphan-selected falls back to
+            # orphan, etc.) so missing-asset states still render.
+            if orphan and selected and "camera-orphan-selected" in self._glyph_bitmaps:
+                glyph_name = "camera-orphan-selected"
+            elif orphan and "camera-orphan" in self._glyph_bitmaps:
+                glyph_name = "camera-orphan"
+            elif selected and "camera-selected" in self._glyph_bitmaps:
+                glyph_name = "camera-selected"
+            else:
+                glyph_name = "camera"
+            glyph = self._glyph_bitmaps.get(glyph_name)
+            if glyph is not None:
+                gw = glyph.GetBw()
+                gh = glyph.GetBh()
+                # Glyph aligns left with the camera-name label and sits
+                # near the bottom of the body (~7 px above the bottom).
+                # The label x is computed below as `sx1 + band_w + 4`;
+                # match that exactly so the two left edges line up.
+                clip_w_g = sx2 - sx1
+                band_w_g = max(1, min(EDGE_BAND_PX, clip_w_g // 3))
+                gx = sx1 + band_w_g + 4
+                gy = sy2 - 10 - gh + 1
+                if gx + gw <= sx2 - EDGE_BAND_PX - 4:
+                    try:
+                        self.DrawBitmap(glyph, gx, gy, gw, gh,
+                                        0, 0, gw, gh,
+                                        c4d.BMP_NORMALSCALED | c4d.BMP_ALLOWALPHA)
+                    except Exception as e:
+                        print("[Shotblocks] glyph DrawBitmap failed: {}".format(e))
+
+        # Procedural label. Bitmaps don't carry text; the label changes
+        # when the user renames a camera in the Object Manager, so it
+        # has to be drawn fresh each frame from the live name.
+        clip_w = sx2 - sx1
+        band_w = max(1, min(EDGE_BAND_PX, clip_w // 3))
+        label_x_start = sx1 + band_w + 4
+        label_x_end   = sx2 - band_w - 4
+        inner_w       = label_x_end - label_x_start
+        if inner_w > 0:
+            if selected:
+                label_color = COL_SHOT_LABEL_SELECTED
+            elif orphan:
+                label_color = COL_SHOT_LABEL_ORPHAN
+            else:
+                label_color = COL_SHOT_LABEL
+            # Pass a transparent bg to DrawSetTextCol so it doesn't paint
+            # a solid rect behind glyphs. The rect would overwrite the
+            # bitmap's anti-aliased rounded-corner pixels with sharp
+            # opaque #1C1C1C, producing a visible halo at the corners.
+            # When COLOR_TRANS isn't available we fall back to fg=bg —
+            # the glyph alpha makes the bg invisible.
+            text_bg = _TEXT_BG_TRANS if _TEXT_BG_TRANS is not None else label_color
+            self.DrawSetTextCol(label_color, text_bg)
+            label = "(missing) " + name if orphan else name
+            if self.DrawGetTextWidth(label) > inner_w:
+                while len(label) > 1 and self.DrawGetTextWidth(label + "…") > inner_w:
+                    label = label[:-1]
+                label = label + "…"
+            self.DrawText(label, label_x_start, sy1 + 4)
+
+    def _draw_block_bitmap(self, kind, base_state,
+                           left_t, right_t,
+                           sx1, sy1, sx2, sy2):
+        """Render a block at `base_state`. `left_t` and `right_t` are
+        animation progress 0..1 between normal and hover for each edge.
+        Picks the closest pre-baked fade frame for each side from the
+        per-state frame list; mid stays at base_state.
+
+        Returns True on success, False if any required body bitmap is
+        missing (caller falls back to procedural)."""
+        base = self._block_bitmaps.get((kind, base_state))
+        if base is None:
+            return False
+        frames_l = base.get("left_frames")  or [base["left"]]
+        frames_r = base.get("right_frames") or [base["right"]]
+        n_l = max(1, len(frames_l))
+        n_r = max(1, len(frames_r))
+        idx_l = int(round(max(0.0, min(1.0, left_t))  * (n_l - 1)))
+        idx_r = int(round(max(0.0, min(1.0, right_t)) * (n_r - 1)))
+        left_bmp  = frames_l[idx_l]
+        right_bmp = frames_r[idx_r]
+        mid_bmp   = base["mid"]
+        if left_bmp is None or mid_bmp is None or right_bmp is None:
+            return False
+
+        clip_w = sx2 - sx1
+        edge_w = left_bmp.GetBw()
+        if clip_w < 2 * edge_w:
+            edge_w = max(1, clip_w // 2)
+        edge_h = left_bmp.GetBh()
+        body_h = sy2 - sy1 + 1
+
+        right_x = sx2 - edge_w + 1
+        mid_x   = sx1 + edge_w
+        mid_w   = right_x - mid_x
+
+        try:
+            self.DrawBitmap(left_bmp, sx1, sy1, edge_w, body_h,
+                            0, 0, left_bmp.GetBw(), edge_h,
+                            c4d.BMP_NORMALSCALED | c4d.BMP_ALLOWALPHA)
+            self.DrawBitmap(right_bmp, right_x, sy1, edge_w, body_h,
+                            0, 0, right_bmp.GetBw(), edge_h,
+                            c4d.BMP_NORMALSCALED | c4d.BMP_ALLOWALPHA)
+            if mid_w > 0:
+                src_w = mid_bmp.GetBw()
+                if src_w <= 1:
+                    # 1-px source: stretch to fill the gap (cheap; uniform
+                    # color sources look identical to a tile here).
+                    self.DrawBitmap(mid_bmp, mid_x, sy1, mid_w, body_h,
+                                    0, 0, src_w, mid_bmp.GetBh(),
+                                    c4d.BMP_NORMALSCALED | c4d.BMP_ALLOWALPHA)
+                else:
+                    # Multi-px source: tile across the gap so a horizontal
+                    # pattern (e.g. orphan's dashed border) repeats at its
+                    # designed cycle width instead of being stretched.
+                    src_h = mid_bmp.GetBh()
+                    cursor = mid_x
+                    while cursor < right_x:
+                        seg_w = min(src_w, right_x - cursor)
+                        self.DrawBitmap(mid_bmp, cursor, sy1, seg_w, body_h,
+                                        0, 0, seg_w, src_h,
+                                        c4d.BMP_NORMALSCALED | c4d.BMP_ALLOWALPHA)
+                        cursor += seg_w
+        except Exception as e:
+            print("[Shotblocks] block DrawBitmap failed: {}".format(e))
+            return False
+        return True
+
+    def _block_too_narrow_for_glyph(self, sx1, sx2):
+        """True when there isn't enough horizontal room for the camera
+        glyph between the left and right handles (avoids the glyph
+        crashing into the right handle on very short shots)."""
+        return (sx2 - sx1) < (2 * EDGE_BAND_PX + 28)
+
+    def _label_bg_for_state(self, state, selected, orphan):
+        """Background color for label antialiasing. Matches the SVG
+        body fill exactly — `#1C1C1C` for all current shot states (the
+        body color stays constant; only the handles change)."""
+        return COL_SHOT_BODY_FILL
+
+    def _draw_shot_block_procedural(self, shot_id, sx1, sy1, sx2, sy2,
+                                    selected, orphan):
+        """Fallback draw path — used when bitmaps aren't available.
+        Mirrors the pre-bitmap draw code so the timeline keeps working
+        with SVG-pipeline assets missing."""
         if selected and orphan:
             body_color = COL_SHOT_FILL_ORPHAN_SEL
         elif selected:
@@ -664,13 +1336,9 @@ class ShotblocksTimelineCanvas(c4d.gui.GeUserArea):
         self.DrawSetPen(body_color)
         self.DrawRectangle(sx1, sy1, sx2, sy2)
 
-        # Edge grip bands. We still show them on orphans so relink-by-drag
-        # remains discoverable as a grab affordance — the orphan label
-        # spells out the action, the bands say "you can do something here."
         clip_w = sx2 - sx1
         band_w = max(1, min(EDGE_BAND_PX, clip_w // 3))
         if clip_w >= 4:
-            shot_id = shot.get("id")
             hover = self._hover_band
             left_hovered  = (hover == (shot_id, "left"))
             right_hovered = (hover == (shot_id, "right"))
@@ -679,7 +1347,6 @@ class ShotblocksTimelineCanvas(c4d.gui.GeUserArea):
             self.DrawSetPen(COL_SHOT_EDGE_BAND_HOVER if right_hovered else COL_SHOT_EDGE_BAND)
             self.DrawRectangle(sx2 - band_w, sy1, sx2, sy2)
 
-        # Border. Solid for healthy shots; dashed dark-red for orphans.
         if orphan:
             self.DrawSetPen(COL_SHOT_BORDER_ORPHAN)
             self._draw_dashed_hline(sx1, sx2, sy1, DASH_ORPHAN_ON, DASH_ORPHAN_OFF)
@@ -692,28 +1359,6 @@ class ShotblocksTimelineCanvas(c4d.gui.GeUserArea):
             self.DrawLine(sx1, sy2, sx2, sy2)
             self.DrawLine(sx1, sy1, sx1, sy2)
             self.DrawLine(sx2, sy1, sx2, sy2)
-
-        # Label.
-        label_x_start = sx1 + band_w + 4
-        label_x_end   = sx2 - band_w - 4
-        inner_w       = label_x_end - label_x_start
-        if inner_w > 0:
-            if selected:
-                # Selected → white label, whether the body is accent-blue
-                # or muted-red (orphan). Both fills are dark enough that
-                # white reads cleanly.
-                label_color = COL_SHOT_LABEL_SELECTED
-            elif orphan:
-                label_color = COL_SHOT_LABEL_ORPHAN
-            else:
-                label_color = COL_SHOT_LABEL
-            self.DrawSetTextCol(label_color, body_color)
-            label = "(missing) " + name if orphan else name
-            if self.DrawGetTextWidth(label) > inner_w:
-                while len(label) > 1 and self.DrawGetTextWidth(label + "…") > inner_w:
-                    label = label[:-1]
-                label = label + "…"
-            self.DrawText(label, label_x_start, sy1 + 4)
 
     # ------------------------------------------------------------------
     # Drag-receive (Object Manager → canvas)
@@ -866,9 +1511,11 @@ class ShotblocksTimelineCanvas(c4d.gui.GeUserArea):
             self._remember_cam(new_shot["id"], cam)
             drop_mode  = "snap" if self._snap_enabled else "replace"
             snap_frames = self._snap_frames() if drop_mode == "snap" else 0
-            shots = _resolve_position(shots, new_shot["id"],
-                                      new_shot["in_frame"],
-                                      new_shot["track"], drop_mode, snap_frames)
+            shots, _snap_targets = _resolve_position(
+                shots, new_shot["id"],
+                new_shot["in_frame"],
+                new_shot["track"], drop_mode, snap_frames,
+                extra_points=(self.playhead_frame,))
             print("[Shotblocks] created shot id={} cam='{}' frames={}-{} track={}".format(
                 next_id, cam.GetName(), drop_frame, drop_frame + DEFAULT_SHOT_FRAMES,
                 new_shot["track"]))
@@ -931,16 +1578,17 @@ class ShotblocksTimelineCanvas(c4d.gui.GeUserArea):
             self.Redraw()
 
     # ------------------------------------------------------------------
-    # Cursor info (BFM_GETCURSORINFO) — drives the hover highlights
+    # Cursor info (BFM_GETCURSORINFO) — drives the hover highlights.
     # ------------------------------------------------------------------
     #
-    # We don't change the OS cursor here. C4D 2026 Python's cursor pipeline
-    # for GeUserArea flickers visibly under any combination of
-    # `c4d.gui.SetMousePointer`, `result.SetInt32(RESULT_CURSOR, ...)`, or
-    # direct `user32.SetCursor`. The visual hover-highlight on the band /
-    # range-handle is a stable, fully-controlled replacement and serves as
-    # the primary "you can drag here" affordance. We still process the
-    # message so we can update hover state on motion and redraw.
+    # We don't change the OS cursor here. Tried multiple approaches
+    # (RESULT_CURSOR via the message result container, c4d.gui.SetMousePointer,
+    # GetInputState-based modifier polling) — none reliably change the
+    # cursor over our GeUserArea in C4D 2026. The visual hover overlay
+    # on edges and range-handles serves as the primary "you can drag here"
+    # affordance instead. Pan-on-Alt remains undocumented in the UI; if
+    # we want to surface it later, a tooltip or status-bar hint is more
+    # likely to work than a cursor change.
 
     def _on_cursor_info(self, msg, result):
         x, y = self._cursor_local_xy(msg)
@@ -949,12 +1597,31 @@ class ShotblocksTimelineCanvas(c4d.gui.GeUserArea):
         w, h = self.GetWidth(), self.GetHeight()
         if not (0 <= x < w and 0 <= y < h):
             return False
+        # Rail hover — set the hovered button name (or None) based on the
+        # cursor position. Cursor outside the rail clears rail hover.
+        if x < LEFT_RAIL_WIDTH:
+            btn, _idx = self._rail_button_at(x, y)
+            new_rail_hover = btn["name"] if btn is not None else None
+        else:
+            new_rail_hover = None
+        if new_rail_hover != self._rail_hover:
+            self._rail_hover = new_rail_hover
+            self.Redraw()
         new_band  = self._compute_hover_band(x, y)
         new_range = self._compute_hover_range(x, y)
         if new_band != self._hover_band or new_range != self._hover_range:
+            # Hover-band change: drive the animation targets so the
+            # previously-hovered edge fades out and the newly-hovered
+            # edge fades in. Both transitions can run concurrently.
+            old_band = self._hover_band
+            if old_band is not None:
+                self._set_hover_target(old_band[0], old_band[1], False)
+            if new_band is not None:
+                self._set_hover_target(new_band[0], new_band[1], True)
             self._hover_band  = new_band
             self._hover_range = new_range
             self.Redraw()
+
         return False
 
     def _cursor_local_xy(self, msg):
@@ -1009,8 +1676,7 @@ class ShotblocksTimelineCanvas(c4d.gui.GeUserArea):
             sy_bot = sy_top + SHOT_HEIGHT - 1
             if y < sy_top - Y_BUFFER or y > sy_bot + Y_BUFFER:
                 continue
-            sx1 = self._frame_to_x(shot["in_frame"], w)
-            sx2 = self._frame_to_x(shot["out_frame"], w)
+            sx1, sx2 = self._shot_x_bounds(shot["in_frame"], shot["out_frame"], w)
             if x < sx1 or x > sx2:
                 continue
             edge_zone = min(CURSOR_EDGE_PX, max(1, (sx2 - sx1) // 3))
@@ -1204,6 +1870,32 @@ class ShotblocksTimelineCanvas(c4d.gui.GeUserArea):
         except Exception:
             return False
 
+        # Once-per-channel log so we can capture the actual code C4D 2026
+        # reports for keys we haven't pinned down yet (e.g. spacebar).
+        # Also log BFM_INPUT_VALUE the first few times — on some platforms
+        # it distinguishes press from auto-repeat.
+        if channel not in ShotblocksTimelineCanvas._kb_channel_logged:
+            ShotblocksTimelineCanvas._kb_channel_logged.add(channel)
+            try:
+                val = msg.GetInt32(c4d.BFM_INPUT_VALUE)
+            except Exception:
+                val = "?"
+            print("[Shotblocks] kb channel={} (0x{:x}) qual={:#x} value={}".format(
+                channel, channel, qualifier, val))
+
+        # Spacebar → play/pause toggle (v6). C4D 2026 reports space as
+        # channel 61728 (= c4d.KEY_SPACE). Auto-repeat fires this handler
+        # many times per real keystroke, so debounce on wall-clock time —
+        # ignore toggles that arrive within _PLAY_TOGGLE_DEBOUNCE_S of the
+        # previous one. 0.25 s is well above key-repeat cadence and well
+        # below the user's reaction time for a deliberate second press.
+        if channel in _SPACE_CHANNELS and not (qualifier & (_QSHIFT | _QCTRL | _QALT)):
+            now = _monotonic()
+            if now - self._last_play_toggle_t >= _PLAY_TOGGLE_DEBOUNCE_S:
+                self._last_play_toggle_t = now
+                self._toggle_playback()
+            return True
+
         # Delete / Backspace → delete selected. Verified empirically in C4D 2026:
         # KEY_DELETE = 61823, KEY_BACKSPACE = 61704.
         if channel in (_KEY_DELETE, _KEY_BACKSPACE):
@@ -1233,10 +1925,231 @@ class ShotblocksTimelineCanvas(c4d.gui.GeUserArea):
         return False
 
     # ------------------------------------------------------------------
+    # Doc sync — visible window auto-fits to the doc's total frame range
+    # ------------------------------------------------------------------
+
+    def _fit_visible_to_doc(self, force=False):
+        """Snap visible_first/last to the doc's [Min, Max] frame range so
+        the timeline mirrors the project length set in C4D's project
+        settings.
+
+        Called on dialog open (force=True) and on EVMSG_CHANGE — but on
+        EVMSG_CHANGE we only refit if the doc's length actually changed
+        since last sync, so the user's pan/zoom isn't clobbered by every
+        unrelated scene mutation."""
+        doc = c4d.documents.GetActiveDocument()
+        if doc is None:
+            return False
+        fps = self._doc_fps(doc)
+        try:
+            doc_first = int(doc.GetMinTime().GetFrame(fps))
+            doc_last  = int(doc.GetMaxTime().GetFrame(fps))
+        except Exception:
+            return False
+        if doc_last <= doc_first:
+            return False
+        last_known = getattr(self, "_last_doc_range", None)
+        if not force and last_known == (doc_first, doc_last):
+            return False
+        self._last_doc_range = (doc_first, doc_last)
+        if (doc_first, doc_last) == (self.visible_first, self.visible_last):
+            return False
+        self.visible_first = doc_first
+        self.visible_last  = doc_last
+        return True
+
+    # ------------------------------------------------------------------
+    # Playback (v6) — spacebar drives a doc-FPS Timer on the dialog
+    # ------------------------------------------------------------------
+
+    def _doc_fps(self, doc):
+        try:
+            fps = int(doc.GetFps())
+        except Exception:
+            fps = 0
+        return fps if fps > 0 else 24
+
+    def _toggle_playback(self):
+        dlg = self._playback_owner_dialog
+        if self._playing:
+            self._playing = False
+            if dlg is not None:
+                dlg.stop_playback_timer()
+            print("[Shotblocks] playback paused at frame {}".format(self.playhead_frame))
+            return
+
+        doc = c4d.documents.GetActiveDocument()
+        range_in, range_out = _read_range(doc)
+        if self.playhead_frame < range_in or self.playhead_frame >= range_out:
+            self.playhead_frame = range_in
+        fps = self._doc_fps(doc)
+        self._playing = True
+        if dlg is not None:
+            dlg.start_playback_timer(fps)
+        print("[Shotblocks] playback started at frame {} ({} fps)".format(
+            self.playhead_frame, fps))
+
+    def _route_camera_for_frame(self, doc, frame):
+        """Resolve the active shot at `frame` and route its source camera
+        to the active BaseDraw. On gap or orphan: leave the current camera
+        alone — hold last good. The dashed-red orphan block on the timeline
+        is the signal."""
+        shots, _ = _read_shots(doc)
+        active = _active_shot_at(shots, frame)
+        if active is None:
+            return
+        cam = _get_shot_cam(doc, active.get("id"))
+        if cam is None:
+            return
+        try:
+            bd = doc.GetActiveBaseDraw()
+            if bd is not None:
+                bd[c4d.BASEDRAW_DATA_CAMERA] = cam
+        except Exception as e:
+            print("[Shotblocks] BaseDraw camera set failed: {}".format(e))
+
+    def _anim_tick(self):
+        """Advance each in-flight hover animation toward its target.
+        Called from the dialog Timer at ~60 fps. Cleans up entries
+        once both sides are at rest. Triggers a Redraw whenever any
+        animation actually changed value."""
+        anim = self._shot_hover_anim
+        if not anim:
+            return
+        now  = _monotonic()
+        dt   = max(0.0, now - self._last_anim_tick_t)
+        self._last_anim_tick_t = now
+        # Convert wall time to fade progress per side.
+        step = dt / (HOVER_FADE_MS / 1000.0)
+        any_changed = False
+        to_remove = []
+        for sid, st in anim.items():
+            for side in ("left", "right"):
+                t_key      = side + "_t"
+                target_key = side + "_target"
+                cur    = st[t_key]
+                target = st[target_key]
+                if cur == target:
+                    continue
+                if cur < target:
+                    new = min(target, cur + step)
+                else:
+                    new = max(target, cur - step)
+                st[t_key] = new
+                any_changed = True
+            # Cull when fully at rest with target=0.
+            if (st["left_t"]   == 0.0 and st["left_target"]   == 0.0
+                and st["right_t"]  == 0.0 and st["right_target"]  == 0.0):
+                to_remove.append(sid)
+        for sid in to_remove:
+            del anim[sid]
+        if any_changed:
+            self.Redraw()
+
+    def _set_hover_target(self, shot_id, side, on):
+        """Set the animation target for a side ('left' or 'right') to
+        1.0 (hovered) or 0.0 (not hovered). Creates the per-shot anim
+        entry on first set. Wakes the dialog timer if needed."""
+        if shot_id is None:
+            return
+        anim = self._shot_hover_anim
+        was_empty = not anim  # was the animation system idle?
+        st = anim.get(shot_id)
+        if st is None:
+            st = {"left_t":  0.0, "left_target":  0.0,
+                  "right_t": 0.0, "right_target": 0.0}
+            anim[shot_id] = st
+        target_key = side + "_target"
+        new_target = 1.0 if on else 0.0
+        if st[target_key] != new_target:
+            st[target_key] = new_target
+            # Reset the tick clock when the animation system was idle
+            # before this call. Without this, the first tick after the
+            # timer wakes up sees a huge dt (time since the last anim
+            # ended, which can be many seconds), and the first frame
+            # snaps almost all the way to target instead of fading.
+            if was_empty:
+                self._last_anim_tick_t = _monotonic()
+            dlg = self._playback_owner_dialog
+            if dlg is not None and hasattr(dlg, "request_anim_tick"):
+                dlg.request_anim_tick()
+            # Pre-emptive redraw so the first visible frame paints now
+            # instead of waiting for the timer's first tick (which on
+            # some C4D builds waits the full interval before firing).
+            # On enter, this paints frame 0 (still the normal bitmap).
+            # Subsequent frames advance via the tick.
+            self.Redraw()
+
+    def _hover_t_for(self, shot_id, side):
+        """Current animation t for a side (0..1). 0 means no hover."""
+        st = self._shot_hover_anim.get(shot_id)
+        if st is None:
+            return 0.0
+        return st[side + "_t"]
+
+    def _playback_tick(self):
+        """Called by the dialog's Timer (which runs at ~60 fps to share
+        with hover-fade animation). Internally rate-limits to the doc's
+        fps so playback advances at the right speed regardless of the
+        host timer rate."""
+        if not self._playing:
+            return
+        doc = c4d.documents.GetActiveDocument()
+        if doc is None:
+            self._playing = False
+            dlg = self._playback_owner_dialog
+            if dlg is not None:
+                dlg.stop_playback_timer()
+            return
+
+        # Internal rate limit: only advance every 1/fps seconds.
+        fps = self._doc_fps(doc)
+        frame_dt = 1.0 / max(1, fps)
+        now = _monotonic()
+        last = getattr(self, "_last_playback_advance_t", 0.0)
+        if now - last < frame_dt:
+            return
+        self._last_playback_advance_t = now
+
+        range_in, range_out = _read_range(doc)
+        self.playhead_frame += 1
+        if self.playhead_frame >= range_out:
+            if self._loop_enabled:
+                # Wrap to in-point and keep going.
+                self.playhead_frame = range_in
+            else:
+                # Stop at out.
+                self.playhead_frame = range_out
+                self._playing = False
+                dlg = self._playback_owner_dialog
+                if dlg is not None:
+                    dlg.stop_playback_timer()
+
+        # Order matters: set camera FIRST, then time, then post the redraw.
+        # If we set time before camera, C4D can render the next frame with
+        # the new time but the previous camera (the redraw races our
+        # camera write). Setting camera first guarantees the very next
+        # render reflects both changes together.
+        self._route_camera_for_frame(doc, self.playhead_frame)
+        try:
+            doc.SetTime(c4d.BaseTime(self.playhead_frame, fps))
+        except Exception as e:
+            print("[Shotblocks] SetTime failed: {}".format(e))
+        c4d.EventAdd()
+        self.Redraw()
+
+    # ------------------------------------------------------------------
     # Click / drag — left button
     # ------------------------------------------------------------------
 
     def _on_left_press(self, x, y, qualifier):
+        # Rail click — handled before any timeline gesture. The rail
+        # owns x in [0, LEFT_RAIL_WIDTH); modifiers don't change rail
+        # behavior (no Alt+drag-pan inside the rail).
+        if x < LEFT_RAIL_WIDTH:
+            self._handle_rail_click(x, y)
+            return True
+
         # Alt+LMB drag = pan, overrides hit-test (unifies with Alt+RMB zoom
         # and Alt+wheel zoom — Alt is the canvas navigation modifier).
         if qualifier & _QALT:
@@ -1474,19 +2387,24 @@ class ShotblocksTimelineCanvas(c4d.gui.GeUserArea):
             df, dt = compute_delta(adx, ady)
             mode = _qualifier_mode(qual, self._snap_enabled)
             snap_frames = self._snap_frames() if mode == "snap" else 0
+            extra = (self.playhead_frame,)
+            snap_targets = ()
             if is_group:
                 if mode in ("snap", "ripple"):
-                    shots_preview = _resolve_group_move(
-                        shots, target_ids, shot_id, df, dt, mode, snap_frames)
+                    shots_preview, snap_targets = _resolve_group_move(
+                        shots, target_ids, shot_id, df, dt, mode, snap_frames,
+                        extra_points=extra)
                 else:
                     shots_preview = shift_preview(df, dt)
             elif mode in ("snap", "ripple"):
                 new_in = orig_in + df
                 new_track = orig_track + dt
-                shots_preview = _resolve_position(shots, shot_id, new_in,
-                                                  new_track, mode, snap_frames)
+                shots_preview, snap_targets = _resolve_position(
+                    shots, shot_id, new_in, new_track, mode, snap_frames,
+                    extra_points=extra)
             else:
                 shots_preview = shift_preview(df, dt)
+            self._snap_indicator_frames = snap_targets
             self._render_preview_shots(shots_preview)
 
         result = self._drag_loop(_KEY_MLEFT, mx, my, on_tick)
@@ -1501,15 +2419,20 @@ class ShotblocksTimelineCanvas(c4d.gui.GeUserArea):
 
         mode = _qualifier_mode(qualifier, self._snap_enabled)
         snap_frames = self._snap_frames() if mode == "snap" else 0
+        extra = (self.playhead_frame,)
         doc.StartUndo()
         if is_group:
-            new_shots = _resolve_group_move(shots, target_ids, shot_id,
-                                            df, dt, mode, snap_frames)
+            new_shots, _ = _resolve_group_move(shots, target_ids, shot_id,
+                                               df, dt, mode, snap_frames,
+                                               extra_points=extra)
         else:
-            new_shots = _resolve_position(shots, shot_id, orig_in + df,
-                                          orig_track + dt, mode, snap_frames)
+            new_shots, _ = _resolve_position(shots, shot_id, orig_in + df,
+                                             orig_track + dt, mode, snap_frames,
+                                             extra_points=extra)
         _write_shots(doc, new_shots, _read_shots(doc)[1], with_undo=True)
         doc.EndUndo()
+        # Clear the snap indicator now that the drag is committed.
+        self._snap_indicator_frames = ()
         c4d.EventAdd()
 
     def _drag_resize(self, shot_id, edge, mx, my):
@@ -1532,9 +2455,12 @@ class ShotblocksTimelineCanvas(c4d.gui.GeUserArea):
                 want = max(orig_in + MIN_SHOT_FRAMES, orig_out + delta_frames)
 
             mode = _qualifier_mode(qual, self._snap_enabled)
+            snap_targets = ()
             if mode in ("snap", "ripple"):
                 snap_frames = self._snap_frames() if mode == "snap" else 0
-                shots_preview = _resolve_resize(shots, shot_id, edge, want, mode, snap_frames)
+                shots_preview, snap_targets = _resolve_resize(
+                    shots, shot_id, edge, want, mode, snap_frames,
+                    extra_points=(self.playhead_frame,))
             else:
                 shots_preview = [dict(s) for s in shots]
                 t = next(s for s in shots_preview if s["id"] == shot_id)
@@ -1542,6 +2468,7 @@ class ShotblocksTimelineCanvas(c4d.gui.GeUserArea):
                     t["in_frame"] = want
                 else:
                     t["out_frame"] = want
+            self._snap_indicator_frames = snap_targets
             self._render_preview_shots(shots_preview)
 
         result = self._drag_loop(_KEY_MLEFT, mx, my, on_tick)
@@ -1558,9 +2485,12 @@ class ShotblocksTimelineCanvas(c4d.gui.GeUserArea):
         mode = _qualifier_mode(qualifier, self._snap_enabled)
         snap_frames = self._snap_frames() if mode == "snap" else 0
         doc.StartUndo()
-        new_shots = _resolve_resize(shots, shot_id, edge, want, mode, snap_frames)
+        new_shots, _ = _resolve_resize(
+            shots, shot_id, edge, want, mode, snap_frames,
+            extra_points=(self.playhead_frame,))
         _write_shots(doc, new_shots, _read_shots(doc)[1], with_undo=True)
         doc.EndUndo()
+        self._snap_indicator_frames = ()
         c4d.EventAdd()
 
     # ------------------------------------------------------------------
@@ -1615,15 +2545,17 @@ class ShotblocksTimelineCanvas(c4d.gui.GeUserArea):
                 copy = _make_shot(dup_id, src["in_frame"], src["out_frame"],
                                   src["cam_name"], src_track + 1)
                 shots.append(copy)
-                shots = _resolve_position(shots, dup_id, copy["in_frame"],
-                                          copy["track"], mode, snap_frames)
+                shots, _ = _resolve_position(shots, dup_id, copy["in_frame"],
+                                             copy["track"], mode, snap_frames,
+                                             extra_points=(self.playhead_frame,))
             else:
                 new_in = src["out_frame"] + 1
                 copy = _make_shot(dup_id, new_in, new_in + duration,
                                   src["cam_name"], src_track)
                 shots.append(copy)
-                shots = _resolve_position(shots, dup_id, copy["in_frame"],
-                                          copy["track"], mode, snap_frames)
+                shots, _ = _resolve_position(shots, dup_id, copy["in_frame"],
+                                             copy["track"], mode, snap_frames,
+                                             extra_points=(self.playhead_frame,))
             new_ids.add(dup_id)
             # Carry the source shot's camera link forward so the duplicate's
             # name stays in sync with the source camera through future renames.
@@ -1670,10 +2602,7 @@ class ShotblocksTimelineCanvas(c4d.gui.GeUserArea):
             track = _shot_track(s)
             sy_top = self._track_y_top(track)
             sy_bot = sy_top + SHOT_HEIGHT - 1
-            sx1 = self._frame_to_x(s["in_frame"], w)
-            sx2 = self._frame_to_x(s["out_frame"], w)
-            if sx2 < sx1 + 2:
-                sx2 = sx1 + 2
+            sx1, sx2 = self._shot_x_bounds(s["in_frame"], s["out_frame"], w)
             if sx2 < rx1 or sx1 > rx2:
                 continue
             if sy_bot < ry1 or sy_top > ry2:
@@ -1686,19 +2615,22 @@ class ShotblocksTimelineCanvas(c4d.gui.GeUserArea):
     # ------------------------------------------------------------------
 
     def _drag_range_handle(self, edge, mx, my):
-        """Drag the in or out handle. The opposite edge stays fixed."""
+        """Drag the in or out handle. The opposite edge stays fixed.
+        Both edges clamp to the doc's [Min, Max] frame bounds — the play
+        range can't extend past project length in either direction."""
         w = self.GetWidth()
         fpp = self._frames_per_pixel(w)
         doc = c4d.documents.GetActiveDocument()
+        doc_first, doc_last = self._doc_bounds()
         orig_in, orig_out = _read_range(doc)
 
         def on_tick(adx, _ady, _qual):
             delta = int(round(adx * fpp))
             if edge == "in":
-                new_in = max(0, min(orig_in + delta, orig_out - 1))
+                new_in = max(doc_first, min(orig_in + delta, orig_out - 1))
                 self._preview_range = (new_in, orig_out)
             else:
-                new_out = max(orig_in + 1, orig_out + delta)
+                new_out = min(doc_last, max(orig_in + 1, orig_out + delta))
                 self._preview_range = (orig_in, new_out)
             self.Redraw()
 
@@ -1706,16 +2638,18 @@ class ShotblocksTimelineCanvas(c4d.gui.GeUserArea):
         self._commit_range_drag(doc, orig_in, orig_out)
 
     def _drag_range_body(self, mx, my):
-        """Drag the active span between handles to slide both together."""
+        """Drag the active span between handles to slide both together.
+        The whole span clamps inside the doc's [Min, Max] frame bounds."""
         w = self.GetWidth()
         fpp = self._frames_per_pixel(w)
         doc = c4d.documents.GetActiveDocument()
+        doc_first, doc_last = self._doc_bounds()
         orig_in, orig_out = _read_range(doc)
         length = orig_out - orig_in
 
         def on_tick(adx, _ady, _qual):
             delta = int(round(adx * fpp))
-            new_in = max(0, orig_in + delta)
+            new_in = max(doc_first, min(orig_in + delta, doc_last - length))
             self._preview_range = (new_in, new_in + length)
             self.Redraw()
 
@@ -1727,17 +2661,63 @@ class ShotblocksTimelineCanvas(c4d.gui.GeUserArea):
         undo. snap_on_click=True (ruler band) snaps the playhead to the click
         x; snap_on_click=False (triangle handle) preserves the playhead's
         current frame and only follows the drag delta — clicking off-center
-        on the handle won't yank the playhead to the click point."""
+        on the handle won't yank the playhead to the click point.
+
+        Each scrub step also pushes doc time and routes the active shot's
+        camera to the active BaseDraw, so the viewport switches cameras
+        live during scrubbing — not just during spacebar playback."""
         w = self.GetWidth()
         fpp = self._frames_per_pixel(w)
+        doc = c4d.documents.GetActiveDocument()
+        fps = self._doc_fps(doc) if doc is not None else 24
+        doc_first, doc_last = self._doc_bounds()
+
+        def push_to_doc(frame):
+            if doc is None:
+                return
+            try:
+                doc.SetTime(c4d.BaseTime(frame, fps))
+            except Exception:
+                pass
+            # Notify the time-change BEFORE redrawing so the camera switch
+            # we just made on the BaseDraw, plus the new doc time, are
+            # picked up by the editor view's render pass.
+            try:
+                c4d.GeSyncMessage(c4d.EVMSG_TIMECHANGED)
+            except Exception:
+                pass
+            self._route_camera_for_frame(doc, frame)
+            # Force a synchronous editor-view redraw inside the drag loop.
+            # DRAWFLAGS_NO_THREAD makes the call block until the redraw is
+            # actually painted; INDRAG hints that we're mid-drag (lets C4D
+            # skip expensive passes); FORCEFULLREDRAW makes it ignore the
+            # cached view state. ONLY_ACTIVE_VIEW skips inactive panels.
+            flags = (c4d.DRAWFLAGS_NO_THREAD
+                     | c4d.DRAWFLAGS_INDRAG
+                     | c4d.DRAWFLAGS_FORCEFULLREDRAW
+                     | c4d.DRAWFLAGS_ONLY_ACTIVE_VIEW)
+            try:
+                c4d.DrawViews(flags)
+            except Exception as e:
+                if not ShotblocksTimelineCanvas._scrub_logged:
+                    ShotblocksTimelineCanvas._scrub_logged = True
+                    print("[Shotblocks] scrub DrawViews err: {}".format(e))
+                c4d.EventAdd()
+
         if snap_on_click:
-            self.playhead_frame = max(0, self._x_to_frame(mx, w))
+            self.playhead_frame = max(doc_first, min(doc_last,
+                                                     self._x_to_frame(mx, w)))
+            push_to_doc(self.playhead_frame)
             self.Redraw()
         orig_frame = self.playhead_frame
 
         def on_tick(adx, _ady, _qual):
-            self.playhead_frame = max(0, orig_frame + int(round(adx * fpp)))
-            self.Redraw()
+            new_frame = max(doc_first, min(doc_last,
+                                           orig_frame + int(round(adx * fpp))))
+            if new_frame != self.playhead_frame:
+                self.playhead_frame = new_frame
+                push_to_doc(new_frame)
+                self.Redraw()
 
         self._drag_loop(_KEY_MLEFT, mx, my, on_tick)
 
@@ -1753,6 +2733,39 @@ class ShotblocksTimelineCanvas(c4d.gui.GeUserArea):
         self._preview_range = None
         self.Redraw()
 
+    def _doc_bounds(self):
+        """Return (doc_first, doc_last) in frames — the project's [Min, Max]
+        time. Falls back to (0, visible_last) if no doc is available."""
+        doc = c4d.documents.GetActiveDocument()
+        if doc is None:
+            return 0, max(1, self.visible_last)
+        fps = self._doc_fps(doc)
+        try:
+            first = int(doc.GetMinTime().GetFrame(fps))
+            last  = int(doc.GetMaxTime().GetFrame(fps))
+        except Exception:
+            return 0, max(1, self.visible_last)
+        if last <= first:
+            return 0, max(1, self.visible_last)
+        return first, last
+
+    def _clamp_visible(self, new_first, new_last):
+        """Clamp [new_first, new_last] to the doc's [Min, Max] range.
+        Visible window can't extend past project bounds in either direction;
+        if the requested span is wider than the doc, we fit-to-doc."""
+        doc_first, doc_last = self._doc_bounds()
+        span = max(8, new_last - new_first)
+        doc_span = doc_last - doc_first
+        if span >= doc_span:
+            return doc_first, doc_last
+        if new_first < doc_first:
+            new_first = doc_first
+            new_last  = new_first + span
+        if new_last > doc_last:
+            new_last  = doc_last
+            new_first = new_last - span
+        return int(new_first), int(new_last)
+
     def _drag_pan(self, mx, my):
         """Alt+LMB drag-pan. Held LMB so MouseDrag actually delivers motion
         (MMB is intercepted by C4D's framework regardless of qualifier)."""
@@ -1763,8 +2776,8 @@ class ShotblocksTimelineCanvas(c4d.gui.GeUserArea):
 
         def on_tick(adx, _ady, _qual):
             shift_frames = int(round(-adx * fpp))
-            self.visible_first = orig_first + shift_frames
-            self.visible_last  = orig_last  + shift_frames
+            self.visible_first, self.visible_last = self._clamp_visible(
+                orig_first + shift_frames, orig_last + shift_frames)
             self.Redraw()
 
         self._drag_loop(_KEY_MLEFT, mx, my, on_tick)
@@ -1785,9 +2798,8 @@ class ShotblocksTimelineCanvas(c4d.gui.GeUserArea):
             new_span = max(8, int(round(orig_span * factor)))
             ratio = (anchor_frame - orig_first) / float(orig_span)
             new_first = anchor_frame - int(round(ratio * new_span))
-            new_first = max(0, new_first)
-            self.visible_first = new_first
-            self.visible_last  = new_first + new_span
+            self.visible_first, self.visible_last = self._clamp_visible(
+                new_first, new_first + new_span)
             self.Redraw()
 
         self._drag_loop(_KEY_MRIGHT, mx, my, on_tick)
@@ -1798,9 +2810,9 @@ class ShotblocksTimelineCanvas(c4d.gui.GeUserArea):
         span = max(1, self.visible_last - self.visible_first)
         notches = delta / 120.0
         shift = int(round(-notches * span * 0.1))
-        new_first = max(0, self.visible_first + shift)
-        self.visible_first = new_first
-        self.visible_last  = new_first + span
+        new_first = self.visible_first + shift
+        self.visible_first, self.visible_last = self._clamp_visible(
+            new_first, new_first + span)
         self.Redraw()
 
     def _zoom_around_cursor(self, cursor_x, delta):
@@ -1813,9 +2825,8 @@ class ShotblocksTimelineCanvas(c4d.gui.GeUserArea):
         span_new = max(8, int(round(span_old * factor)))
         ratio = (anchor_frame - self.visible_first) / max(1, span_old)
         new_first = anchor_frame - int(round(ratio * span_new))
-        new_first = max(0, new_first)
-        self.visible_first = new_first
-        self.visible_last  = new_first + span_new
+        self.visible_first, self.visible_last = self._clamp_visible(
+            new_first, new_first + span_new)
         self.Redraw()
 
     # ------------------------------------------------------------------

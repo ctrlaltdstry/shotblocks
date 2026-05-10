@@ -36,8 +36,7 @@ SHOTBLOCKS_ENABLED = 1000
 SHOTBLOCKS_DAMPING = 1001
 
 # Dialog widget IDs
-ID_CANVAS      = 2000
-ID_SNAP_TOGGLE = 2001
+ID_CANVAS = 2000
 
 
 # ---------------------------------------------------------------------------
@@ -65,30 +64,77 @@ class ShotblocksTimelineDialog(c4d.gui.GeDialog):
 
     def CreateLayout(self):
         self.SetTitle("Shotblocks")
-        # Toolbar row
-        if self.GroupBegin(id=0, flags=c4d.BFH_SCALEFIT, cols=8, rows=1):
-            self.GroupBorderSpace(4, 4, 4, 4)
-            self.AddCheckbox(id=ID_SNAP_TOGGLE,
-                             flags=c4d.BFH_LEFT,
-                             initw=0, inith=0,
-                             name="Snap")
-            self.SetBool(ID_SNAP_TOGGLE, self.canvas._snap_enabled)
-        self.GroupEnd()
-        # Canvas row
+        # The canvas occupies the entire dialog. It draws its own left
+        # rail (Snap/Loop toggles, per-track labels) — no separate
+        # dialog-level toolbar group.
         self.AddUserArea(
             id=ID_CANVAS,
             flags=c4d.BFH_SCALEFIT | c4d.BFV_SCALEFIT,
-            initw=600,
-            inith=200,
+            initw=700,
+            inith=240,
         )
         self.AttachUserArea(self.canvas, ID_CANVAS)
+        # Back-ref so the canvas can ask us to start/stop the playback timer
+        # (canvases don't own timers in C4D 2026 — the dialog forwards Timer
+        # ticks via _playback_tick).
+        self.canvas._playback_owner_dialog = self
+        # Mirror the active doc's project frame range into our visible
+        # window on open. Subsequent doc-length changes are picked up via
+        # CoreMessage(EVMSG_CHANGE).
+        try:
+            self.canvas._fit_visible_to_doc(force=True)
+        except Exception:
+            pass
         return True
 
+    # ------------------------------------------------------------------
+    # Timer (drives playback AND hover-fade animation)
+    # ------------------------------------------------------------------
+    #
+    # C4D dialogs only support a single SetTimer rate per dialog. We
+    # multiplex playback (24 fps when active) and hover-fade animation
+    # (~60 fps when active) by always running at 60 fps when EITHER
+    # needs ticks; the canvas's _playback_tick internally rate-limits
+    # to its own fps.
+
+    _ANIM_TIMER_MS = 16  # ~60 fps when any reason needs ticks
+
+    def _refresh_timer(self):
+        """Set the timer rate based on whether anything needs ticking.
+        Called whenever playback or hover-animation state changes."""
+        needs_anim = bool(self.canvas._shot_hover_anim)
+        if self.canvas._playing or needs_anim:
+            self.SetTimer(self._ANIM_TIMER_MS)
+        else:
+            self.SetTimer(0)
+
+    def start_playback_timer(self, fps):
+        # Playback uses the unified 60 fps timer; the canvas rate-limits
+        # _playback_tick internally. fps argument kept for compatibility.
+        self._refresh_timer()
+
+    def stop_playback_timer(self):
+        self._refresh_timer()
+
+    def request_anim_tick(self):
+        """Canvas calls this when hover animation starts/changes — make
+        sure the timer is running so the next frame ticks."""
+        self._refresh_timer()
+
+    def Timer(self, msg):
+        try:
+            if self.canvas._playing:
+                self.canvas._playback_tick()
+            self.canvas._anim_tick()
+            # Stop the timer once nothing needs it anymore.
+            self._refresh_timer()
+        except Exception as e:
+            print("[Shotblocks] Timer tick raised: {}".format(e))
+            self.SetTimer(0)
+            self.canvas._playing = False
+            self.canvas._shot_hover_anim.clear()
+
     def Command(self, id, msg):
-        if id == ID_SNAP_TOGGLE:
-            self.canvas._snap_enabled = self.GetBool(ID_SNAP_TOGGLE)
-            print("[Shotblocks] snap toggle = {}".format(self.canvas._snap_enabled))
-            return True
         return c4d.gui.GeDialog.Command(self, id, msg)
 
     def CoreMessage(self, id, msg):
@@ -98,6 +144,11 @@ class ShotblocksTimelineDialog(c4d.gui.GeDialog):
         # the camera names through the cache.
         if id == c4d.EVMSG_CHANGE:
             try:
+                # If the project's total frame range changed (user dialled
+                # in a different length in project settings), refit our
+                # visible window. The helper only refits on actual length
+                # change, so this won't clobber pan/zoom on unrelated edits.
+                self.canvas._fit_visible_to_doc()
                 self.canvas.Redraw()
             except Exception:
                 pass

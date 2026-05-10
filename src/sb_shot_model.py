@@ -61,30 +61,41 @@ def _active_shot_at(shots, frame):
 # Magnetic snap (cross-track edit-point alignment)
 # ---------------------------------------------------------------------------
 
-def _collect_edit_points(shots, exclude_id=None):
+def _collect_edit_points(shots, exclude_id=None, extra_points=None):
     """All cross-track edit points: every shot's in_frame and (out_frame + 1).
     For hard cuts, those are the same set of values where one clip yields to
-    the next. Excludes the dragged shot to avoid self-snapping."""
+    the next. Excludes the dragged shot to avoid self-snapping.
+
+    `extra_points` is an optional iterable of additional snap targets the
+    caller wants treated as edit points — e.g. the playhead frame, the
+    play-range in/out, or any future user-defined markers."""
     pts = set()
     for s in shots:
         if s["id"] == exclude_id:
             continue
         pts.add(s["in_frame"])
         pts.add(s["out_frame"] + 1)
+    if extra_points:
+        for p in extra_points:
+            pts.add(int(p))
     return pts
 
 
-def _magnetic_snap_position(shots, target_id, want_in, want_out, snap_frames):
+def _magnetic_snap_position(shots, target_id, want_in, want_out, snap_frames,
+                            extra_points=None):
     """Magnetically pull (want_in, want_out) toward the nearest edit point
     if either edge is within `snap_frames` of one. Edit points come from ALL
-    tracks (Resolve/Premiere convention). Returns (snapped_in, snapped_out)
-    with the shot's duration preserved. Outside the threshold, returns the
-    inputs unchanged — the drag continues freely."""
+    tracks (Resolve/Premiere convention). Returns (snapped_in, snapped_out,
+    snapped_targets) where `snapped_targets` is a sorted tuple of the
+    edit-point frames that the result aligned with — used by the canvas
+    to draw snap-indicator lines. Outside the threshold, returns the
+    inputs unchanged with an empty targets tuple."""
     if snap_frames <= 0:
-        return want_in, want_out
-    edit_points = _collect_edit_points(shots, exclude_id=target_id)
+        return want_in, want_out, ()
+    edit_points = _collect_edit_points(shots, exclude_id=target_id,
+                                       extra_points=extra_points)
     if not edit_points:
-        return want_in, want_out
+        return want_in, want_out, ()
 
     best_offset = 0
     best_dist   = snap_frames + 1
@@ -99,51 +110,70 @@ def _magnetic_snap_position(shots, target_id, want_in, want_out, snap_frames):
             best_dist, best_offset = abs(d), d
 
     if best_dist <= snap_frames:
-        return want_in + best_offset, want_out + best_offset
-    return want_in, want_out
+        new_in  = want_in  + best_offset
+        new_out = want_out + best_offset
+        # Report every edit point the snapped shot's IN or (OUT+1) lands on,
+        # so the canvas can draw an indicator at each.
+        targets = []
+        if new_in in edit_points:
+            targets.append(new_in)
+        if (new_out + 1) in edit_points and (new_out + 1) != new_in:
+            targets.append(new_out + 1)
+        return new_in, new_out, tuple(sorted(targets))
+    return want_in, want_out, ()
 
 
-def _magnetic_snap_edge(shots, target_id, edge_frame, snap_frames):
+def _magnetic_snap_edge(shots, target_id, edge_frame, snap_frames,
+                        extra_points=None):
     """Pull a single resize edge to the nearest cross-track edit point within
     `snap_frames`. `edge_frame` is the frame the moved edge would land on
     (treat both 'left in_frame' and 'right (out_frame + 1)' as edit-point
-    candidates — the caller passes whichever one to align). Returns the
-    snapped edge frame."""
+    candidates — the caller passes whichever one to align). Returns
+    (snapped_edge_frame, snapped_targets) where snapped_targets is a tuple
+    containing the snap target frame, or empty if no snap occurred."""
     if snap_frames <= 0:
-        return edge_frame
-    edit_points = _collect_edit_points(shots, exclude_id=target_id)
+        return edge_frame, ()
+    edit_points = _collect_edit_points(shots, exclude_id=target_id,
+                                       extra_points=extra_points)
     if not edit_points:
-        return edge_frame
+        return edge_frame, ()
     best = edge_frame
     best_dist = snap_frames + 1
     for ep in edit_points:
         d = abs(ep - edge_frame)
         if d <= snap_frames and d < best_dist:
             best_dist, best = d, ep
-    return best
+    if best != edge_frame:
+        return best, (best,)
+    return edge_frame, ()
 
 
 # ---------------------------------------------------------------------------
 # Same-track overlap resolution (snap / ripple / replace)
 # ---------------------------------------------------------------------------
 
-def _resolve_position(shots, target_id, want_in, want_track, mode, snap_frames=0):
-    """Resolve a body-drag move. Returns the new shot list."""
+def _resolve_position(shots, target_id, want_in, want_track, mode, snap_frames=0,
+                      extra_points=None):
+    """Resolve a body-drag move. Returns (new_shot_list, snap_targets)
+    where snap_targets is a tuple of edit-point frames the snap aligned
+    with (empty when no snap occurred or mode != 'snap')."""
     shots = [dict(s) for s in shots]
     target = next((s for s in shots if s["id"] == target_id), None)
     if target is None:
-        return shots
+        return shots, ()
 
     duration = target["out_frame"] - target["in_frame"]
     target["track"] = max(0, min(MAX_TRACKS - 1, want_track))
     target["in_frame"]  = max(0, want_in)
     target["out_frame"] = target["in_frame"] + duration
 
+    snap_targets = ()
     if mode == "snap":
         # Cross-track magnetic snap; falls through to replace if same-track
         # overlap remains after snapping (i.e., user dragged past the snap zone).
-        new_in, new_out = _magnetic_snap_position(
-            shots, target_id, target["in_frame"], target["out_frame"], snap_frames)
+        new_in, new_out, snap_targets = _magnetic_snap_position(
+            shots, target_id, target["in_frame"], target["out_frame"],
+            snap_frames, extra_points=extra_points)
         target["in_frame"]  = new_in
         target["out_frame"] = new_out
         shots = _replace_overlap(shots, target)
@@ -152,32 +182,35 @@ def _resolve_position(shots, target_id, want_in, want_track, mode, snap_frames=0
     elif mode == "replace":
         shots = _replace_overlap(shots, target)
 
-    return shots
+    return shots, snap_targets
 
 
-def _resolve_resize(shots, target_id, edge, want_frame, mode, snap_frames=0):
-    """Resolve an edge-drag resize. `edge` is "left" or "right";
-    `want_frame` is the desired new edge frame."""
+def _resolve_resize(shots, target_id, edge, want_frame, mode, snap_frames=0,
+                    extra_points=None):
+    """Resolve an edge-drag resize. Returns (new_shot_list, snap_targets)."""
     shots = [dict(s) for s in shots]
     target = next((s for s in shots if s["id"] == target_id), None)
     if target is None:
-        return shots
+        return shots, ()
 
     if edge == "left":
         target["in_frame"] = max(0, min(want_frame, target["out_frame"] - MIN_SHOT_FRAMES))
     else:
         target["out_frame"] = max(want_frame, target["in_frame"] + MIN_SHOT_FRAMES)
 
+    snap_targets = ()
     if mode == "snap":
         if edge == "left":
-            snapped = _magnetic_snap_edge(shots, target_id,
-                                          target["in_frame"], snap_frames)
+            snapped, snap_targets = _magnetic_snap_edge(
+                shots, target_id, target["in_frame"], snap_frames,
+                extra_points=extra_points)
             target["in_frame"] = max(0, min(snapped, target["out_frame"] - MIN_SHOT_FRAMES))
         else:
             # The "cut after" is out_frame + 1 — snap that to an edit point,
             # then convert back to out_frame.
-            snapped = _magnetic_snap_edge(shots, target_id,
-                                          target["out_frame"] + 1, snap_frames)
+            snapped, snap_targets = _magnetic_snap_edge(
+                shots, target_id, target["out_frame"] + 1, snap_frames,
+                extra_points=extra_points)
             target["out_frame"] = max(target["in_frame"] + MIN_SHOT_FRAMES, snapped - 1)
         shots = _replace_overlap(shots, target)
     elif mode == "ripple":
@@ -185,7 +218,7 @@ def _resolve_resize(shots, target_id, edge, want_frame, mode, snap_frames=0):
     elif mode == "replace":
         shots = _replace_overlap(shots, target)
 
-    return shots
+    return shots, snap_targets
 
 
 def _ripple_around(shots, target):
@@ -232,7 +265,7 @@ def _ripple_around(shots, target):
 
 def _resolve_group_move(shots, target_ids, anchor_id,
                         delta_frames, delta_track,
-                        mode, snap_frames=0):
+                        mode, snap_frames=0, extra_points=None):
     """Move every shot in target_ids by (delta_frames, delta_track) as a
     rigid group. anchor_id is the shot the user grabbed — used as the
     magnetic-snap reference in snap mode.
@@ -251,10 +284,10 @@ def _resolve_group_move(shots, target_ids, anchor_id,
     """
     target_ids = set(target_ids)
     if not target_ids:
-        return [dict(s) for s in shots]
+        return [dict(s) for s in shots], ()
     selected = [s for s in shots if s["id"] in target_ids]
     if not selected:
-        return [dict(s) for s in shots]
+        return [dict(s) for s in shots], ()
 
     min_in  = min(s["in_frame"] for s in selected)
     min_trk = min(_shot_track(s) for s in selected)
@@ -266,13 +299,15 @@ def _resolve_group_move(shots, target_ids, anchor_id,
     if max_trk + delta_track > MAX_TRACKS - 1:
         delta_track = MAX_TRACKS - 1 - max_trk
 
+    snap_targets = ()
     if mode == "snap" and snap_frames > 0:
         anchor = next((s for s in selected if s["id"] == anchor_id), selected[0])
         non_selected = [s for s in shots if s["id"] not in target_ids]
         a_new_in  = anchor["in_frame"]  + delta_frames
         a_new_out = anchor["out_frame"] + delta_frames
-        snapped_in, _ = _magnetic_snap_position(
-            non_selected, anchor_id, a_new_in, a_new_out, snap_frames)
+        snapped_in, _, snap_targets = _magnetic_snap_position(
+            non_selected, anchor_id, a_new_in, a_new_out, snap_frames,
+            extra_points=extra_points)
         delta_frames += (snapped_in - a_new_in)
 
     moved = []
@@ -291,7 +326,7 @@ def _resolve_group_move(shots, target_ids, anchor_id,
     for m in moved:
         out.append(m)
         out = _replace_overlap(out, m)
-    return out
+    return out, snap_targets
 
 
 def _replace_overlap(shots, target):

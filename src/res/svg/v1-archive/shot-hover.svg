@@ -1,0 +1,20 @@
+<svg width="200" height="48" viewBox="0 0 200 48" fill="none" xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink">
+<rect width="200" height="48" rx="8" fill="#1C1C1C"/>
+<path d="M0 8C0 3.58172 3.58172 0 8 0H12V48H8C3.58172 48 0 44.4183 0 40V8Z" fill="#007AFF"/>
+<rect x="0.5" y="0.5" width="199" height="47" rx="7.5" stroke="#007AFF"/>
+<path d="M33 36L38.223 39.482C38.2983 39.5321 38.3858 39.5609 38.4761 39.5652C38.5664 39.5695 38.6563 39.5493 38.736 39.5066C38.8157 39.4639 38.8824 39.4004 38.9289 39.3228C38.9754 39.2452 39 39.1565 39 39.066V30.87C39 30.782 38.9768 30.6956 38.9328 30.6195C38.8887 30.5433 38.8253 30.4801 38.7491 30.4363C38.6728 30.3925 38.5863 30.3696 38.4983 30.3699C38.4103 30.3702 38.324 30.3937 38.248 30.438L33 33.5" stroke="#242424" stroke-linecap="round" stroke-linejoin="round"/>
+<path d="M31 29H21C19.8954 29 19 29.8954 19 31V39C19 40.1046 19.8954 41 21 41H31C32.1046 41 33 40.1046 33 39V31C33 29.8954 32.1046 29 31 29Z" stroke="#242424" stroke-linecap="round" stroke-linejoin="round"/>
+<rect x="4" y="19" width="6" height="10" fill="url(#pattern0_4_593)"/>
+<path d="M200 40C200 44.4183 196.418 48 192 48L188 48L188 -1.04907e-06L192 -6.99382e-07C196.418 -3.13124e-07 200 3.58172 200 8L200 40Z" fill="#007AFF"/>
+<rect x="196" y="29" width="6" height="10" transform="rotate(-180 196 29)" fill="url(#pattern1_4_593)"/>
+<defs>
+<pattern id="pattern0_4_593" patternUnits="userSpaceOnUse" patternTransform="matrix(3.24 0 0 3.24 4 23.1)" preserveAspectRatio="none" viewBox="0 0 7.2 7.2" width="1" height="1">
+<g id="pattern0_4_593_inner">
+<circle cx="2" cy="2" r="2" fill="#F0F0F0"/>
+</g>
+</pattern><pattern id="pattern1_4_593" patternUnits="userSpaceOnUse" patternTransform="matrix(3.24 0 0 3.24 196 33.1)" preserveAspectRatio="none" viewBox="0 0 7.2 7.2" width="1" height="1">
+<g id="pattern1_4_593_inner">
+<circle cx="2" cy="2" r="2" fill="#F0F0F0"/>
+</g>
+</pattern></defs>
+</svg>

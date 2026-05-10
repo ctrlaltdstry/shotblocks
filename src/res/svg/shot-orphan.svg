@@ -1,0 +1,21 @@
+<svg width="200" height="48" viewBox="0 0 200 48" fill="none" xmlns="http://www.w3.org/2000/svg">
+<rect width="200" height="48" rx="8" fill="#1C1C1C"/>
+<rect x="0.5" y="0.5" width="199" height="47" rx="7.5" stroke="#FF3B30" stroke-dasharray="2 2"/>
+<path d="M27.66 29H31C31.5305 29 32.0392 29.2107 32.4142 29.5858C32.7893 29.9609 33 30.4696 33 31V33.5L38.248 30.438C38.324 30.3937 38.4104 30.3702 38.4983 30.3699C38.5863 30.3696 38.6728 30.3925 38.7491 30.4363C38.8254 30.4801 38.8888 30.5433 38.9328 30.6194C38.9769 30.6956 39.0001 30.782 39 30.87V39.066" stroke="#FF3B30" stroke-linecap="round" stroke-linejoin="round"/>
+<path d="M33 39C33 39.5304 32.7893 40.0391 32.4142 40.4142C32.0391 40.7893 31.5304 41 31 41H21C20.4696 41 19.9609 40.7893 19.5858 40.4142C19.2107 40.0391 19 39.5304 19 39V31C19 30.4696 19.2107 29.9609 19.5858 29.5858C19.9609 29.2107 20.4696 29 21 29H23" stroke="#FF3B30" stroke-linecap="round" stroke-linejoin="round"/>
+<path d="M20 26L36 42" stroke="#FF3B30" stroke-linecap="round" stroke-linejoin="round"/>
+<path d="M0 8.00012C0 3.58185 3.58172 0.00012207 8 0.00012207H12V48.0001H8C3.58172 48.0001 0 44.4184 0 40.0001V8.00012Z" fill="#FF3B30"/>
+<circle cx="5" cy="21.0001" r="1" fill="white"/>
+<circle cx="5" cy="24.0001" r="1" fill="white"/>
+<circle cx="5" cy="27.0001" r="1" fill="white"/>
+<circle cx="8" cy="21.0001" r="1" fill="white"/>
+<circle cx="8" cy="24.0001" r="1" fill="white"/>
+<circle cx="8" cy="27.0001" r="1" fill="white"/>
+<path d="M200 40C200 44.4183 196.418 48 192 48L188 48L188 -1.04907e-06L192 -6.99382e-07C196.418 -3.13124e-07 200 3.58172 200 8L200 40Z" fill="#FF3B30"/>
+<circle cx="195" cy="27" r="1" transform="rotate(-180 195 27)" fill="white"/>
+<circle cx="195" cy="24" r="1" transform="rotate(-180 195 24)" fill="white"/>
+<circle cx="195" cy="21" r="1" transform="rotate(-180 195 21)" fill="white"/>
+<circle cx="192" cy="27" r="1" transform="rotate(-180 192 27)" fill="white"/>
+<circle cx="192" cy="24" r="1" transform="rotate(-180 192 24)" fill="white"/>
+<circle cx="192" cy="21" r="1" transform="rotate(-180 192 21)" fill="white"/>
+</svg>

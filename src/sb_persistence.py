@@ -195,7 +195,12 @@ def _clear_shot_cam_link(doc, shot_id):
 # ---------------------------------------------------------------------------
 
 def _read_range(doc):
-    """Return (in_frame, out_frame) for the play range. Defaults if absent."""
+    """Return (in_frame, out_frame) for the play range. Defaults if absent.
+
+    The play range is plugin-owned (persisted on our helper null) — distinct
+    from C4D's preview-range bar, which is a timeline zoom widget rather
+    than a playback gate. Our range is the "from cursor to out, then stop
+    or loop" boundary the spacebar engine respects."""
     helper = _find_helper(doc)
     if helper is None:
         return DEFAULT_RANGE_IN, DEFAULT_RANGE_OUT
@@ -217,7 +222,7 @@ def _read_range(doc):
 
 
 def _write_range(doc, in_frame, out_frame, with_undo=True):
-    """Persist the play range. Wraps in undo by default."""
+    """Persist the play range to our helper null. Wraps in undo by default."""
     helper = _get_or_create_helper(doc)
     bc = helper.GetDataInstance()
     if bc is None:

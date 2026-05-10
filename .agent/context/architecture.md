@@ -97,6 +97,8 @@ When the document advances to frame N:
 
 This flow runs every frame during playback. Performance discipline lives in the Shotblocks tag's behavior code, not the sequencer core — the sequencer just routes; the tag does the per-frame math (when active).
 
+**v6 status:** spacebar playback engine implements steps 1, 2, and 4 (untagged passthrough — active-shot lookup, active BaseDraw camera routing, the camera's own animation rendering directly). Steps 3, 5, 6 await the Shotblocks-tag pipeline. Mid-playback orphan or gap = hold last camera, keep playing; the dashed-red orphan block is the user's signal.
+
 ### Slate in additive mode
 
 A subtle point: when the slate engine re-times a shot (adjusting in/out points to align action frames to beats), the user's keyframed animation effectively gets time-warped to fit the new duration. Some users will not want this — they crafted their animation to specific timing and don't want it stretched.
