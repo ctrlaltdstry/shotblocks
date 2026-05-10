@@ -117,38 +117,26 @@ def is_wav_path(path):
     return os.path.splitext(path)[1].lower() == ".wav"
 
 
-def is_audio_path(path):
-    """True if the path's extension matches any decoder we ship.
-    Drag-receive uses this to pick which paths to accept.
+import sb_audio_decode_mp3 as _mp3
 
-    The MP3 branch only returns True when the bundled minimp3 DLL
-    actually loaded — drops of `.mp3` files are silently rejected on
-    a build where the DLL is missing or unloadable, instead of
-    failing mid-import."""
+
+def is_audio_path(path):
+    """True if the extension matches a decoder we ship and that
+    decoder is actually loadable. .mp3 paths are rejected when the
+    bundled minimp3 DLL is missing — drag-receive then silently
+    ignores the drop instead of failing mid-import."""
     if is_wav_path(path):
         return True
-    try:
-        from sb_audio_decode_mp3 import is_mp3_path, is_available
-        if is_mp3_path(path) and is_available():
-            return True
-    except ImportError:
-        pass
-    return False
+    return _mp3.is_mp3_path(path) and _mp3.is_available()
 
 
 def load_audio(path):
-    """Format-agnostic decode dispatcher. Picks `load_wav` or
-    `load_mp3` by extension. Raises `AudioDecodeError` if no decoder
-    is available for the file's extension."""
+    """Format-agnostic decode dispatcher. Routes by extension; raises
+    AudioDecodeError if no decoder is available for the path."""
     if is_wav_path(path):
         return load_wav(path)
+    if _mp3.is_mp3_path(path):
+        return _mp3.load_mp3(path)
     ext = os.path.splitext(path)[1].lower()
-    if ext == ".mp3":
-        try:
-            from sb_audio_decode_mp3 import load_mp3
-        except ImportError as e:
-            raise AudioDecodeError(
-                "MP3 decoder module not available: {}".format(e))
-        return load_mp3(path)
     raise AudioDecodeError(
         "unsupported audio format: {} (only .wav and .mp3)".format(ext))

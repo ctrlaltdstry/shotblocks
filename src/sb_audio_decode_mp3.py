@@ -106,12 +106,10 @@ def load_mp3(path):
     """Decode an MP3 file and return a `DecodedAudio`.
 
     Raises `AudioDecodeError` on any failure (DLL missing, file
-    missing, decode error, oversized).
+    unreadable, decode error, oversized).
     """
     if not path:
         raise AudioDecodeError("empty audio path")
-    if not os.path.exists(path):
-        raise AudioDecodeError("audio file not found: {}".format(path))
 
     dll = _load()
     if dll is None:
@@ -140,7 +138,7 @@ def load_mp3(path):
     n_int16      = int(out_n.value)
     sample_rate  = int(out_rate.value)
     n_channels   = int(out_ch.value)
-    sample_width = 2  # minimp3 with MINIMP3_FLOAT_OUTPUT 0 → int16
+    sample_width = 2
 
     # Validate before copying out — failure path still must free the
     # native buffer.
