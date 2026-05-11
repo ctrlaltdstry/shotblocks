@@ -44,6 +44,36 @@ CONTAINER Tshotblocks
             DEFAULT 1;
         }
 
+        GROUP SHOTBLOCKS_GRP_NOISE
+        {
+            DEFAULT 1;
+            LONG SHOTBLOCKS_NOISE_PROFILE
+            {
+                CYCLE
+                {
+                    SHOTBLOCKS_NOISE_PROFILE_OFF;
+                    SHOTBLOCKS_NOISE_PROFILE_HANDHELD;
+                }
+            }
+            REAL SHOTBLOCKS_NOISE_STRENGTH { MIN 0.0; MAX 3.0; STEP 0.01; }
+            REAL SHOTBLOCKS_NOISE_SPEED { MIN 0.25; MAX 3.0; STEP 0.05; }
+            LONG SHOTBLOCKS_NOISE_SEED { }
+            BOOL SHOTBLOCKS_NOISE_WALKING { }
+            REAL SHOTBLOCKS_NOISE_STEP_RATE { MIN 0.5; MAX 4.0; STEP 0.05; }
+        }
+
+        GROUP SHOTBLOCKS_GRP_ZOOM
+        {
+            DEFAULT 1;
+            BOOL SHOTBLOCKS_ZOOM_ENABLED { }
+            REAL SHOTBLOCKS_ZOOM_RATE { MIN 0.05; MAX 3.0; STEP 0.01; }
+            REAL SHOTBLOCKS_ZOOM_STRENGTH { MIN 1.0; MAX 4.0; STEP 0.01; }
+            REAL SHOTBLOCKS_ZOOM_HOLD { MIN 0.2; MAX 3.0; STEP 0.05; }
+            REAL SHOTBLOCKS_ZOOM_RAMP_IN { MIN 0.05; MAX 1.0; STEP 0.01; }
+            REAL SHOTBLOCKS_ZOOM_RAMP_OUT { MIN 0.05; MAX 2.0; STEP 0.01; }
+            REAL SHOTBLOCKS_ZOOM_RETURN { MIN 0.0; MAX 1.0; STEP 0.01; }
+        }
+
         GROUP SHOTBLOCKS_GRP_ADVANCED
         {
             DEFAULT 0;

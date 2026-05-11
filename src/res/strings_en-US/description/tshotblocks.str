@@ -14,8 +14,25 @@ STRINGTABLE Tshotblocks
     SHOTBLOCKS_LOOK_AT_STRENGTH       "Look-At Strength";
     SHOTBLOCKS_LOOK_AT_ROLL           "Roll";
     SHOTBLOCKS_BANK_INTO_TURNS        "Bank Into Turns";
+    SHOTBLOCKS_NOISE_PROFILE          "Noise Profile";
+    SHOTBLOCKS_NOISE_PROFILE_OFF      "Off";
+    SHOTBLOCKS_NOISE_PROFILE_HANDHELD "Handheld";
+    SHOTBLOCKS_NOISE_STRENGTH         "Noise Strength";
+    SHOTBLOCKS_NOISE_SEED             "Noise Seed";
+    SHOTBLOCKS_NOISE_WALKING          "Walking";
+    SHOTBLOCKS_NOISE_STEP_RATE        "Step Rate (Hz)";
+    SHOTBLOCKS_NOISE_SPEED            "Noise Speed";
+    SHOTBLOCKS_ZOOM_ENABLED           "Quick Zoom";
+    SHOTBLOCKS_ZOOM_RATE              "Zoom Rate (zooms/sec)";
+    SHOTBLOCKS_ZOOM_STRENGTH          "Zoom Strength";
+    SHOTBLOCKS_ZOOM_HOLD              "Zoom Hold (sec)";
+    SHOTBLOCKS_ZOOM_RAMP_IN           "Zoom Ramp In (sec)";
+    SHOTBLOCKS_ZOOM_RAMP_OUT          "Zoom Ramp Out (sec)";
+    SHOTBLOCKS_ZOOM_RETURN            "Zoom Return Probability";
     SHOTBLOCKS_GRP_DAMPING            "Damping";
     SHOTBLOCKS_GRP_LOOK_AT            "Look At";
     SHOTBLOCKS_GRP_FRAMING            "Framing";
+    SHOTBLOCKS_GRP_NOISE              "Noise";
+    SHOTBLOCKS_GRP_ZOOM               "Quick Zoom";
     SHOTBLOCKS_GRP_ADVANCED           "Advanced";
 }

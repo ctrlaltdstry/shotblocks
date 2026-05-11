@@ -29,6 +29,8 @@ from sb_rig_spring import (
 from sb_rig_quat import (
     to_hpb, from_basis, slerp as quat_slerp,
 )
+import sb_rig_noise
+import sb_rig_zoom
 
 
 # Tag parameter IDs (match res/description/tshotblocks.h)
@@ -45,7 +47,27 @@ SHOTBLOCKS_UP_TARGET            = 1021
 SHOTBLOCKS_LOOK_AT_STRENGTH     = 1022
 SHOTBLOCKS_LOOK_AT_ROLL         = 1023  # bank offset in radians (param is degrees in .res; C4D converts)
 SHOTBLOCKS_BANK_INTO_TURNS      = 1024
+SHOTBLOCKS_NOISE_PROFILE        = 1030
+SHOTBLOCKS_NOISE_STRENGTH       = 1031
+SHOTBLOCKS_NOISE_SEED           = 1032
+SHOTBLOCKS_NOISE_WALKING        = 1033
+SHOTBLOCKS_NOISE_STEP_RATE      = 1034
+SHOTBLOCKS_NOISE_SPEED          = 1035
+SHOTBLOCKS_ZOOM_ENABLED         = 1040
+SHOTBLOCKS_ZOOM_RATE            = 1041
+SHOTBLOCKS_ZOOM_STRENGTH        = 1042
+SHOTBLOCKS_ZOOM_HOLD            = 1043
+SHOTBLOCKS_ZOOM_RAMP_IN         = 1044
+SHOTBLOCKS_ZOOM_RAMP_OUT        = 1045
+SHOTBLOCKS_ZOOM_RETURN          = 1046
 SHOTBLOCKS_GRP_FRAMING          = 1103  # group host in tshotblocks.res for the UD-injected Frame Offset
+
+# Fallback distance (cm) for converting viewport-fraction noise into
+# world units when no look-at target gives us a natural reference.
+# ~1000cm = "typical interior scene." If users routinely work at
+# very different scales, expose an override; for now this just
+# bounds the noise magnitude to something sensible scene-to-scene.
+_NOISE_FALLBACK_DISTANCE = 1000.0
 
 # Yaw rate at which Bank-Into-Turns produces full Roll. Calibrated
 # so a "moderately fast curve" (about 6° heading change per frame at
@@ -127,6 +149,8 @@ def _state_for(tag):
             "overrides": None,
             "reset_pending": True,    # first Execute snaps to target
             "prev_heading": None,     # for Bank-Into-Turns yaw rate
+            "zoom_schedule": sb_rig_zoom.make_schedule_state(),
+            "zoom_focal_baseline": None,
         }
         _RUNTIME[key] = st
     return st
@@ -321,6 +345,19 @@ class ShotblocksTag(c4d.plugins.TagData):
         node[SHOTBLOCKS_LOOK_AT_STRENGTH]   = 1.0
         node[SHOTBLOCKS_LOOK_AT_ROLL]       = 0.0
         node[SHOTBLOCKS_BANK_INTO_TURNS]    = False
+        node[SHOTBLOCKS_NOISE_PROFILE]      = sb_rig_noise.PROFILE_OFF
+        node[SHOTBLOCKS_NOISE_STRENGTH]     = 0.5
+        node[SHOTBLOCKS_NOISE_SEED]         = 0
+        node[SHOTBLOCKS_NOISE_WALKING]      = False
+        node[SHOTBLOCKS_NOISE_STEP_RATE]    = 1.8
+        node[SHOTBLOCKS_NOISE_SPEED]        = 1.0
+        node[SHOTBLOCKS_ZOOM_ENABLED]       = False
+        node[SHOTBLOCKS_ZOOM_RATE]          = 0.2
+        node[SHOTBLOCKS_ZOOM_STRENGTH]      = 1.5
+        node[SHOTBLOCKS_ZOOM_HOLD]          = 1.0
+        node[SHOTBLOCKS_ZOOM_RAMP_IN]       = 0.25
+        node[SHOTBLOCKS_ZOOM_RAMP_OUT]      = 0.6
+        node[SHOTBLOCKS_ZOOM_RETURN]        = 0.7
         # Target and Up Target start unset (BaseLinks default to None).
         # Frame Offset is a UserData slot — added in _on_tag_applied
         # (Init is called for fresh tags before they're attached to
@@ -472,7 +509,19 @@ class ShotblocksTag(c4d.plugins.TagData):
             and not st["reset_pending"]
         )
         if already_stepped_this_frame:
-            _write_back(cam, spring)
+            # Replay the same final pose we wrote on this frame's
+            # first call. Re-sampling noise would give identical
+            # values (stateless sample), but the cached pose also
+            # covers the no-noise case so this is the simple path.
+            cached_pos = st.get("last_output_pos")
+            cached_rot = st.get("last_output_rot")
+            if cached_pos is not None and cached_rot is not None:
+                _write_back(cam, cached_pos, cached_rot)
+            else:
+                pos, _ = spring["pos"]
+                rot, _ = spring["rot"]
+                _write_back(cam, pos, rot)
+            _apply_quick_zoom(tag, st, cam, doc, time, fps)
             return c4d.EXECUTIONRESULT_OK
         if mode == SHOTBLOCKS_MODE_REPLACE and look_at_target is None:
             if not st.get("_replace_warned"):
@@ -571,7 +620,16 @@ class ShotblocksTag(c4d.plugins.TagData):
             reset_to_target(spring, target_pos, target_rot)
             st["reset_pending"] = False
             spring["last_frame"] = cur_frame
-            _write_back(cam, spring)
+            # Reset frame lands on the clean target — no noise
+            # applied, so the camera doesn't pop to an offset value
+            # on shot boundaries. Next frame's full pipeline takes
+            # over.
+            pos, _ = spring["pos"]
+            rot, _ = spring["rot"]
+            st["last_output_pos"] = pos
+            st["last_output_rot"] = rot
+            _write_back(cam, pos, rot)
+            _apply_quick_zoom(tag, st, cam, doc, time, fps)
             return c4d.EXECUTIONRESULT_OK
         if st["reset_pending"]:
             st["reset_pending"] = False
@@ -625,6 +683,20 @@ class ShotblocksTag(c4d.plugins.TagData):
             has_explicit_source=has_explicit_bank_source)
         st["prev_heading"] = heading
 
+        # Noise: stateless sample at the current frame. `*_pre` adds
+        # to the target before the spring step (low-frequency drift
+        # gets shaped by spring); `*_post` adds to the spring's
+        # output (high-frequency tremor survives the low-pass).
+        noise_pre_pos, noise_pre_rot, noise_post_pos, noise_post_rot = \
+            _sample_noise_world(tag, st, cur_frame, fps,
+                                cam, look_at_target, doc)
+        target_pos = (target_pos[0] + noise_pre_pos[0],
+                      target_pos[1] + noise_pre_pos[1],
+                      target_pos[2] + noise_pre_pos[2])
+        target_rot = (target_rot[0] + noise_pre_rot[0],
+                      target_rot[1] + noise_pre_rot[1],
+                      target_rot[2] + noise_pre_rot[2])
+
         # Position spring.
         pos, vel = spring["pos"]
         nx, nvx = step_channel(pos[0], vel[0], target_pos[0], dt,
@@ -658,7 +730,20 @@ class ShotblocksTag(c4d.plugins.TagData):
         spring["rot"] = [(rhx, rhy, rhz), (rhvx, rhvy, rhvz)]
 
         spring["last_frame"] = cur_frame
-        _write_back(cam, spring)
+
+        # Post-spring noise: tremor (high-freq) added after the
+        # spring so the spring's low-pass doesn't eat it. The
+        # camera ends up at (spring_output + post_noise).
+        final_pos = (nx  + noise_post_pos[0],
+                     ny  + noise_post_pos[1],
+                     nz  + noise_post_pos[2])
+        final_rot = (rhx + noise_post_rot[0],
+                     rhy + noise_post_rot[1],
+                     rhz + noise_post_rot[2])
+        st["last_output_pos"] = final_pos
+        st["last_output_rot"] = final_rot
+        _write_back(cam, final_pos, final_rot)
+        _apply_quick_zoom(tag, st, cam, doc, time, fps)
         return c4d.EXECUTIONRESULT_OK
 
 
@@ -1064,6 +1149,197 @@ def _unwrap_angle(target, reference):
     return target
 
 
+def _apply_quick_zoom(tag, st, cam, doc, time, fps):
+    """If the Quick Zoom behavior is enabled, sample the schedule
+    at the current time and multiply the camera's focal length by
+    the result. Idle = 1.0 = no change.
+
+    Baseline focal length: the keyframed value if the camera has a
+    FOCUS CTrack; otherwise the camera's persisted focal length
+    (snapshotted on first sample when the multiplier is 1.0, so we
+    don't compound across frames).
+
+    When zoom is disabled, restore the baseline if we have one
+    cached (so disabling cleanly reverts the focal length).
+    """
+    if cam is None:
+        return
+    if not bool(tag[SHOTBLOCKS_ZOOM_ENABLED]):
+        # Restore baseline if we'd modified it before.
+        baseline = st.get("zoom_focal_baseline")
+        if baseline is not None:
+            try:
+                cam[c4d.CAMERAOBJECT_FOCUS] = baseline
+            except Exception:
+                pass
+            st["zoom_focal_baseline"] = None
+        return
+
+    # Resolve baseline. Always prefer the keyframed value if present;
+    # only fall back to the cached baseline (or current focus) when
+    # there's no track.
+    base_focal = _baseline_focal(cam, doc, time, fps, st)
+    if base_focal is None or base_focal <= 0.0:
+        return
+
+    rate         = float(tag[SHOTBLOCKS_ZOOM_RATE]     or 0.2)
+    strength     = float(tag[SHOTBLOCKS_ZOOM_STRENGTH] or 1.5)
+    hold         = float(tag[SHOTBLOCKS_ZOOM_HOLD]     or 1.0)
+    ramp_in      = float(tag[SHOTBLOCKS_ZOOM_RAMP_IN]  or 0.25)
+    ramp_out     = float(tag[SHOTBLOCKS_ZOOM_RAMP_OUT] or 0.6)
+    return_prob  = float(tag[SHOTBLOCKS_ZOOM_RETURN]   or 0.7)
+
+    # Reuse the noise seed so zoom and noise stay coordinated per
+    # tag (different tags get different zoom schedules without any
+    # additional storage).
+    seed = int(tag[SHOTBLOCKS_NOISE_SEED] or 0)
+    if seed == 0:
+        key = _state_key(tag)
+        seed = key[1] if isinstance(key, tuple) and len(key) >= 2 else 1
+        if seed == 0:
+            seed = 1
+
+    t_now = time.Get() if hasattr(time, "Get") else (
+        time.GetFrame(fps) / float(fps))
+
+    mult = sb_rig_zoom.sample_zoom_multiplier(
+        st["zoom_schedule"], t_now,
+        rate, strength, hold, ramp_in, ramp_out, return_prob, seed)
+
+    try:
+        cam[c4d.CAMERAOBJECT_FOCUS] = base_focal * mult
+    except Exception as e:
+        if not getattr(_apply_quick_zoom, "_warned", False):
+            print("[Shotblocks] Quick zoom focal write failed: {}".format(e))
+            _apply_quick_zoom._warned = True
+
+
+# Cache-resolve the FOCUS CTrack DescID once. It's the focal length
+# parameter of a CAMERAOBJECT.
+_FOCAL_DESC = c4d.DescID(
+    c4d.DescLevel(c4d.CAMERAOBJECT_FOCUS, c4d.DTYPE_REAL, 0))
+
+
+def _baseline_focal(cam, doc, time, fps, st):
+    """Return the camera's UN-zoomed focal length (mm). Prefer the
+    keyframed value when a FOCUS CTrack exists — that's the user's
+    intent and isn't polluted by our own writes. Otherwise return
+    a cached snapshot taken when zoom was idle so we don't compound
+    across frames.
+    """
+    track = cam.GetFirstCTrack()
+    while track is not None:
+        try:
+            if track.GetDescriptionID() == _FOCAL_DESC:
+                return float(track.GetValue(doc, time, fps))
+        except Exception:
+            pass
+        track = track.GetNext()
+
+    # No track. Snapshot the current value on first call so the
+    # baseline doesn't drift when we start writing.
+    cached = st.get("zoom_focal_baseline")
+    if cached is None:
+        try:
+            cached = float(cam[c4d.CAMERAOBJECT_FOCUS])
+        except Exception:
+            return None
+        if cached <= 0.0:
+            return None
+        st["zoom_focal_baseline"] = cached
+    return cached
+
+
+def _sample_noise_world(tag, st, cur_frame, fps, cam, look_at_target, doc):
+    """Sample the tag's noise profile at the current frame and
+    return four world-space 3-tuples:
+        (pos_pre, rot_pre, pos_post, rot_post)
+
+    `pos_*` are converted from viewport-fraction (the units the
+    noise module emits) to world units via the camera's FOV and a
+    reference distance — the look-at target distance when one is
+    set, else _NOISE_FALLBACK_DISTANCE. Same self-scaling logic as
+    v12 Frame Offset.
+
+    `rot_*` are already in radians.
+
+    Short-circuits to all-zeros when profile=Off or strength=0 —
+    that's the "byte-for-byte identical to current behavior"
+    guarantee for Profile = Off.
+    """
+    profile = int(tag[SHOTBLOCKS_NOISE_PROFILE])
+    if profile == sb_rig_noise.PROFILE_OFF:
+        return _ZERO3, _ZERO3, _ZERO3, _ZERO3
+    strength = float(tag[SHOTBLOCKS_NOISE_STRENGTH] or 0.0)
+    if strength <= 0.0:
+        return _ZERO3, _ZERO3, _ZERO3, _ZERO3
+
+    # Seed: an explicit non-zero seed wins; otherwise fall back to
+    # the tag's stable BC marker so every tag's "default seed"
+    # differs without the user touching anything.
+    seed = int(tag[SHOTBLOCKS_NOISE_SEED] or 0)
+    if seed == 0:
+        key = _state_key(tag)
+        # key is ("bc", marker) or ("pyid", id(tag))
+        seed = key[1] if isinstance(key, tuple) and len(key) >= 2 else 1
+        if seed == 0:
+            seed = 1
+
+    walking = bool(tag[SHOTBLOCKS_NOISE_WALKING])
+    step_rate = float(tag[SHOTBLOCKS_NOISE_STEP_RATE] or 1.8)
+    speed = float(tag[SHOTBLOCKS_NOISE_SPEED] or 1.0)
+    sample = sb_rig_noise.sample_profile(
+        profile, cur_frame, fps, seed,
+        walking=walking, step_rate_hz=step_rate, speed=speed)
+
+    # Convert position-fraction → world units.
+    distance = _noise_reference_distance(cam, look_at_target)
+    try:
+        fov_h, fov_v = _camera_fov_radians(cam, doc)
+    except Exception:
+        fov_h, fov_v = 0.5, 0.3   # ~28°/17°, safe fallback
+    from math import tan
+    half_w = distance * tan(fov_h * 0.5)
+    half_h = distance * tan(fov_v * 0.5)
+    # x/z scale to half_w (lateral), y to half_h (vertical). Factor
+    # of 2 because the viewport fraction is in [-0.5, +0.5] range
+    # and half_w is the half-width — one unit of fraction = full
+    # width = 2 * half_w.
+    sx = 2.0 * half_w * strength
+    sy = 2.0 * half_h * strength
+    sz = 2.0 * half_w * strength
+    pos_pre  = (sample["pos_pre"][0]  * sx,
+                sample["pos_pre"][1]  * sy,
+                sample["pos_pre"][2]  * sz)
+    pos_post = (sample["pos_post"][0] * sx,
+                sample["pos_post"][1] * sy,
+                sample["pos_post"][2] * sz)
+    rot_pre  = (sample["rot_pre"][0]  * strength,
+                sample["rot_pre"][1]  * strength,
+                sample["rot_pre"][2]  * strength)
+    rot_post = (sample["rot_post"][0] * strength,
+                sample["rot_post"][1] * strength,
+                sample["rot_post"][2] * strength)
+    return pos_pre, rot_pre, pos_post, rot_post
+
+
+_ZERO3 = (0.0, 0.0, 0.0)
+
+
+def _noise_reference_distance(cam, look_at_target):
+    """Pick a sensible distance (cm) for converting viewport-fraction
+    noise into world units. Prefer the look-at target's distance from
+    the camera; fall back to a fixed value if no target is set."""
+    if look_at_target is not None and cam is not None:
+        try:
+            d = (look_at_target.GetMg().off - cam.GetMg().off).GetLength()
+            if d > 1.0:
+                return d
+        except Exception:
+            pass
+    return _NOISE_FALLBACK_DISTANCE
+
+
 def _slerp_hpb(a, b, t):
     """Slerp between two HPB rotations via quaternion. Returns
     (h, p, b) tuple."""
@@ -1079,8 +1355,13 @@ def _slerp_hpb(a, b, t):
 
 
 
-def _write_back(cam, spring):
-    """Write the smoothed pose back to the camera.
+def _write_back(cam, pos, rot):
+    """Write a smoothed pose back to the camera.
+
+    `pos` and `rot` are 3-tuples of floats (local position and HPB
+    radians). The caller decides what they are — spring output
+    alone, or spring output plus post-spring noise — so this
+    function stays oblivious to the noise composition.
 
     Writes BOTH the local channels (SetRelPos/SetRelRot) AND the
     world matrix (SetMg). The redundancy is intentional: C4D's
@@ -1090,8 +1371,6 @@ def _write_back(cam, spring):
     channels. Whichever path "wins" in C4D's evaluation order, the
     smoothed value ends up at the camera.
     """
-    pos, _ = spring["pos"]
-    rot, _ = spring["rot"]
     cam.SetRelPos(c4d.Vector(pos[0], pos[1], pos[2]))
     cam.SetRelRot(c4d.Vector(rot[0], rot[1], rot[2]))
 
