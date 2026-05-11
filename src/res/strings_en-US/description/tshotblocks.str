@@ -12,7 +12,10 @@ STRINGTABLE Tshotblocks
     SHOTBLOCKS_LOOK_AT_TARGET         "Target";
     SHOTBLOCKS_UP_TARGET              "Up Target";
     SHOTBLOCKS_LOOK_AT_STRENGTH       "Look-At Strength";
+    SHOTBLOCKS_LOOK_AT_ROLL           "Roll";
+    SHOTBLOCKS_BANK_INTO_TURNS        "Bank Into Turns";
     SHOTBLOCKS_GRP_DAMPING            "Damping";
     SHOTBLOCKS_GRP_LOOK_AT            "Look At";
+    SHOTBLOCKS_GRP_FRAMING            "Framing";
     SHOTBLOCKS_GRP_ADVANCED           "Advanced";
 }

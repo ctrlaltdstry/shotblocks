@@ -131,8 +131,22 @@ class ShotblocksTimelineDialog(c4d.gui.GeDialog):
         # worker itself signals completion via SpecialEventAdd so the
         # timer can sleep again while it runs.
         peak_rebuild_pending = self.canvas._pending_peak_rebuild_t > 0.0
-        if (self.canvas._playing or needs_anim or meter_decay
-                or peak_rebuild_pending):
+        if self.canvas._playing:
+            # During playback, run the timer at the document's frame
+            # rate (typically 24 fps → 41ms). The previous unified
+            # 60 fps rate fired the timer ~2.5× per content frame;
+            # since playback_tick rate-limits to doc fps internally,
+            # most of those ticks were no-ops, producing an irregular
+            # advance cadence and visible viewport stutter. Matching
+            # the timer to doc fps gives one tick = one frame advance
+            # = one SetTime + EventAdd, evenly spaced in wall time.
+            try:
+                doc_fps = self.canvas._doc_fps(c4d.documents.GetActiveDocument())
+            except Exception:
+                doc_fps = 24
+            interval_ms = max(1, int(1000 / max(1, doc_fps)))
+            self.SetTimer(interval_ms)
+        elif needs_anim or meter_decay or peak_rebuild_pending:
             self.SetTimer(self._ANIM_TIMER_MS)
         else:
             self.SetTimer(0)
@@ -190,18 +204,18 @@ class ShotblocksTimelineDialog(c4d.gui.GeDialog):
         # the camera names through the cache.
         if id == c4d.EVMSG_CHANGE:
             try:
-                # Suppress redraws while C4D's native playback is
-                # running. EVMSG_CHANGE fires on every animation frame,
-                # and a full canvas redraw (every shot block + waveform
-                # + meter + camera-name resolution) is expensive enough
-                # to make C4D's viewport playback visibly stutter. Our
-                # playhead is independent of doc.GetTime() during
-                # C4D-native playback (Shotblocks's own spacebar uses
-                # its own clock), so we don't lose anything by
-                # skipping. A redraw on stop catches the canvas back up.
-                doc = c4d.documents.GetActiveDocument()
-                if (doc is not None
-                        and doc.GetPlayMode() != c4d.DOCUMENT_PLAYMODE_INACTIVE):
+                # Suppress canvas redraws during Shotblocks playback —
+                # the playback tick already redraws every frame at the
+                # doc fps, and EVMSG_CHANGE fires on every animation
+                # frame too. The full canvas redraw (waveform + meter
+                # + shots + camera resolution) is expensive enough to
+                # stutter the C4D viewport when doubled. Returning
+                # early here skips the redundant redraw; the playback
+                # tick keeps the canvas in sync. The previous guard
+                # used doc.GetPlayMode() which doesn't exist in C4D
+                # 2026 Python — the bare except masked the error and
+                # the suppression silently never fired.
+                if self.canvas._playing:
                     return c4d.gui.GeDialog.CoreMessage(self, id, msg)
                 # If the project's total frame range changed (user dialled
                 # in a different length in project settings), refit our
@@ -209,8 +223,11 @@ class ShotblocksTimelineDialog(c4d.gui.GeDialog):
                 # change, so this won't clobber pan/zoom on unrelated edits.
                 self.canvas._fit_visible_to_doc()
                 self.canvas.Redraw()
-            except Exception:
-                pass
+            except Exception as e:
+                # Should be rare — anything thrown here would have been
+                # silently swallowed by `except: pass` before, so log
+                # explicitly to catch future regressions early.
+                print("[Shotblocks] CoreMessage(EVMSG_CHANGE) raised: {}".format(e))
         elif id == PLUGIN_ID_COMMAND:
             # v9 analysis worker → main-thread completion signal. The
             # worker thread fires `c4d.SpecialEventAdd(PLUGIN_ID_COMMAND)`

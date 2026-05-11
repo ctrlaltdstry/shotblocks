@@ -43,6 +43,27 @@ SHOTBLOCKS_RESET_ON_BOUNDARY    = 1008
 SHOTBLOCKS_LOOK_AT_TARGET       = 1020
 SHOTBLOCKS_UP_TARGET            = 1021
 SHOTBLOCKS_LOOK_AT_STRENGTH     = 1022
+SHOTBLOCKS_LOOK_AT_ROLL         = 1023  # bank offset in radians (param is degrees in .res; C4D converts)
+SHOTBLOCKS_BANK_INTO_TURNS      = 1024
+SHOTBLOCKS_GRP_FRAMING          = 1103  # group host in tshotblocks.res for the UD-injected Frame Offset
+
+# Yaw rate at which Bank-Into-Turns produces full Roll. Calibrated
+# so a "moderately fast curve" (about 6° heading change per frame at
+# 24fps = 0.1 rad/frame) produces the Roll slider's full bank.
+# Tunable — increase to make banking subtler, decrease to make it
+# more aggressive.
+_BANK_FULL_YAW_RATE = 0.1
+
+# Frame Offset is NOT a .res-defined parameter — C4D's resource-file
+# compiler doesn't recognise CUSTOMGUI_VECTOR2D as a keyword (the
+# constant exists in Python but isn't accepted in .res syntax, and
+# we verified that adding it empties the AM). Instead we add it as
+# a UserData slot on the tag at tag-apply time, configured with
+# DESC_CUSTOMGUI = CUSTOMGUI_VECTOR2D — the exact widget the User
+# Data dialog labels "2D Vector Field." The slot's DescID's index
+# is stored in the tag's BaseContainer so we can find it back
+# deterministically across reloads.
+_BCKEY_FRAME_OFFSET_UD_IDX = 1010003
 
 
 # Per-tag mutable state. Keyed by tag.GetUniqueIP() (a persistent
@@ -105,6 +126,7 @@ def _state_for(tag):
             "spring": make_state(),
             "overrides": None,
             "reset_pending": True,    # first Execute snaps to target
+            "prev_heading": None,     # for Bank-Into-Turns yaw rate
         }
         _RUNTIME[key] = st
     return st
@@ -154,6 +176,126 @@ def _read_mode(tag, st):
     return int(tag[SHOTBLOCKS_MODE])
 
 
+def _frame_offset_descid(tag):
+    """Return the DescID of the tag's Frame Offset UserData slot,
+    or None if it hasn't been added yet. The slot's index is stored
+    in the tag's BaseContainer at tag-apply time."""
+    try:
+        bc = tag.GetDataInstance()
+        if bc is None:
+            return None
+        idx = bc.GetInt32(_BCKEY_FRAME_OFFSET_UD_IDX)
+        if idx <= 0:
+            return None
+        return c4d.DescID(
+            c4d.DescLevel(c4d.ID_USERDATA, c4d.DTYPE_SUBCONTAINER, 0),
+            c4d.DescLevel(idx, c4d.DTYPE_VECTOR, 0),
+        )
+    except Exception:
+        return None
+
+
+def _frame_offset_parent_group_descid():
+    """The DescID of the Framing group host we declared in
+    tshotblocks.res. Reparenting the UD slot into this group keeps
+    the joystick inside the main tag interface (instead of in a
+    separate User Data tab)."""
+    # GROUP IDs from a .res live as single-level DescIDs.
+    return c4d.DescID(c4d.DescLevel(SHOTBLOCKS_GRP_FRAMING, c4d.DTYPE_GROUP, 0))
+
+
+def _frame_offset_ud_container():
+    """Build the UserData descriptor BC for the Frame Offset slot.
+    Shared by add-new and refresh-existing paths so they can't drift."""
+    bc = c4d.GetCustomDataTypeDefault(c4d.DTYPE_VECTOR)
+    bc[c4d.DESC_NAME]       = "Frame Offset"
+    bc[c4d.DESC_SHORT_NAME] = "Frame Offset"
+    bc[c4d.DESC_CUSTOMGUI]  = c4d.CUSTOMGUI_VECTOR2D
+    bc[c4d.DESC_ANIMATE]    = c4d.DESC_ANIMATE_ON
+    bc[c4d.DESC_DEFAULT]    = c4d.Vector(0.0, 0.0, 0.0)
+    # Reparent under our Framing group (declared in tshotblocks.res
+    # as an empty group host) so the joystick renders inside the
+    # main tag interface, not in a separate "User Data" tab.
+    bc[c4d.DESC_PARENTGROUP] = _frame_offset_parent_group_descid()
+    # Values are screen-space fractions (0.167 = a rule-of-thirds
+    # line, 0.5 = the edge of the frame). Display as percent and
+    # step in small increments — without these, the joystick
+    # treats each pixel of drag as ~millions of units.
+    bc[c4d.DESC_UNIT]       = c4d.DESC_UNIT_PERCENT
+    bc[c4d.DESC_STEP]       = 0.001
+    # Hard clamp at ±100% = one viewport in either direction. The
+    # joystick drag-area maps to MIN..MAX; without the clamp, raw
+    # pixel drag = millions of units. Hard clamp (not MINSLIDER/
+    # MAXSLIDER soft) because the soft-only path produced a
+    # half-working widget in C4D 2026 — empty dragbox, no scrub.
+    bc[c4d.DESC_MIN]        = c4d.Vector(-1.0, -1.0, 0.0)
+    bc[c4d.DESC_MAX]        = c4d.Vector( 1.0,  1.0, 0.0)
+    return bc
+
+
+def _ensure_frame_offset_userdata(tag):
+    """Add the Frame Offset UserData slot to `tag` if missing, or
+    refresh its descriptor (unit, step, custom GUI) if it already
+    exists. The refresh path lets us roll out sensitivity / display
+    changes to tags created by earlier plugin versions without
+    forcing the user to delete and re-add the tag.
+
+    Stashes the slot's index in the tag's BaseContainer so reads can
+    rebuild the DescID deterministically.
+    """
+    if tag is None:
+        return
+    try:
+        desc_id = _frame_offset_descid(tag)
+        bc = _frame_offset_ud_container()
+        if desc_id is not None:
+            # Refresh the existing slot's descriptor (preserves the
+            # stored value). SetUserDataContainer is the per-slot
+            # update; it does not move the slot or change its index.
+            try:
+                tag.SetUserDataContainer(desc_id, bc)
+            except Exception as e:
+                print("[Shotblocks] Failed to refresh Frame Offset UD: {}".format(e))
+            return
+        desc_id = tag.AddUserData(bc)
+        if desc_id is None:
+            print("[Shotblocks] AddUserData returned None for Frame Offset")
+            return
+        # Persist the slot's index so future reads can rebuild the
+        # DescID. UserData DescIDs are 2-level; the second level's
+        # id is the per-tag slot index.
+        idx = desc_id[1].id
+        tag_bc = tag.GetDataInstance()
+        if tag_bc is not None:
+            tag_bc.SetInt32(_BCKEY_FRAME_OFFSET_UD_IDX, idx)
+        tag[desc_id] = c4d.Vector(0.0, 0.0, 0.0)
+    except Exception as e:
+        print("[Shotblocks] Failed to add Frame Offset UserData: {}".format(e))
+
+
+def _read_frame_offset(tag):
+    """Return (offset_u, offset_v) from the tag's Frame Offset
+    UserData slot. Falls back to (0, 0) if the slot isn't present
+    (e.g. tag loaded from an older save before user-data was added).
+
+    Both axes are inverted from the raw slot value: the joystick's
+    convention is "drag the dot to where you want the *subject* to
+    appear in the frame," but the offset math expresses "where to
+    nudge the aim point," which is the opposite sign. Inverting
+    here keeps the math unchanged and the widget intuitive.
+    """
+    desc_id = _frame_offset_descid(tag)
+    if desc_id is None:
+        return 0.0, 0.0
+    try:
+        v = tag[desc_id]
+    except Exception:
+        return 0.0, 0.0
+    if v is None:
+        return 0.0, 0.0
+    return -float(v.x), -float(v.y)
+
+
 def _camera_has_animation(cam):
     """True when the camera carries any animation tracks. Used by the
     mode-on-apply heuristic: animated → additive, fresh → replace.
@@ -177,7 +319,14 @@ class ShotblocksTag(c4d.plugins.TagData):
         node[SHOTBLOCKS_SUBSTEP_THRESHOLD]  = 60.0
         node[SHOTBLOCKS_RESET_ON_BOUNDARY]  = True
         node[SHOTBLOCKS_LOOK_AT_STRENGTH]   = 1.0
+        node[SHOTBLOCKS_LOOK_AT_ROLL]       = 0.0
+        node[SHOTBLOCKS_BANK_INTO_TURNS]    = False
         # Target and Up Target start unset (BaseLinks default to None).
+        # Frame Offset is a UserData slot — added in _on_tag_applied
+        # (Init is called for fresh tags before they're attached to
+        # an object, and AddUserData is safer once the tag is on a
+        # node). _ensure_frame_offset_userdata is also called
+        # defensively in Execute so old/loaded tags get fixed up.
         return True
 
     def Message(self, node, type, data):
@@ -207,6 +356,8 @@ class ShotblocksTag(c4d.plugins.TagData):
         cam = tag.GetObject()
         if cam is None:
             return
+        # Add the Frame Offset UserData slot (2D Vector Field).
+        _ensure_frame_offset_userdata(tag)
         # Mode heuristic: animated -> additive, fresh -> replace.
         if _camera_has_animation(cam):
             tag[SHOTBLOCKS_MODE] = SHOTBLOCKS_MODE_ADDITIVE
@@ -246,6 +397,12 @@ class ShotblocksTag(c4d.plugins.TagData):
         cam = tag.GetObject()
         if cam is None:
             return c4d.EXECUTIONRESULT_OK
+
+        # Backstop: tag-apply is supposed to add the Frame Offset
+        # UserData slot, but a tag loaded from a scene saved before
+        # the UD slot existed will be missing it. Add it on first
+        # Execute (no-op if already present).
+        _ensure_frame_offset_userdata(tag)
 
         st = _state_for(tag)
 
@@ -293,15 +450,22 @@ class ShotblocksTag(c4d.plugins.TagData):
         # On repeat calls within the same frame, just re-apply the
         # cached output and return. The reset path runs once per
         # boundary; we don't repeat-apply on reset frames either.
-        # When look-at is active, repeat calls re-issue the look-at
-        # write fresh below (don't return early here), because AtS
-        # may have re-run between our calls and we need to overwrite
-        # again. The look-at write is cheap.
+        # Re-applying the spring's stored pose is cheap (two
+        # SetRel*/SetMg calls); doing the full spring integration
+        # again would (1) over-step the integrator and erase the
+        # visible damping, (2) make playback heavy enough to stutter
+        # the C4D viewport. The earlier version only short-circuited
+        # when look-at was off because we worried about Align-to-Spline
+        # re-writing the rotation between Execute calls — but
+        # re-running the look-at math ALSO re-steps the spring, which
+        # is the bigger problem. AtS interplay still works because
+        # _write_back issues a fresh SetRelRot from the cached
+        # spring pose.
         already_stepped_this_frame = (
             last is not None and cur_frame == last
             and not st["reset_pending"]
         )
-        if already_stepped_this_frame and look_at_target is None:
+        if already_stepped_this_frame:
             _write_back(cam, spring)
             return c4d.EXECUTIONRESULT_OK
         if mode == SHOTBLOCKS_MODE_REPLACE and look_at_target is None:
@@ -332,16 +496,30 @@ class ShotblocksTag(c4d.plugins.TagData):
             # priming the spring's rot state lets the look-at-OFF
             # transition feel right.
             if look_at_target is not None:
+                ou, ov = _read_frame_offset(tag)
+                roll = float(tag[SHOTBLOCKS_LOOK_AT_ROLL] or 0.0)
+                # Reset: discard any stored prev_heading so the next
+                # bank-into-turns frame can't see a phantom yaw rate
+                # across the boundary/scrub.
                 la_rot = _compute_look_at_local_rot(
-                    cam, look_at_target, up_target)
+                    cam, look_at_target, up_target,
+                    offset_u=ou, offset_v=ov,
+                    roll_rad=roll,
+                    bank_into_turns=False,  # never bank on reset frame
+                    prev_heading=None,
+                    doc=doc)
                 if la_rot is not None:
+                    la_hpb = la_rot[:3]
+                    st["prev_heading"] = la_rot[3]
                     strength = float(tag[SHOTBLOCKS_LOOK_AT_STRENGTH])
                     s = 1.0 if mode == SHOTBLOCKS_MODE_REPLACE else (
                         max(0.0, min(1.0, strength)))
                     if s >= 1.0:
-                        target_rot = la_rot
+                        target_rot = la_hpb
                     elif s > 0.0:
-                        target_rot = _slerp_hpb(key_rot, la_rot, s)
+                        target_rot = _slerp_hpb(key_rot, la_hpb, s)
+            else:
+                st["prev_heading"] = None
             reset_to_target(spring, target_pos, target_rot)
             st["reset_pending"] = False
             spring["last_frame"] = cur_frame
@@ -368,18 +546,32 @@ class ShotblocksTag(c4d.plugins.TagData):
         # rotation (possibly blended with the keyframed rotation per
         # the strength slider). The spring then chases THAT.
         if look_at_target is not None:
+            ou, ov = _read_frame_offset(tag)
+            roll = float(tag[SHOTBLOCKS_LOOK_AT_ROLL] or 0.0)
+            bank_into_turns = bool(tag[SHOTBLOCKS_BANK_INTO_TURNS])
             la_local_rot = _compute_look_at_local_rot(
-                cam, look_at_target, up_target)
+                cam, look_at_target, up_target,
+                offset_u=ou, offset_v=ov,
+                roll_rad=roll,
+                bank_into_turns=bank_into_turns,
+                prev_heading=st.get("prev_heading"),
+                doc=doc)
             if la_local_rot is not None:
+                la_hpb = la_local_rot[:3]
+                # Stash the unwrapped heading for next frame's yaw-rate
+                # calculation. Always update, even when bank-into-turns
+                # is off — that way enabling mid-shot doesn't see a
+                # huge phantom yaw.
+                st["prev_heading"] = la_local_rot[3]
                 strength = float(tag[SHOTBLOCKS_LOOK_AT_STRENGTH])
                 if mode == SHOTBLOCKS_MODE_REPLACE:
                     s = 1.0
                 else:
                     s = max(0.0, min(1.0, strength))
                 if s >= 1.0:
-                    target_rot = la_local_rot
+                    target_rot = la_hpb
                 elif s > 0.0:
-                    target_rot = _slerp_hpb(key_rot, la_local_rot, s)
+                    target_rot = _slerp_hpb(key_rot, la_hpb, s)
                 # s == 0: leave target_rot = key_rot (look-at off)
 
         # Position spring.
@@ -519,20 +711,69 @@ def _matrix_to_hpb_safe(mg):
     return to_hpb(q)
 
 
-def _compute_look_at_local_rot(cam, target_obj, up_obj):
+def _compute_look_at_local_rot(cam, target_obj, up_obj,
+                               offset_u=0.0, offset_v=0.0,
+                               roll_rad=0.0, bank_into_turns=False,
+                               prev_heading=None, doc=None):
     """Compute the local (relative-to-parent) HPB rotation that aims
-    the camera's -Z axis at `target_obj`.
+    the camera's -Z axis at `target_obj`, optionally framing the
+    target at a screen-space offset.
 
-    This mirrors the Maxon SDK lookatcamera.cpp pattern exactly:
+    Base aim mirrors the Maxon SDK lookatcamera.cpp pattern:
         local_dir = (~(cam.GetUpMg() * cam.GetFrozenMln()))
                     * target.GetMg().off - cam.GetRelPos()
         hpb = c4d.utils.VectorToHPB(local_dir)
         hpb.z = cam.GetRelRot().z   # preserve bank
 
-    `up_obj` is currently ignored — the SDK example doesn't use a
-    secondary target either. World +Y is implicit in VectorToHPB
-    (which assumes Y-up). Up-target support can be added later as a
-    bank computation on top of this base aim.
+    With `offset_u` / `offset_v` non-zero, the aim is nudged so that
+    the target lands at the given screen-space fraction instead of
+    the optical center. Offsets are fractions of the viewport:
+    +0.167 = the rule-of-thirds line. The math:
+
+        distance   = |local_dir|
+        half_w     = distance * tan(fov_h / 2)
+        half_h     = distance * tan(fov_v / 2)
+        offset_lp  = world_right * (u * half_w)
+                   + world_up    * (v * half_h)
+        local_dir' = local_dir - offset_lp
+
+    Subtracting (not adding) because moving the AIM up-right is the
+    same as moving the TARGET down-left in screen space — the camera
+    rotates to put the now-offset target back on the optical axis,
+    which puts the *real* target off-axis by the desired fraction.
+
+    World right/up are (1,0,0) / (0,1,0) in parent-frozen local
+    space, so the offset stays oriented to the horizon regardless of
+    camera bank. For a non-banked camera this is identical to
+    camera-relative; for a banked camera the rule-of-thirds line
+    stays horizontal in world.
+
+    With `up_obj` set, applies a Maya-style "up hint" bank
+    correction: VectorToHPB's default aim uses world +Y as up
+    (resulting in bank = 0 in level cases); we then twist the
+    camera around its aim axis until its +Y is as close as
+    possible to the direction from the camera toward `up_obj`.
+    This is the standard cinematography rig behavior — soft
+    constraint, keeps the up-target generally above the frame.
+
+    `roll_rad` adds a bank offset (no up-target) or biases the
+    up-target's bank (with up-target).
+
+    `bank_into_turns` toggles "lean into the curve" mode:
+    `roll_rad` becomes the max bank at a typical curve speed
+    (_BANK_FULL_YAW_RATE rad/frame heading change), and the
+    actual bank is scaled by the yaw rate. Yaw left -> roll right,
+    yaw right -> roll left. This mode needs `prev_heading` (the
+    look-at heading from the previous frame, radians) to compute
+    yaw rate; on the first frame pass None and we'll skip the
+    bank-scaling (yaw rate = 0).
+
+    Returns `(h, p, b, heading)` where heading is the unwrapped
+    look-at heading this frame — caller stashes it so the next
+    frame can compute yaw rate. With no target, returns None.
+
+    `doc` is needed to read render-aspect for vertical FOV; if
+    None or unavailable, falls back to 16:9.
     """
     if target_obj is None:
         return None
@@ -540,18 +781,210 @@ def _compute_look_at_local_rot(cam, target_obj, up_obj):
     frozen_mln = cam.GetFrozenMln()
     parent_frozen = up_mg * frozen_mln
     try:
-        local_dir = (~parent_frozen) * target_obj.GetMg().off - cam.GetRelPos()
+        inv_parent_frozen = ~parent_frozen
+        local_dir = inv_parent_frozen * target_obj.GetMg().off - cam.GetRelPos()
     except Exception:
         # Defensive: very rare edge case where parent matrix isn't
         # invertible. Fall back to world-only aim.
         return None
+
+    # Screen-space framing offset.
+    if offset_u != 0.0 or offset_v != 0.0:
+        try:
+            local_dir = _apply_frame_offset(
+                local_dir, cam, doc, offset_u, offset_v)
+        except Exception as e:
+            # Framing-math failure must not break the base aim.
+            if not getattr(_compute_look_at_local_rot, "_warned", False):
+                print("[Shotblocks] Frame offset math failed, "
+                      "falling back to centered aim: {}".format(e))
+                _compute_look_at_local_rot._warned = True
+
     try:
         hpb = c4d.utils.VectorToHPB(local_dir)
     except Exception:
         return None
-    # Preserve the camera's current bank (matches SDK behavior).
+
+    # Bank: either preserve camera's current bank (no up-target) or
+    # compute a Maya-style up-hint correction.
     cur_rot = cam.GetRelRot()
-    return (hpb.x, hpb.y, cur_rot.z)
+    bank = cur_rot.z
+    if up_obj is not None:
+        try:
+            up_local = (inv_parent_frozen * up_obj.GetMg().off
+                        - cam.GetRelPos())
+            bank = _bank_from_up_hint(local_dir, up_local)
+        except Exception as e:
+            if not getattr(_compute_look_at_local_rot, "_up_warned", False):
+                print("[Shotblocks] Up-target math failed, "
+                      "falling back to preserved bank: {}".format(e))
+                _compute_look_at_local_rot._up_warned = True
+    elif roll_rad != 0.0 or bank_into_turns:
+        # No up-target and Roll is doing something: drive bank from
+        # zero rather than biasing the camera's previous bank, which
+        # would compound frame-over-frame.
+        bank = 0.0
+
+    # Roll slider: either a constant offset, or scaled by yaw rate
+    # in bank-into-turns mode.
+    if bank_into_turns and prev_heading is not None:
+        # Yaw rate: shortest-arc heading delta this frame (radians).
+        # Positive = yawing left (heading increasing). Bike physics:
+        # leaning the camera into the turn means rolling AWAY from
+        # the yaw direction, so yaw left -> negative bank (roll
+        # right, +Y tilts right).
+        yaw_delta = _shortest_angle(hpb.x - prev_heading)
+        # Scale: 1.0 at _BANK_FULL_YAW_RATE; proportional below
+        # (and above — no clamp, so a very sharp turn produces a
+        # larger lean than the slider's nominal max. Acceptable: the
+        # spring damping smooths anything extreme, and unclamped
+        # feels more physical).
+        scale = yaw_delta / _BANK_FULL_YAW_RATE
+        bank += -scale * roll_rad
+    else:
+        bank += roll_rad
+
+    return (hpb.x, hpb.y, bank, hpb.x)
+
+
+def _shortest_angle(delta):
+    """Wrap `delta` into (-π, +π] — the shortest signed angular
+    distance. Used to keep yaw-rate computations stable across the
+    ±π heading wraparound."""
+    from math import pi
+    while delta > pi:
+        delta -= 2.0 * pi
+    while delta <= -pi:
+        delta += 2.0 * pi
+    return delta
+
+
+def _bank_from_up_hint(aim_dir, up_dir):
+    """Maya-style up-hint bank correction.
+
+    Given an aim direction (from camera toward target) and an
+    up-hint direction (from camera toward up-target), both in the
+    same coordinate frame, return the bank angle (radians) that
+    twists the camera around the aim axis so its +Y is as close as
+    possible to up_dir.
+
+    Algorithm:
+    1. The aim is camera -Z, so the camera's forward = -aim_dir
+       (normalized).
+    2. VectorToHPB's heading + pitch give the camera an orientation
+       with bank = 0, which produces a "default +Y" lying in the
+       (world +Y, forward) plane.
+    3. The "desired +Y" is up_dir projected perpendicular to
+       forward, normalized.
+    4. Bank = signed angle between default-+Y and desired-+Y
+       around the forward axis.
+
+    Degenerate cases (up_dir parallel to forward, or zero-length
+    inputs) return 0.0 — the camera stays level.
+    """
+    forward = -aim_dir   # camera looks along -Z
+    fL = forward.GetLength()
+    uL = up_dir.GetLength()
+    if fL < 1e-9 or uL < 1e-9:
+        return 0.0
+    forward = forward * (1.0 / fL)
+
+    # Project up_dir perpendicular to forward; that's the camera's
+    # desired +Y (in the plane perpendicular to its aim).
+    f_dot_u = forward.Dot(up_dir)
+    desired_up = up_dir - forward * f_dot_u
+    dL = desired_up.GetLength()
+    if dL < 1e-9:
+        # up_dir is parallel to forward — no projection plane.
+        return 0.0
+    desired_up = desired_up * (1.0 / dL)
+
+    # The "default +Y" VectorToHPB produces is world +Y projected
+    # perpendicular to forward.
+    world_y = c4d.Vector(0.0, 1.0, 0.0)
+    f_dot_wy = forward.Dot(world_y)
+    default_up = world_y - forward * f_dot_wy
+    eL = default_up.GetLength()
+    if eL < 1e-9:
+        # Aim is exactly along world Y (looking straight up/down).
+        # VectorToHPB's behavior near this pole is ambiguous; skip
+        # the bank correction this frame.
+        return 0.0
+    default_up = default_up * (1.0 / eL)
+
+    # Signed angle from default_up to desired_up around forward.
+    # cos(theta) = default_up . desired_up
+    # sin(theta) = (default_up x desired_up) . forward
+    from math import atan2
+    cos_t = default_up.Dot(desired_up)
+    sin_t = default_up.Cross(desired_up).Dot(forward)
+    return atan2(sin_t, cos_t)
+
+
+def _apply_frame_offset(local_dir, cam, doc, offset_u, offset_v):
+    """Nudge `local_dir` (a parent-frozen-local aim direction) so the
+    target lands at screen-space fraction (offset_u, offset_v)
+    instead of dead center.
+
+    Returns the adjusted local_dir vector. Raises on missing FOV
+    data — caller catches.
+    """
+    distance = local_dir.GetLength()
+    if distance < 1e-6:
+        # Target is essentially on top of the camera; offset is
+        # meaningless. Leave aim alone.
+        return local_dir
+    fov_h, fov_v = _camera_fov_radians(cam, doc)
+    from math import tan
+    half_w = distance * tan(fov_h * 0.5)
+    half_h = distance * tan(fov_v * 0.5)
+    dx = offset_u * half_w
+    dy = offset_v * half_h
+    # World right/up in parent-frozen local space. For an unparented
+    # camera (or a parent that's identity), these are world axes.
+    return c4d.Vector(local_dir.x - dx, local_dir.y - dy, local_dir.z)
+
+
+def _camera_fov_radians(cam, doc):
+    """Return (fov_h, fov_v) in radians for `cam` at its current
+    focal length and aperture, accounting for render aspect.
+
+    Computes from first principles rather than relying on a c4d
+    helper, since FocalLengthToFOV's exact signature varies across
+    SDK builds.
+    """
+    from math import atan, pi
+    focal = float(cam[c4d.CAMERAOBJECT_FOCUS])     # mm
+    aperture = float(cam[c4d.CAMERAOBJECT_APERTURE])  # mm (horizontal)
+    if focal <= 0.0 or aperture <= 0.0:
+        # Fall back to a reasonable 50mm-on-35mm-equivalent FOV.
+        focal = 36.0
+        aperture = 36.0
+    fov_h = 2.0 * atan(aperture / (2.0 * focal))
+    # Vertical FOV depends on aspect ratio. Read from render data.
+    aspect = _render_aspect(doc)
+    # tan(fov_v/2) = tan(fov_h/2) / aspect  (aspect = width / height)
+    from math import tan
+    fov_v = 2.0 * atan(tan(fov_h * 0.5) / aspect)
+    return fov_h, fov_v
+
+
+def _render_aspect(doc):
+    """Width / height of the active render. Defaults to 16/9 if
+    unavailable."""
+    try:
+        if doc is None:
+            return 16.0 / 9.0
+        rd = doc.GetActiveRenderData()
+        if rd is None:
+            return 16.0 / 9.0
+        w = float(rd[c4d.RDATA_XRES])
+        h = float(rd[c4d.RDATA_YRES])
+        if w > 0.0 and h > 0.0:
+            return w / h
+    except Exception:
+        pass
+    return 16.0 / 9.0
 
 
 def _unwrap_angle(target, reference):
