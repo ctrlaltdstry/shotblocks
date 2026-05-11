@@ -81,6 +81,22 @@ class PlaybackCanvasMixin(object):
         # across cuts; constitution principle 4).
         self._last_active_shot_id = None
 
+        # External-playback detection state. C4D 2026 Python doesn't
+        # expose GetPlayMode, so we infer "C4D is playing natively"
+        # from the EVMSG_TIMECHANGED cadence: consecutive +1 frame
+        # deltas at roughly doc-fps means playback; non-+1 deltas
+        # or a long gap means scrub or stop. When we detect external
+        # playback start, we kick off audio once; when it stops, we
+        # stop audio. _ext_last_frame is the frame on the previous
+        # TIMECHANGED; _ext_last_t is its wall time;
+        # _ext_consec_advances counts back-to-back +1 frames (need
+        # a few before we commit to "playing"); _ext_playing tracks
+        # whether we've issued audio.play() for the external session.
+        self._ext_last_frame    = None
+        self._ext_last_t        = 0.0
+        self._ext_consec_advances = 0
+        self._ext_playing       = False
+
     # ------------------------------------------------------------------
     # Playback (v6) — spacebar drives a doc-FPS Timer on the dialog
     # ------------------------------------------------------------------
@@ -94,6 +110,17 @@ class PlaybackCanvasMixin(object):
             self._audio_playback.pause()
             print("[Shotblocks] playback paused at frame {}".format(self.playhead_frame))
             return
+
+        # If audio was playing because C4D was driving playback
+        # natively, stop it before we kick off our own — otherwise
+        # we'd have two streams running. Clearing the external-play
+        # state also prevents the sync detector from racing us.
+        if self._ext_playing:
+            self._audio_playback.stop()
+            self._ext_playing = False
+        self._ext_consec_advances = 0
+        self._ext_last_frame = None
+        self._ext_last_t = 0.0
 
         doc = c4d.documents.GetActiveDocument()
         range_in, range_out = _read_range(doc)
@@ -235,6 +262,21 @@ class PlaybackCanvasMixin(object):
                 self.playhead_frame  = range_in
                 self._playback_anchor_t     = now - wrap_overflow_t
                 self._playback_anchor_frame = range_in
+                # Reset every Shotblocks rig tag's spring state at the
+                # loop boundary so accumulated bank / position /
+                # rotation lag from end-of-range doesn't damp into the
+                # next pass. Without this, a roll value or framing
+                # offset tweaked mid-playback leaves the camera
+                # banked, and the spring "settles" from that bank
+                # toward zero over a few frames after the wrap —
+                # visible as the horizon being non-level just after
+                # the restart.
+                self._reset_all_rig_tags(doc)
+                # Force the next call to _route_camera_for_frame to
+                # treat the wrap as a fresh shot transition too;
+                # otherwise a same-camera same-shot wrap wouldn't
+                # re-push overrides or re-call request_reset.
+                self._last_active_shot_id = None
                 # Audio: tell playback to re-issue from the new audio
                 # frame (sync() detects the backward jump and reissues
                 # PlaySound). Forward-only sync below would miss the wrap.
@@ -270,6 +312,176 @@ class PlaybackCanvasMixin(object):
         # rig-tag Execute calls and causing visible stutter.
         c4d.EventAdd()
         self.Redraw()
+
+    def _sync_playhead_from_doc(self, doc):
+        """Mirror C4D's current document time into our playhead.
+
+        Called from the dialog's CoreMessage handler so the Shotblocks
+        cursor follows C4D's native transport controls (play / pause
+        / jump-to-start / jump-to-end / time-slider scrub). Returns
+        True iff the playhead actually moved (caller can use this to
+        skip a redundant redraw).
+
+        Also infers whether C4D is in native playback (consecutive
+        +1 frame advances) and drives audio playback accordingly —
+        otherwise pressing C4D's play button would scrub the cursor
+        silently. There's no GetPlayMode in C4D 2026 Python; cadence
+        is the only signal.
+
+        Skips the sync entirely during Shotblocks's own playback —
+        _playback_tick is already driving the doc time, so reading it
+        back would create a feedback loop. Also skips if the doc
+        time is already at our playhead (the message fired for an
+        unrelated mutation).
+        """
+        if doc is None or self._playing:
+            return False
+        try:
+            fps = self._doc_fps(doc)
+            doc_frame = int(doc.GetTime().GetFrame(fps))
+        except Exception:
+            return False
+        if doc_frame == self.playhead_frame:
+            return False
+
+        prev_frame = self.playhead_frame
+        self.playhead_frame = doc_frame
+        # Route the camera so the viewport reflects the active shot at
+        # the new frame, same as our own playback tick does.
+        try:
+            self._route_camera_for_frame(doc, doc_frame)
+        except Exception:
+            pass
+
+        # External-playback detection. A +1 frame delta means C4D
+        # might be playing; a few of them in a row commits us. Any
+        # other delta (scrub jump, rewind, fast-fwd) breaks the run.
+        now = _monotonic()
+        delta = doc_frame - (self._ext_last_frame
+                             if self._ext_last_frame is not None
+                             else prev_frame)
+        gap = now - self._ext_last_t if self._ext_last_t else 0.0
+        # Cadence sanity: TIMECHANGED during native playback fires
+        # at roughly doc-fps cadence; a gap > 2× the frame period is
+        # a scrub pause, not playback.
+        frame_period = 1.0 / max(1, fps)
+        is_playback_tick = (delta == 1 and gap < frame_period * 3.0)
+        if is_playback_tick:
+            self._ext_consec_advances += 1
+        else:
+            self._ext_consec_advances = 0
+        self._ext_last_frame = doc_frame
+        self._ext_last_t = now
+
+        # Two consecutive +1 ticks → commit to "external playback."
+        # Kick audio once; it plays through Windows to end-of-clip
+        # without further intervention. Calling play() again per
+        # tick would rebuild the temp WAV file and stutter the audio.
+        if self._ext_consec_advances >= 2 and not self._ext_playing:
+            if self._audio_track.decoded is not None:
+                target_af = self._audio_track.doc_frame_to_audio_frame(
+                    doc_frame, fps)
+                if target_af >= 0:
+                    self._audio_playback.play(target_af)
+                    self._ext_playing = True
+                    # Keep the dialog Timer alive so we can detect
+                    # the C4D pause (a stop produces NO event at all,
+                    # so we have to poll for idleness).
+                    dlg = self._playback_owner_dialog
+                    if dlg is not None:
+                        try:
+                            dlg.request_anim_tick()
+                        except Exception:
+                            pass
+        # A non-+1 tick (scrub, jump, or playback stopped) drops us
+        # out of "external playback" mode; halt the audio that was
+        # tracking it. Future +1 runs will start a fresh play().
+        elif not is_playback_tick and self._ext_playing:
+            self._audio_playback.stop()
+            self._ext_playing = False
+
+        return True
+
+    def _reset_all_rig_tags(self, doc):
+        """Snap every Shotblocks rig tag's spring state to its target
+        on the next Execute. Called at loop boundaries so accumulated
+        bank / position / rotation lag from end-of-range doesn't
+        damp into the start of the next pass (visible as a non-level
+        horizon for the first few frames after a wrap, when the user
+        had been tweaking roll or framing mid-playback).
+
+        Walks the doc once and tags every camera that carries a
+        Shotblocks tag. Cheap — typically a handful of objects.
+        """
+        if doc is None:
+            return
+        try:
+            from sb_rig_tag import ShotblocksTag, request_reset
+        except Exception:
+            return
+        try:
+            obj = doc.GetFirstObject()
+        except Exception:
+            return
+        # Iterative depth-first walk to avoid recursion limits on
+        # deep scene hierarchies.
+        stack = []
+        while obj is not None:
+            try:
+                t = obj.GetFirstTag()
+                while t is not None:
+                    if isinstance(t.GetNodeData(), ShotblocksTag):
+                        request_reset(t)
+                    t = t.GetNext()
+            except Exception:
+                pass
+            child = None
+            try:
+                child = obj.GetDown()
+            except Exception:
+                pass
+            if child is not None:
+                stack.append(obj.GetNext())
+                obj = child
+            else:
+                nxt = None
+                try:
+                    nxt = obj.GetNext()
+                except Exception:
+                    nxt = None
+                while nxt is None and stack:
+                    nxt = stack.pop()
+                obj = nxt
+
+    def _check_external_play_idle(self):
+        """Polled by the dialog Timer while external audio is playing.
+
+        When C4D's native play button stops, no event is emitted — the
+        TIMECHANGED stream just halts. Our state machine can only
+        detect that via the absence of ticks, so we sweep here: if it
+        has been longer than ~3 frame periods since the last
+        TIMECHANGED, treat it as a stop and halt the audio.
+
+        Cheap: a getattr + time math when idle, slightly more when
+        we actually need to stop. Returns True iff audio was still
+        active (so the Timer keeps firing).
+        """
+        if not self._ext_playing:
+            return False
+        try:
+            doc = c4d.documents.GetActiveDocument()
+            fps = self._doc_fps(doc) if doc is not None else 24
+        except Exception:
+            fps = 24
+        idle_s = _monotonic() - self._ext_last_t
+        frame_period = 1.0 / max(1, fps)
+        if idle_s > frame_period * 3.0:
+            # No tick in 3 frame periods → C4D stopped. Halt audio.
+            self._audio_playback.stop()
+            self._ext_playing = False
+            self._ext_consec_advances = 0
+            return False
+        return True
 
     def _set_playhead_with_playback_resync(self, new_frame, fps,
                                             seek_audio=False):

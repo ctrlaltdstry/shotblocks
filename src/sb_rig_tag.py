@@ -393,6 +393,12 @@ class ShotblocksTag(c4d.plugins.TagData):
             return c4d.EXECUTIONRESULT_OK
         if op is None:
             return c4d.EXECUTIONRESULT_OK
+        # Re-entry guard: during the reset-time ExecutePasses below
+        # we deliberately short-circuit so C4D's animation pass can
+        # restore the camera's authored pose without us writing back
+        # on top of it.
+        if getattr(ShotblocksTag, "_in_reset_eval", False):
+            return c4d.EXECUTIONRESULT_OK
 
         cam = tag.GetObject()
         if cam is None:
@@ -480,6 +486,45 @@ class ShotblocksTag(c4d.plugins.TagData):
             return c4d.EXECUTIONRESULT_OK
         st["_replace_warned"] = False
 
+        # On reset, the camera's current world matrix (and local
+        # channels) still hold the spring's last write — typically a
+        # banked / offset pose from end-of-range. If we read that as
+        # "the keyframed target," reset_to_target snaps the spring's
+        # position to that banked pose, and the user sees the camera
+        # land non-level on the rewind/loop boundary.
+        #
+        # Force-evaluate the camera at the current time before reading
+        # its pose. ExecutePasses runs the animation pass which
+        # overwrites the world matrix from the keyframes (or absence
+        # of them). For purely keyframed cameras that overwrites our
+        # stale write; for AtS-driven cameras the spline-driven pose
+        # is what wins. Either way the read in
+        # _read_keyframed_target now reflects what the camera SHOULD
+        # look like at this frame, not what we last wrote.
+        #
+        # We use a class flag (`_in_reset_eval`) to short-circuit
+        # ourselves during this nested evaluation — otherwise the
+        # ExecutePasses call would re-enter this very method and
+        # write our spring's pose right back on top of the keyframe.
+        reset_on_boundary = bool(tag[SHOTBLOCKS_RESET_ON_BOUNDARY])
+        if (st["reset_pending"] and reset_on_boundary
+                and not getattr(ShotblocksTag, "_in_reset_eval", False)):
+            ShotblocksTag._in_reset_eval = True
+            try:
+                doc.ExecutePasses(
+                    None,
+                    animation=True,
+                    expressions=True,
+                    caches=False,
+                    flags=c4d.BUILDFLAGS_NONE,
+                )
+            except Exception as e:
+                if not getattr(ShotblocksTag, "_reset_eval_warned", False):
+                    ShotblocksTag._reset_eval_warned = True
+                    print("[Shotblocks] reset re-eval failed: {}".format(e))
+            finally:
+                ShotblocksTag._in_reset_eval = False
+
         # Position target: always from the camera's own keyframed
         # local pose. Look-at doesn't move the camera, only aims it.
         # Rotation target: starts as the keyframed rotation. If
@@ -487,7 +532,6 @@ class ShotblocksTag(c4d.plugins.TagData):
         target_pos, key_rot = _read_keyframed_target(cam, doc, time, fps)
         target_rot = key_rot
 
-        reset_on_boundary = bool(tag[SHOTBLOCKS_RESET_ON_BOUNDARY])
         if st["reset_pending"] and reset_on_boundary:
             # If look-at is active, compute the look-at local rot and
             # use it as the rotation target for reset, so the spring
@@ -495,22 +539,13 @@ class ShotblocksTag(c4d.plugins.TagData):
             # also call SetRelRot with the look-at rotation, but
             # priming the spring's rot state lets the look-at-OFF
             # transition feel right.
+            has_explicit_bank_source = False
             if look_at_target is not None:
                 ou, ov = _read_frame_offset(tag)
-                roll = float(tag[SHOTBLOCKS_LOOK_AT_ROLL] or 0.0)
-                # Reset: discard any stored prev_heading so the next
-                # bank-into-turns frame can't see a phantom yaw rate
-                # across the boundary/scrub.
-                la_rot = _compute_look_at_local_rot(
+                la_hpb = _compute_look_at_local_rot(
                     cam, look_at_target, up_target,
-                    offset_u=ou, offset_v=ov,
-                    roll_rad=roll,
-                    bank_into_turns=False,  # never bank on reset frame
-                    prev_heading=None,
-                    doc=doc)
-                if la_rot is not None:
-                    la_hpb = la_rot[:3]
-                    st["prev_heading"] = la_rot[3]
+                    offset_u=ou, offset_v=ov, doc=doc)
+                if la_hpb is not None:
                     strength = float(tag[SHOTBLOCKS_LOOK_AT_STRENGTH])
                     s = 1.0 if mode == SHOTBLOCKS_MODE_REPLACE else (
                         max(0.0, min(1.0, strength)))
@@ -518,8 +553,21 @@ class ShotblocksTag(c4d.plugins.TagData):
                         target_rot = la_hpb
                     elif s > 0.0:
                         target_rot = _slerp_hpb(key_rot, la_hpb, s)
-            else:
-                st["prev_heading"] = None
+                    # Look-at (especially with up_target) gives a
+                    # meaningful bank channel. Without up_target it's
+                    # the camera's preserved bank, but either way
+                    # bank ∈ target_rot is intentional, not stale.
+                    has_explicit_bank_source = (up_target is not None)
+            # Apply Roll + Bank-Into-Turns to whatever target_rot
+            # we ended up with. Reset always starts with no prior
+            # heading so Bank-Into-Turns doesn't yaw on the first
+            # frame after a cut.
+            roll = float(tag[SHOTBLOCKS_LOOK_AT_ROLL] or 0.0)
+            target_rot, heading = _apply_roll_and_bank_into_turns(
+                target_rot, prev_heading=None,
+                roll_rad=roll, bank_into_turns=False,
+                has_explicit_source=has_explicit_bank_source)
+            st["prev_heading"] = heading
             reset_to_target(spring, target_pos, target_rot)
             st["reset_pending"] = False
             spring["last_frame"] = cur_frame
@@ -545,24 +593,13 @@ class ShotblocksTag(c4d.plugins.TagData):
         # If look-at is active, replace target_rot with the look-at
         # rotation (possibly blended with the keyframed rotation per
         # the strength slider). The spring then chases THAT.
+        has_explicit_bank_source = False
         if look_at_target is not None:
             ou, ov = _read_frame_offset(tag)
-            roll = float(tag[SHOTBLOCKS_LOOK_AT_ROLL] or 0.0)
-            bank_into_turns = bool(tag[SHOTBLOCKS_BANK_INTO_TURNS])
-            la_local_rot = _compute_look_at_local_rot(
+            la_hpb = _compute_look_at_local_rot(
                 cam, look_at_target, up_target,
-                offset_u=ou, offset_v=ov,
-                roll_rad=roll,
-                bank_into_turns=bank_into_turns,
-                prev_heading=st.get("prev_heading"),
-                doc=doc)
-            if la_local_rot is not None:
-                la_hpb = la_local_rot[:3]
-                # Stash the unwrapped heading for next frame's yaw-rate
-                # calculation. Always update, even when bank-into-turns
-                # is off — that way enabling mid-shot doesn't see a
-                # huge phantom yaw.
-                st["prev_heading"] = la_local_rot[3]
+                offset_u=ou, offset_v=ov, doc=doc)
+            if la_hpb is not None:
                 strength = float(tag[SHOTBLOCKS_LOOK_AT_STRENGTH])
                 if mode == SHOTBLOCKS_MODE_REPLACE:
                     s = 1.0
@@ -573,6 +610,20 @@ class ShotblocksTag(c4d.plugins.TagData):
                 elif s > 0.0:
                     target_rot = _slerp_hpb(key_rot, la_hpb, s)
                 # s == 0: leave target_rot = key_rot (look-at off)
+                has_explicit_bank_source = (up_target is not None)
+
+        # Roll + Bank-Into-Turns are a post-step on whatever
+        # target_rot the previous stage produced — keyframed, AtS,
+        # or look-at. Yaw rate is derived from heading delta since
+        # the previous frame, so this works regardless of whether
+        # look-at is active.
+        roll = float(tag[SHOTBLOCKS_LOOK_AT_ROLL] or 0.0)
+        bank_into_turns = bool(tag[SHOTBLOCKS_BANK_INTO_TURNS])
+        target_rot, heading = _apply_roll_and_bank_into_turns(
+            target_rot, prev_heading=st.get("prev_heading"),
+            roll_rad=roll, bank_into_turns=bank_into_turns,
+            has_explicit_source=has_explicit_bank_source)
+        st["prev_heading"] = heading
 
         # Position spring.
         pos, vel = spring["pos"]
@@ -712,9 +763,7 @@ def _matrix_to_hpb_safe(mg):
 
 
 def _compute_look_at_local_rot(cam, target_obj, up_obj,
-                               offset_u=0.0, offset_v=0.0,
-                               roll_rad=0.0, bank_into_turns=False,
-                               prev_heading=None, doc=None):
+                               offset_u=0.0, offset_v=0.0, doc=None):
     """Compute the local (relative-to-parent) HPB rotation that aims
     the camera's -Z axis at `target_obj`, optionally framing the
     target at a screen-space offset.
@@ -756,21 +805,11 @@ def _compute_look_at_local_rot(cam, target_obj, up_obj,
     This is the standard cinematography rig behavior — soft
     constraint, keeps the up-target generally above the frame.
 
-    `roll_rad` adds a bank offset (no up-target) or biases the
-    up-target's bank (with up-target).
-
-    `bank_into_turns` toggles "lean into the curve" mode:
-    `roll_rad` becomes the max bank at a typical curve speed
-    (_BANK_FULL_YAW_RATE rad/frame heading change), and the
-    actual bank is scaled by the yaw rate. Yaw left -> roll right,
-    yaw right -> roll left. This mode needs `prev_heading` (the
-    look-at heading from the previous frame, radians) to compute
-    yaw rate; on the first frame pass None and we'll skip the
-    bank-scaling (yaw rate = 0).
-
-    Returns `(h, p, b, heading)` where heading is the unwrapped
-    look-at heading this frame — caller stashes it so the next
-    frame can compute yaw rate. With no target, returns None.
+    Roll and Bank-Into-Turns are applied as a separate post-step
+    (`_apply_roll_and_bank_into_turns`) so they work regardless of
+    whether look-at is the rotation source. Returns the rotation
+    `(h, p, b)` produced purely by the look-at math (no roll
+    applied) or None when there's no target.
 
     `doc` is needed to read render-aspect for vertical FOV; if
     None or unavailable, falls back to 16:9.
@@ -806,7 +845,10 @@ def _compute_look_at_local_rot(cam, target_obj, up_obj,
         return None
 
     # Bank: either preserve camera's current bank (no up-target) or
-    # compute a Maya-style up-hint correction.
+    # compute a Maya-style up-hint correction. Roll and
+    # Bank-Into-Turns are applied later, in
+    # _apply_roll_and_bank_into_turns, so they work whether or not
+    # look-at is active.
     cur_rot = cam.GetRelRot()
     bank = cur_rot.z
     if up_obj is not None:
@@ -819,32 +861,50 @@ def _compute_look_at_local_rot(cam, target_obj, up_obj,
                 print("[Shotblocks] Up-target math failed, "
                       "falling back to preserved bank: {}".format(e))
                 _compute_look_at_local_rot._up_warned = True
-    elif roll_rad != 0.0 or bank_into_turns:
-        # No up-target and Roll is doing something: drive bank from
-        # zero rather than biasing the camera's previous bank, which
-        # would compound frame-over-frame.
-        bank = 0.0
 
-    # Roll slider: either a constant offset, or scaled by yaw rate
-    # in bank-into-turns mode.
-    if bank_into_turns and prev_heading is not None:
+    return (hpb.x, hpb.y, bank)
+
+
+def _apply_roll_and_bank_into_turns(target_rot, prev_heading,
+                                    roll_rad, bank_into_turns,
+                                    has_explicit_source):
+    """Add the Roll slider's contribution to `target_rot`'s bank
+    channel, optionally scaled by yaw rate for Bank-Into-Turns.
+
+    `target_rot` is a `(h, p, b)` 3-tuple — typically the keyframed
+    or look-at-resolved rotation we're about to feed into the
+    spring. `prev_heading` is the previous frame's heading (radians)
+    or None on the first frame after a reset.
+
+    `has_explicit_source` tells us whether the bank channel of
+    `target_rot` carries meaningful prior bank (e.g. from an
+    up-target or from keyframes). When False (the typical Shotblocks
+    case: AtS-driven heading with no keyed bank), Roll drives bank
+    from zero rather than compounding on top of stale prior bank.
+
+    Returns `(new_target_rot, current_heading)`. Caller stashes the
+    heading so the next frame can compute the yaw delta.
+    """
+    h, p, b = target_rot
+    new_bank = b if has_explicit_source else 0.0
+
+    if bank_into_turns and prev_heading is not None and roll_rad != 0.0:
         # Yaw rate: shortest-arc heading delta this frame (radians).
         # Positive = yawing left (heading increasing). Bike physics:
-        # leaning the camera into the turn means rolling AWAY from
-        # the yaw direction, so yaw left -> negative bank (roll
-        # right, +Y tilts right).
-        yaw_delta = _shortest_angle(hpb.x - prev_heading)
+        # leaning into the turn means rolling AWAY from the yaw
+        # direction, so yaw left → negative bank (roll right, +Y
+        # tilts right).
+        yaw_delta = _shortest_angle(h - prev_heading)
         # Scale: 1.0 at _BANK_FULL_YAW_RATE; proportional below
         # (and above — no clamp, so a very sharp turn produces a
-        # larger lean than the slider's nominal max. Acceptable: the
-        # spring damping smooths anything extreme, and unclamped
-        # feels more physical).
+        # larger lean than the slider's nominal max). The spring
+        # damping smooths anything extreme.
         scale = yaw_delta / _BANK_FULL_YAW_RATE
-        bank += -scale * roll_rad
+        new_bank += -scale * roll_rad
     else:
-        bank += roll_rad
+        new_bank += roll_rad
 
-    return (hpb.x, hpb.y, bank, hpb.x)
+    return (h, p, new_bank), h
 
 
 def _shortest_angle(delta):

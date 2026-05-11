@@ -131,6 +131,10 @@ class ShotblocksTimelineDialog(c4d.gui.GeDialog):
         # worker itself signals completion via SpecialEventAdd so the
         # timer can sleep again while it runs.
         peak_rebuild_pending = self.canvas._pending_peak_rebuild_t > 0.0
+        # External (C4D-native) playback drives our audio. Keep the
+        # timer running while it's active so _check_external_play_idle
+        # can detect the C4D pause (no event fires; only idleness).
+        ext_playing = bool(getattr(self.canvas, "_ext_playing", False))
         if self.canvas._playing:
             # During playback, run the timer at the document's frame
             # rate (typically 24 fps → 41ms). The previous unified
@@ -146,7 +150,7 @@ class ShotblocksTimelineDialog(c4d.gui.GeDialog):
                 doc_fps = 24
             interval_ms = max(1, int(1000 / max(1, doc_fps)))
             self.SetTimer(interval_ms)
-        elif needs_anim or meter_decay or peak_rebuild_pending:
+        elif needs_anim or meter_decay or peak_rebuild_pending or ext_playing:
             self.SetTimer(self._ANIM_TIMER_MS)
         else:
             self.SetTimer(0)
@@ -179,6 +183,10 @@ class ShotblocksTimelineDialog(c4d.gui.GeDialog):
                 from sb_audio_meter import FLOOR_DBFS as _FLOOR
                 if any(db > _FLOOR for db in self.canvas._meter_displayed_db):
                     self.canvas.Redraw()
+            # External-playback idle check. C4D's native pause emits
+            # no event — we poll for the absence of TIMECHANGED ticks
+            # and stop audio when the stream goes idle.
+            self.canvas._check_external_play_idle()
             # Debounced peak-cache rebuild: if a zoom event posted a
             # `_pending_peak_rebuild_t` and the debounce has elapsed,
             # spawn the worker now. Cheap when nothing is pending.
@@ -202,6 +210,21 @@ class ShotblocksTimelineDialog(c4d.gui.GeDialog):
         # up camera renames in the Object Manager so timeline labels stay
         # in sync. Cheap: a redraw just re-reads our shot list and resolves
         # the camera names through the cache.
+        if id == c4d.EVMSG_TIMECHANGED:
+            # Live scrub from C4D's native time slider, plus
+            # native-play frame ticks. EVMSG_CHANGE only fires once
+            # on scrub release; EVMSG_TIMECHANGED fires per-frame
+            # during the drag — that's what gives the Shotblocks
+            # cursor live tracking of C4D's transport. Cheap: just
+            # mirror the doc's frame into our playhead and redraw.
+            try:
+                if not self.canvas._playing:
+                    doc = c4d.documents.GetActiveDocument()
+                    if self.canvas._sync_playhead_from_doc(doc):
+                        self.canvas.Redraw()
+            except Exception as e:
+                print("[Shotblocks] CoreMessage(EVMSG_TIMECHANGED) raised: {}".format(e))
+            return c4d.gui.GeDialog.CoreMessage(self, id, msg)
         if id == c4d.EVMSG_CHANGE:
             try:
                 # Suppress canvas redraws during Shotblocks playback —
@@ -217,6 +240,12 @@ class ShotblocksTimelineDialog(c4d.gui.GeDialog):
                 # the suppression silently never fired.
                 if self.canvas._playing:
                     return c4d.gui.GeDialog.CoreMessage(self, id, msg)
+                # Mirror C4D's native transport into our playhead.
+                # This makes C4D's play / pause / jump-to-start /
+                # jump-to-end / time-slider scrub move our cursor.
+                # Returns True iff the playhead actually moved.
+                doc = c4d.documents.GetActiveDocument()
+                self.canvas._sync_playhead_from_doc(doc)
                 # If the project's total frame range changed (user dialled
                 # in a different length in project settings), refit our
                 # visible window. The helper only refits on actual length
