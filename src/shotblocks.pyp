@@ -87,6 +87,15 @@ class ShotblocksTimelineDialog(c4d.gui.GeDialog):
         # (canvases don't own timers in C4D 2026 — the dialog forwards Timer
         # ticks via _playback_tick).
         self.canvas._playback_owner_dialog = self
+        # The plugin id the v9 analysis worker thread fires via
+        # `c4d.SpecialEventAdd` to wake the main thread on completion;
+        # CoreMessage matches on this id and drains the result.
+        self.canvas._analysis_complete_event_id = PLUGIN_ID_COMMAND
+        # Separate id for the zoom-driven peak-cache rebuild worker so
+        # the CoreMessage handler can tell the two signals apart.
+        # PLUGIN_ID_TAG is otherwise unused at runtime (it's only
+        # referenced as the BaseTag's id at registration time).
+        self.canvas._peak_rebuild_event_id = PLUGIN_ID_TAG
         # Mirror the active doc's project frame range into our visible
         # window on open. Subsequent doc-length changes are picked up via
         # CoreMessage(EVMSG_CHANGE).
@@ -106,13 +115,38 @@ class ShotblocksTimelineDialog(c4d.gui.GeDialog):
     # needs ticks; the canvas's _playback_tick internally rate-limits
     # to its own fps.
 
-    _ANIM_TIMER_MS = 16  # ~60 fps when any reason needs ticks
+    _ANIM_TIMER_MS = 16   # ~60 fps for hover-fade + playback
 
     def _refresh_timer(self):
-        """Set the timer rate based on whether anything needs ticking.
-        Called whenever playback or hover-animation state changes."""
+        """Set the timer rate based on what's currently active.
+
+        Hover-fade and playback need the 60 fps timer for smooth
+        motion. The v9 analysis busy overlay does NOT use the timer
+        — every Timer tick in C4D 2026 contends with the worker
+        thread for the GIL (testing showed a 60 fps timer made a
+        10 s analysis run for 60 s; even 7 fps cost ~2x). The
+        analysis worker signals completion via SpecialEventAdd →
+        CoreMessage instead, so we keep the timer fully off while
+        it runs.
+        """
         needs_anim = bool(self.canvas._shot_hover_anim)
-        if self.canvas._playing or needs_anim:
+        # When playback stops, the right-side dB meter decays toward
+        # FLOOR_DBFS over ~1.5s. Keep the timer running until the
+        # decay completes so each tick advances the bars; without
+        # this the meter would freeze at the last drawn level after
+        # a single post-stop redraw. We test against the displayed
+        # levels list (populated by `_draw_db_meter`).
+        from sb_audio_meter import FLOOR_DBFS as _FLOOR
+        meter_decay = any(
+            db > _FLOOR for db in self.canvas._meter_displayed_db
+        )
+        # Pending peak-cache rebuild needs the timer alive until the
+        # debounce window elapses and the worker is kicked off. The
+        # worker itself signals completion via SpecialEventAdd so the
+        # timer can sleep again while it runs.
+        peak_rebuild_pending = self.canvas._pending_peak_rebuild_t > 0.0
+        if (self.canvas._playing or needs_anim or meter_decay
+                or peak_rebuild_pending):
             self.SetTimer(self._ANIM_TIMER_MS)
         else:
             self.SetTimer(0)
@@ -132,10 +166,27 @@ class ShotblocksTimelineDialog(c4d.gui.GeDialog):
 
     def Timer(self, msg):
         try:
-            if self.canvas._playing:
+            playing = self.canvas._playing
+            if playing:
                 self.canvas._playback_tick()
             self.canvas._anim_tick()
-            # Stop the timer once nothing needs it anymore.
+            # When stopped but the dB meter is still decaying, force
+            # a redraw so the meter's per-frame state advance fires
+            # and the bars visibly drop toward FLOOR_DBFS. _playback_tick
+            # already redraws during playback so this only kicks in
+            # during the post-stop decay window.
+            if not playing:
+                from sb_audio_meter import FLOOR_DBFS as _FLOOR
+                if any(db > _FLOOR for db in self.canvas._meter_displayed_db):
+                    self.canvas.Redraw()
+            # Debounced peak-cache rebuild: if a zoom event posted a
+            # `_pending_peak_rebuild_t` and the debounce has elapsed,
+            # spawn the worker now. Cheap when nothing is pending.
+            self.canvas._maybe_kick_peak_rebuild()
+            # Note: analysis-completion polling is NOT done here —
+            # the worker fires SpecialEventAdd → CoreMessage which
+            # calls `_poll_analysis_thread` directly. Keeping the
+            # timer dispatch lean lets the worker have the GIL.
             self._refresh_timer()
         except Exception as e:
             print("[Shotblocks] Timer tick raised: {}".format(e))
@@ -161,6 +212,28 @@ class ShotblocksTimelineDialog(c4d.gui.GeDialog):
                 self.canvas.Redraw()
             except Exception:
                 pass
+        elif id == PLUGIN_ID_COMMAND:
+            # v9 analysis worker → main-thread completion signal. The
+            # worker thread fires `c4d.SpecialEventAdd(PLUGIN_ID_COMMAND)`
+            # when done, and that delivers a CoreMessage with `id` set
+            # to our plugin id. We use it as a signal to drain the
+            # worker's result on the main thread (where the c4d API
+            # is safe to call). No timer needed during analysis —
+            # the worker had full CPU until this fires.
+            try:
+                self.canvas._poll_analysis_thread()
+            except Exception as e:
+                print("[Shotblocks] analysis completion handler raised: {}".format(e))
+        elif id == PLUGIN_ID_TAG:
+            # Zoom-driven peak-cache rebuild worker → completion signal.
+            # The worker built a new PeakCache at a finer
+            # samples_per_column matching the current zoom; drain it
+            # onto the AudioTrack and redraw so the waveform paints at
+            # the new resolution.
+            try:
+                self.canvas._drain_peak_rebuild()
+            except Exception as e:
+                print("[Shotblocks] peak-rebuild handler raised: {}".format(e))
         return c4d.gui.GeDialog.CoreMessage(self, id, msg)
 
 

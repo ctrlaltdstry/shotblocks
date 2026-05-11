@@ -166,11 +166,21 @@ def emit_glyph(img, base_name, out_dir):
 # ---------------------------------------------------------------------------
 
 def classify(basename):
-    """Return ('body' | 'edge' | 'glyph' | 'hover' | None, base_for_output).
+    """Return ('body' | 'edge' | 'glyph' | 'hover' | 'chrome' | None, base_for_output).
 
     'hover' covers files named `hover-shot.png` / `hover-audio.png` —
     a single hover edge applied to every state of that kind. The base
-    name returned is the kind ('shot' or 'audio') for downstream lookup."""
+    name returned is the kind ('shot' or 'audio') for downstream lookup.
+
+    'chrome' covers standalone UI icons that just need downsampling
+    (no slicing, no per-state body composition). The playhead
+    triangle, peak-marker triangle, and waveform toggle source PNGs
+    fall in this bucket — recognized via the CHROME_SOURCES map
+    below. Output filename is the map's value.
+    """
+    chrome_target = CHROME_SOURCES.get(basename)
+    if chrome_target is not None:
+        return "chrome", chrome_target
     if basename.startswith("hover-"):
         kind = basename[len("hover-"):]
         return "hover", kind
@@ -181,6 +191,25 @@ def classify(basename):
     if basename == "camera" or basename.startswith("camera-"):
         return "glyph", basename
     return None, basename
+
+
+# Standalone chrome icons. Source filenames in src/res/png-source/
+# (without .png) map to output filenames in src/res/icons/. Inputs
+# are authored at any reasonable supersample; the build script just
+# downsamples by SUPERSAMPLE and writes the result. No flattening
+# applied — these icons sit over varying backgrounds at runtime so
+# the transparent / partial-alpha source is what the plugin wants.
+CHROME_SOURCES = {
+    "Playhead triangle":        "playhead-triangle",
+    "peak detection normal":    "peak-marker",
+    "peak detection selected":  "peak-marker-selected",
+    "range handle":             "range-handle",
+    "range handle hover":       "range-handle-hover",
+    "Dim BG tile":              "dim-bg-tile",
+    "Waveform toggle":          "waveform-source",  # processed further
+                                                    # below to produce
+                                                    # on/off variants
+}
 
 
 CANVAS_BG_HEX = "#1C1C1C"  # must match COL_BG_TIMELINE in sb_canvas.py
@@ -283,6 +312,7 @@ def main():
     edges  = {}  # base ("shot-normal") -> small Pillow image
     glyphs = {}  # base ("camera-orphan") -> small Pillow image
     hover_edges = {}  # kind ("shot", "audio") -> small Pillow image
+    chrome = {}  # target filename ("playhead-triangle") -> small Pillow image
     for src in sources:
         base = os.path.splitext(src)[0]
         path = os.path.join(src_dir, src)
@@ -292,7 +322,19 @@ def main():
             continue
         try:
             big = Image.open(path).convert("RGBA")
-            small = downsample(big, SUPERSAMPLE)
+            # Chrome icons (playhead, peak marker, waveform toggle)
+            # are authored at their final 1× render size — except
+            # the waveform toggle which goes into a 24×24 rail
+            # button slot, so its source is authored at SUPERSAMPLE×
+            # and downsampled here like the rest. Block
+            # bodies/edges/glyphs always downsample.
+            if kind == "chrome":
+                if out_base == "waveform-source":
+                    small = downsample(big, SUPERSAMPLE)
+                else:
+                    small = big
+            else:
+                small = downsample(big, SUPERSAMPLE)
         except Exception as e:
             print("[FAIL] {}: load/downsample: {}".format(src, e))
             continue
@@ -306,6 +348,8 @@ def main():
         elif kind == "hover":
             # out_base for hover is the kind ("shot" or "audio").
             hover_edges[out_base] = small
+        elif kind == "chrome":
+            chrome[out_base] = small
         else:
             glyphs[out_base] = small
 
@@ -405,8 +449,111 @@ def main():
             written_count += 1
         print("[ok]   body {} -> 5 slices (incl. hover variants)".format(base))
 
-    print("done. {} files written.".format(written_count + len(glyphs)))
+    # Chrome (standalone) icons: playhead triangle, peak marker, and
+    # the waveform toggle. The waveform source is composited onto
+    # the standard rail-button bg in two opacity variants (on/off)
+    # so it reads the same way as the existing snap/loop/analyse
+    # buttons. Other chrome icons are pass-through — the user
+    # authors them with the bg they want already baked in
+    # (transparent for icons like the playhead that sit over
+    # neutral chrome, or solid for icons like the peak marker
+    # that sit over a colored audio block).
+    out_icons = os.path.join(repo, "src", "res", "icons")
+    os.makedirs(out_icons, exist_ok=True)
+    chrome_written = 0
+    for name, img in chrome.items():
+        if name == "waveform-source":
+            _emit_waveform_toggle(img, out_icons)
+            chrome_written += 2  # on + off
+            continue
+        if name in ("range-handle", "range-handle-hover"):
+            # Emit two variants. The authored source is a `]`-shape
+            # (stem on the right, caps protruding left top + bottom)
+            # — that's the OUT (right) handle, opening leftward
+            # toward the play range. The IN (left) handle is the
+            # horizontal flip: `[` (stem on the left, caps right).
+            # The pair visually brackets the play range like
+            # `[ ... ]`. Done for both base and hover bitmaps so the
+            # canvas can pick in/out × normal/hover at draw time.
+            # Flatten against the range-bar bg first — C4D 2026's
+            # DrawBitmap with BMP_ALLOWALPHA renders partial-alpha
+            # pixels as opaque source-RGB, which produces visible
+            # boxes around the bracket's AA edges. Flattening bakes
+            # the AA blend against the actual bg color.
+            suffix = "-hover" if name.endswith("-hover") else ""
+            flat = _flatten_to_canvas_bg(img, "#3a3a3a")
+            out_img = flat
+            in_img  = flat.transpose(Image.FLIP_LEFT_RIGHT)
+            out_img.save(os.path.join(out_icons,
+                                       "range-handle-out" + suffix + ".png"))
+            in_img.save(os.path.join(out_icons,
+                                      "range-handle-in" + suffix + ".png"))
+            print("[ok]   chrome range-handle-in{0} / range-handle-out{0}.png ({1}x{2})"
+                  .format(suffix, img.size[0], img.size[1]))
+            chrome_written += 2
+            continue
+        # Chrome icons authored at the final render size. Several
+        # need their transparent corners flattened against the
+        # specific bg they sit over at runtime — otherwise C4D
+        # 2026's DrawBitmap with BMP_ALLOWALPHA renders the
+        # bitmap's transparent / partial-alpha corners as opaque
+        # source-RGB and produces a visible square fringe.
+        FLATTEN_BG = {
+            "playhead-triangle":     "#3a3a3a",  # range-bar bg
+            "peak-marker":           "#406349",  # audio body unselected
+            "peak-marker-selected":  "#328647",  # audio body selected
+        }
+        flatten_bg = FLATTEN_BG.get(name)
+        if flatten_bg is not None:
+            out_img = _flatten_to_canvas_bg(img, flatten_bg)
+        else:
+            out_img = img
+        out_path = os.path.join(out_icons, name + ".png")
+        out_img.save(out_path)
+        print("[ok]   chrome {}.png ({}x{})".format(name, img.size[0], img.size[1]))
+        chrome_written += 1
+
+    print("done. {} files written.".format(
+        written_count + len(glyphs) + chrome_written))
     return 0
+
+
+# Rail-button background colors — must match snap/loop/analyse so the
+# new waveform button reads as part of the same toolbar family.
+RAIL_BTN_BG_OFF = (60, 60, 60, 255)
+RAIL_BTN_BG_ON  = (44, 124, 211, 255)
+WAVEFORM_OFF_OPACITY = 0.30
+
+
+def _emit_waveform_toggle(src_img, out_dir):
+    """Render the waveform-toggle source PNG into two rail-button
+    icons: `waveform-off.png` (30% white waveform on a gray
+    background) and `waveform-on.png` (full white waveform on the
+    active blue background). Matches the snap/loop/analyse on/off
+    visual convention so the new button blends into the toolbar.
+    """
+    w, h = src_img.size
+    src = src_img.convert("RGBA")
+
+    def _render(bg_color, opacity):
+        out = Image.new("RGBA", (w, h), bg_color)
+        # Pre-multiply the source's alpha by `opacity` so the
+        # waveform fades vs. the bg uniformly. Source is white
+        # silhouette + transparent background; reducing alpha lets
+        # more of the bg show through.
+        if opacity != 1.0:
+            scaled_alpha = Image.eval(src.getchannel("A"),
+                                      lambda a: int(a * opacity))
+            faded = src.copy()
+            faded.putalpha(scaled_alpha)
+            return Image.alpha_composite(out, faded)
+        return Image.alpha_composite(out, src)
+
+    off = _render(RAIL_BTN_BG_OFF, WAVEFORM_OFF_OPACITY)
+    on  = _render(RAIL_BTN_BG_ON,  1.0)
+    off.save(os.path.join(out_dir, "waveform-off.png"))
+    on.save(os.path.join(out_dir, "waveform-on.png"))
+    print("[ok]   chrome waveform-off.png / waveform-on.png ({}x{})".format(w, h))
 
 
 def _binarize_alpha(img):

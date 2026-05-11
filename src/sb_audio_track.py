@@ -23,9 +23,12 @@ import os
 
 import c4d
 
-from sb_audio_decode import load_audio, AudioDecodeError
-from sb_audio_peaks  import build as build_peaks, should_rebuild
-from sb_persistence  import _read_audio, _write_audio
+from sb_audio_decode  import load_audio, AudioDecodeError
+from sb_audio_peaks   import build as build_peaks, should_rebuild
+from sb_audio_onsets  import analyse as analyse_audio, mixdown_to_mono
+from sb_audio_meter   import build_envelope, sample_at as sample_meter_envelope
+from sb_audio_filters import drum_band
+from sb_persistence   import _read_audio, _write_audio
 
 
 class AudioTrackError(Exception):
@@ -44,6 +47,9 @@ class AudioTrack(object):
         self.path_is_relative = False
         self.decoded          = None  # DecodedAudio or None
         self.peaks            = None  # PeakCache or None
+        self._mono            = None  # array('h'), built lazily by `mono` property
+        self._drum_band       = None  # array('h'), built lazily by `drum_band` property
+        self._meter_envelope  = None  # StereoEnvelope, built lazily by `meter_envelope`
 
         # Timeline placement (doc/timeline frames, NOT audio frames).
         self.in_frame  = 0       # first timeline frame the clip plays on
@@ -54,6 +60,31 @@ class AudioTrack(object):
         # the tail is implicit (out_frame's distance from in_frame caps
         # the played duration).
         self.trim_start_audio_frames = 0
+
+        # v9 onset analysis. All three default empty/None so the canvas
+        # treats "not analysed yet" the same as "low confidence".
+        # Stored in source-audio-frame indices so trim/move don't
+        # invalidate them — the canvas shifts at draw time.
+        self.onsets           = []   # list[int] — every detected attack
+        self.prominent_peaks  = []   # list[int] — subset that "stands out"
+                                     #   visually; drawn on the audio
+                                     #   block and used as snap targets.
+                                     #   Distinct from `self.peaks`,
+                                     #   which is the waveform PeakCache.
+        self.beat_grid        = None # (period_af, phase_af, confidence) or None
+        # User-visible toggle. The rail button starts each track at
+        # False (no analysis run yet); the first click runs analysis
+        # and flips this to True. Subsequent clicks toggle visibility
+        # WITHOUT re-running. A new audio import resets it to False
+        # (the just-cleared analysis is no longer relevant). Persisted
+        # so opening a previously-analysed doc shows whatever state
+        # the user left it in.
+        self.analysis_visible = False
+        # Independent toggle for the waveform render (without affecting
+        # peak ticks or beat grid). Default True so newly-imported
+        # audio shows its waveform by default. Persisted alongside
+        # `analysis_visible` so per-doc preference survives save/load.
+        self.waveform_visible = True
 
     # ------------------------------------------------------------------
     # Path resolution
@@ -134,6 +165,19 @@ class AudioTrack(object):
         self.path             = abs_path
         self.decoded          = decoded
         self.peaks            = peaks
+        self._mono            = None    # rebuilt lazily on first analysis
+        self._drum_band       = None    # rebuilt lazily on first analysis
+        self._meter_envelope  = None    # rebuilt lazily on first meter draw
+        # New source → previous analysis markers no longer apply to the
+        # current audio. Cleared so the canvas stops drawing them, and
+        # visibility resets to False so the next button click runs
+        # analysis on the new file rather than just toggling stale
+        # markers back on.
+        self.onsets           = []
+        self.prominent_peaks  = []
+        self.beat_grid        = None
+        self.analysis_visible = False
+        self.waveform_visible = True
         self.trim_start_audio_frames = 0
 
         # Timeline placement: in_frame at drop point; out_frame
@@ -178,10 +222,39 @@ class AudioTrack(object):
         self.path_is_relative = is_rel
         self.decoded          = decoded
         self.peaks            = build_peaks(decoded, samples_per_column=1024)
+        self._mono            = None
+        self._drum_band       = None
+        self._meter_envelope  = None
         self.in_frame  = int(d.get("in_frame",  0))
         self.out_frame = int(d.get("out_frame", self.in_frame +
                                                 int(decoded.duration_s * 24)))
         self.trim_start_audio_frames = max(0, int(d.get("trim_start_audio_frames", 0)))
+
+        # v9 — restore persisted analysis if present. Each field is
+        # independently optional so a partial blob (e.g. older save
+        # before peaks shipped) still loads everything it has.
+        def _ints(seq):
+            try:
+                return [int(x) for x in (seq or [])]
+            except (TypeError, ValueError):
+                return []
+        self.onsets           = _ints(d.get("onsets"))
+        self.prominent_peaks  = _ints(d.get("prominent_peaks"))
+        self.analysis_visible = bool(d.get("analysis_visible", False))
+        # `waveform_visible` defaults to True for legacy docs that
+        # were saved before the toggle existed — they get the
+        # historical "always show waveform" behavior.
+        self.waveform_visible = bool(d.get("waveform_visible", True))
+        raw_grid = d.get("beat_grid")
+        if isinstance(raw_grid, dict):
+            try:
+                self.beat_grid = (int(raw_grid["period"]),
+                                  int(raw_grid["phase"]),
+                                  float(raw_grid["confidence"]))
+            except (KeyError, TypeError, ValueError):
+                self.beat_grid = None
+        else:
+            self.beat_grid = None
         return True
 
     def clear(self, doc):
@@ -258,6 +331,26 @@ class AudioTrack(object):
     # Sampling helpers (used by playback)
     # ------------------------------------------------------------------
 
+    def audio_frame_to_doc_frame(self, audio_frame, fps):
+        """Inverse of `doc_frame_to_audio_frame`. Converts a source-
+        rate audio-frame index to its doc-frame position on the
+        timeline, given the current `in_frame` and `trim_start`.
+
+        Returns a float doc-frame (sub-frame precision) so callers
+        rendering at the pixel level can avoid quantization jitter
+        as the audio block is dragged. The audio-frame may sit
+        *outside* the clip's [in_frame, out_frame] range — the
+        caller decides whether to draw it (the canvas-wide beat
+        grid does, since markers conceptually exist before/after
+        the visible clip).
+        """
+        if self.decoded is None:
+            return -1.0
+        rate = self.decoded.sample_rate
+        fps = max(1, int(fps))
+        rel_audio = audio_frame - self.trim_start_audio_frames
+        return self.in_frame + rel_audio * (fps / float(rate))
+
     def doc_frame_to_audio_frame(self, doc_frame, fps):
         """Convert a timeline frame to an absolute audio-frame index
         within the source file, accounting for in_frame and trim."""
@@ -295,9 +388,17 @@ class AudioTrack(object):
         self.path_is_relative = False
         self.decoded          = None
         self.peaks            = None
+        self._mono            = None
+        self._drum_band       = None
+        self._meter_envelope  = None
         self.in_frame         = 0
         self.out_frame        = 0
         self.trim_start_audio_frames = 0
+        self.onsets           = []
+        self.prominent_peaks  = []
+        self.beat_grid        = None
+        self.analysis_visible = False
+        self.waveform_visible = True
 
     def _doc_fps(self, doc):
         try:
@@ -314,12 +415,117 @@ class AudioTrack(object):
             "out_frame":        int(self.out_frame),
             "trim_start_audio_frames": int(self.trim_start_audio_frames),
         }
+        # Only carry analysis fields when populated — keeps the blob
+        # small for tracks the user hasn't analysed yet.
+        if self.onsets:
+            d["onsets"] = [int(x) for x in self.onsets]
+        if self.prominent_peaks:
+            d["prominent_peaks"] = [int(x) for x in self.prominent_peaks]
+        if self.beat_grid is not None:
+            period, phase, conf = self.beat_grid
+            d["beat_grid"] = {
+                "period":     int(period),
+                "phase":      int(phase),
+                "confidence": float(conf),
+            }
+        # Visibility flags persist separately from the data — the
+        # user might toggle off views they want to keep around.
+        if self.analysis_visible:
+            d["analysis_visible"] = True
+        # `waveform_visible` only written when False (the non-default).
+        # Legacy docs without the key load as True, matching the
+        # always-visible behavior they had pre-toggle.
+        if not self.waveform_visible:
+            d["waveform_visible"] = False
         _write_audio(doc, d)
 
     def _persist_current(self, doc):
         stored, is_rel = self._to_persisted_path(self.path, doc)
         self.path_is_relative = is_rel
         self._persist(doc, stored, is_rel)
+
+    # ------------------------------------------------------------------
+    # Mono mixdown + onset analysis (v9)
+    # ------------------------------------------------------------------
+
+    @property
+    def meter_envelope(self):
+        """Lazy stereo dBFS envelope used by the right-side meter.
+        Built once on first read after import / load_from_doc and
+        held for the life of the track. Returns None until decoded
+        audio is available."""
+        if self._meter_envelope is None and self.decoded is not None:
+            self._meter_envelope = build_envelope(self.decoded)
+        return self._meter_envelope
+
+    def meter_levels_at(self, audio_frame):
+        """Per-channel dBFS at `audio_frame` for the right-side meter.
+        Returns a list of floats matching the envelope's channel
+        count (1 for mono, 2 for stereo). Returns empty list when
+        no audio is loaded."""
+        env = self.meter_envelope
+        if env is None:
+            return []
+        return sample_meter_envelope(env, audio_frame)
+
+    @property
+    def mono(self):
+        """Lazy mono mixdown of the decoded samples. Built on first
+        access and cached for the life of the track. Cleared on import
+        / reload / clear (where `decoded` itself changes).
+
+        v10+ sidechain envelope work will read this same buffer."""
+        if self._mono is None and self.decoded is not None:
+            self._mono = mixdown_to_mono(self.decoded)
+        return self._mono
+
+    @property
+    def drum_band(self):
+        """Lazy drum-band-filtered mono signal: kick (50-120 Hz) +
+        snare/hi-hat (2-8 kHz) bandpasses summed. Suppresses vocals,
+        pads, and melodic instruments so the prominent-peak detector
+        sees only drum-relevant transients.
+
+        Cheaper stand-in for ML stem separation (Demucs/Spleeter)
+        — see `sb_audio_filters.drum_band` for design notes."""
+        if self._drum_band is None and self.decoded is not None:
+            mono = self.mono
+            if mono:
+                self._drum_band = drum_band(mono, self.decoded.sample_rate)
+        return self._drum_band
+
+    def analyse(self, doc):
+        """Run onset detection + beat-grid inference on the current
+        decoded audio. Called when the user clicks the "Analyse" rail
+        button or hits the hotkey. Persists results immediately so
+        Cmd+Z can revert the analysis along with any other helper-null
+        change captured in the same undo step.
+
+        Returns a (n_onsets, bpm_or_None, confidence) tuple for the
+        caller to log; raises nothing — failure paths are silent and
+        leave existing analysis intact. (A no-audio call is a no-op.)
+        """
+        if self.decoded is None:
+            return (0, 0, None, 0.0)
+        onsets, peaks, grid, elapsed = analyse_audio(
+            self.decoded, mono=self.mono, peak_signal=self.drum_band)
+        self.onsets          = onsets
+        self.prominent_peaks = peaks
+        self.beat_grid       = grid
+        self._persist_current(doc)
+
+        bpm = None
+        conf = 0.0
+        if grid is not None:
+            period, _phase, conf = grid
+            if period > 0:
+                bpm = 60.0 * self.decoded.sample_rate / float(period)
+        print("[Shotblocks] audio analysed: {} onsets, {} peaks, {} "
+              "({:.2f}s, conf {:.2f})".format(
+                  len(onsets), len(peaks),
+                  "~{:.0f} BPM".format(bpm) if bpm else "no grid",
+                  elapsed, conf))
+        return (len(onsets), len(peaks), bpm, conf)
 
     # ------------------------------------------------------------------
     # Zoom-aware peak rebuild — called by renderer when zoom changes

@@ -193,6 +193,156 @@ grid without recomputing.
       threshold) inside the audio block, culled to visible range.
 - [ ] Manual checklist (≤ 8 items) appended to this file and passes.
 
+## Manual checklist
+
+Run `scripts/dev-loop.ps1` first; the dev test scene (or any project)
+needs an audio block to drive these checks. Use
+`scenes/ES_Our Last Stand - FormantX.mp3` as the reference song.
+
+- [ ] **Trigger via button.** Click the new "A" button at the bottom
+      of the rail (below snap/loop). Console prints `audio analysed:
+      N onsets, ~X BPM (Ys, conf Z)`. Onset ticks appear at the top
+      of the audio block; faint vertical grid lines span its full
+      height.
+- [ ] **Trigger via hotkey.** Press Ctrl+Shift+A with the dialog
+      focused. Same result as the button.
+- [ ] **No-audio guard.** Delete the audio track, then press the
+      button / hotkey. Console prints `analyse: no audio loaded`. No
+      crash, no spurious overlay.
+- [ ] **Persists across save/load.** After analysis, save the doc.
+      Close + reopen. Onset ticks and grid render immediately on
+      reopen — no re-analysis needed.
+- [ ] **Re-analysis works.** Click the button again on an already-
+      analysed track. New result overwrites old; visuals refresh.
+      (Useful when a future tune changes thresholds.)
+- [ ] **New audio clears stale markers.** With analysis present,
+      drag a different MP3 / WAV onto the timeline. The old onset
+      ticks and grid disappear immediately — they're tied to the
+      previous source. Pressing Analyse again populates them for the
+      new track.
+- [ ] **Trim respects coordinates.** With onsets visible, drag the
+      audio block's left edge inward (head trim). Onset ticks and
+      grid shift along with the waveform — the same audio sample
+      always sits under the same tick.
+- [ ] **Cmd+Z reverts the analysis.** Run analysis, then Cmd+Z. The
+      onset ticks and grid disappear (back to pre-analysis state).
+      Cmd+Y restores them.
+
 ## Notes
 
-(populate during implementation)
+(Earlier draft notes. Some are superseded by what actually shipped
+— see "What actually shipped" below.)
+
+- v9 ships with a real radix-2 FFT (not the band-energy fallback)
+  per the user-initiated trigger decision — no perf budget for a
+  background pass. Smoke test on FormantX (170 s, 48 kHz stereo):
+  300 onsets in ~15 s with confidence 1.0.
+- Mono mixdown is a lazy `@property` on AudioTrack — built on first
+  access, dropped on import / load_from_doc / clear. v10+ sidechain
+  envelope will reuse this same buffer without paying the mixdown
+  cost twice.
+- Onsets persist as audio-frame indices in source-audio coordinates,
+  so trim/move don't invalidate them.
+
+## What actually shipped (post-iteration)
+
+The detection algorithm went through several rewrites during v9
+based on real-world testing on `FormantX.wav`. Final state:
+
+### Three layers of analysis
+
+- **Onsets** — every spectral-flux attack on the full-spectrum mono
+  signal. Dense (~1-2/sec on rhythmic music). Computed but **not
+  drawn anywhere**; kept on the AudioTrack for v10+ sidechain
+  envelope work and slate engine.
+- **Prominent peaks** — the visual ticks the user actually sees.
+  Drawn as yellow tall ticks on the audio block, snap targets for
+  shot drags. **Pure envelope local-maxima walk** on a drum-band-
+  filtered signal — NOT spectral flux. See "Peak-detection
+  evolution" below.
+- **Beat grid** — autocorrelation-derived global tempo. Drawn as
+  dashed vertical lines spanning the canvas (not just the audio
+  block). Adaptive density: thins out via power-of-2 stride at
+  zoom levels where adjacent beats land closer than 12 px apart.
+  Snap target.
+
+### Peak-detection evolution
+
+The original spec had peaks as a confidence-filtered subset of
+onsets, with envelope-prominence and "shift forward to envelope
+max" passes layered on top. That gave inconsistent results — too
+sensitive in some spots, missed real hits in others.
+
+What replaced it:
+
+1. **Drum-band bandpass on the mono signal** before any peak
+   detection (`sb_audio_filters.drum_band`). Two summed biquads:
+   - Kick / low percussion: 35-140 Hz (Q≈0.5, centred 70 Hz). Wide
+     enough to catch low-tuned kicks and bass-heavy hits without
+     bringing in vocals (which start ~250 Hz).
+   - Snare / hi-hat: 2-8 kHz (Q≈0.7, centred 4 kHz).
+   - The 140-2000 Hz gap is intentional: that's where vocals,
+     pads, and melodic instruments live.
+   - No gain compensation — would saturate int16 and flatten
+     dynamic range.
+2. **Pure envelope local-maxima walk** on the drum-band signal.
+   No spectral flux involved. Bin |sample| max into 5 ms bins,
+   smooth across 5 bins, find local maxima above the absolute
+   floor.
+3. **Two filters** on candidates:
+   - Absolute floor (`PEAK_GLOBAL_FLOOR_PCT = 0.65`) — must clear
+     65% of the file's loudest envelope bin.
+   - Min spacing (`PEAK_MIN_GAP_MS = 400`) — when two candidates
+     are within 400 ms, the louder one wins.
+
+Local-prominence (rolling-baseline ratio) was tried and removed.
+It punished loud sections (rolling baseline matched the bins
+themselves → nothing cleared the ratio) AND over-fired in quiet
+intros (low rolling baseline → modest bumps qualified). Pure
+absolute-floor is more predictable.
+
+### Right-side dB meter
+
+Premiere/FCP-style stereo dB meter on the far right of the dialog.
+50 px panel, two narrow vertical bars (L and R) with
+green→yellow→red gradient fill, peak-hold tick that decays at
+12 dB/sec. Reads from a stereo RMS envelope cache built lazily on
+AudioTrack (`sb_audio_meter`). Bars decay to silence over ~1.5 s
+when playback stops; snap to envelope value during scrub.
+
+The timeline content area shrinks by 50 px when audio is loaded
+to make room. `_timeline_x1` does the math.
+
+### Threading
+
+Analysis runs on a worker thread (`threading.Thread`). The main
+thread stays responsive — but only if the dialog timer doesn't
+fire during analysis. Discovered the hard way: a 60 fps timer
+turned a 10 s analysis into a 60 s analysis because each Timer
+tick contends with the worker for the GIL. Solution: timer is
+fully OFF during analysis. Worker signals completion via
+`c4d.SpecialEventAdd(PLUGIN_ID_COMMAND)` → `CoreMessage` on the
+main thread → `_poll_analysis_thread` drains results and persists
+with undo.
+
+The busy "Analysing audio…" panel paints once via a two-phase
+start: click → set label + `Redraw()` + post a deferred event →
+on the next event tick spawn the worker. Without the deferred
+spawn, the worker steals the GIL before C4D can paint the queued
+redraw.
+
+### Toggle behaviour
+
+The "A" rail button is hybrid: first click on a never-analysed
+track runs the worker; subsequent clicks toggle visibility
+without re-running. New audio import resets `analysis_visible =
+False` so the next click runs analysis on the new file.
+
+### Right-edge resize past end-of-audio
+
+When `out_frame` extends past where the audio actually ends, the
+waveform draw clips correctly: peaks stretch only across the
+audio-bearing pixels (`wf_x1..wf_audio_x2`); the post-end portion
+draws a flat centerline (silence). Without this, the peak slice
+got stretched across the whole extended block and the waveform
+appeared visually distorted.

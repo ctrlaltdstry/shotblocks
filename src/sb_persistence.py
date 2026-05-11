@@ -257,6 +257,31 @@ def _write_range(doc, in_frame, out_frame, with_undo=True):
 #   trim_start_audio_frames — int. Audio frames trimmed off the head;
 #                      the clip plays starting at this audio-frame
 #                      offset within the source file.
+#   onsets           — list[int], optional (v9). Source-rate audio-
+#                      frame indices of every detected attack. Dense;
+#                      kept for v10+ sidechain envelope work but the
+#                      canvas does not draw them.
+#   prominent_peaks  — list[int], optional (v9). Subset of onsets that
+#                      stand out as visual peaks (the "big hits" the
+#                      user wants to cut on). Drawn as tall ticks on
+#                      the audio block and used as snap targets.
+#                      Source-rate audio-frame indices.
+#   beat_grid        — dict, optional (v9). {period, phase, confidence}
+#                      where period and phase are audio-frame counts.
+#                      Confidence in [0, 1]; the canvas suppresses
+#                      the grid below CONFIDENCE_FLOOR (sb_audio_onsets).
+#                      Drawn canvas-wide as faint dashed lines behind
+#                      everything else when displayable.
+#   analysis_visible — bool, optional (v9). True = the rail button is
+#                      "on", and the canvas draws peak ticks + beat
+#                      grid. False (default) hides the analysis even
+#                      when the data is present. Persisted so the
+#                      visibility state survives doc save/load.
+#   waveform_visible — bool, optional. Independent toggle for the
+#                      waveform line render. Default True (matches
+#                      pre-toggle behavior); only written to the JSON
+#                      when False so legacy docs without the key
+#                      stay visible after upgrade.
 #
 # Absent / corrupt blob → returns None and the caller renders no
 # waveform. There is intentionally no default audio.

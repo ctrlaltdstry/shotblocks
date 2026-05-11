@@ -31,11 +31,76 @@ Constraints honored:
 
 ## Caching strategy
 
-_(populate)_
+Five lazy caches on `AudioTrack`, all built on first read after
+import / load_from_doc / clear:
 
-## Onset detection algorithm
+- `peaks` — `PeakCache` (per-column min/max for waveform rendering),
+  built eagerly on import.
+- `_mono` — int16 mono mixdown of the decoded samples. Used by
+  onset detection and the dB meter envelope.
+- `_drum_band` — bandpass-filtered mono (kick + snare/HH bands
+  summed). Used by prominent-peak detection only. See
+  `sb_audio_filters.drum_band`.
+- `_meter_envelope` — `StereoEnvelope` of per-channel RMS in dBFS.
+  Used by the right-side meter.
+- Onset-pipeline FFT tables — bit-reversal + twiddles cached
+  per-FFT-size in `sb_audio_onsets._FFT_CACHE`.
 
-See `.agent/skills/onset-detection.md`.
+All but `peaks` are `None`-cleared on every audio change. The
+peaks cache is rebuilt eagerly on import for the renderer.
+
+## Detection layers (v9)
+
+Three distinct detection layers run during analysis:
+
+- **Onsets** — every spectral-flux attack on the full mono signal.
+  Dense (~1-2/sec). Computed but not drawn. Reserved for v10+
+  sidechain envelope and slate engine.
+- **Prominent peaks** — envelope local-maxima on the **drum-band
+  filtered** signal (kick 35-140 Hz + snare/HH 2-8 kHz, summed,
+  vocals/pads suppressed). Drawn as yellow ticks; act as snap
+  targets. NOT spectral-flux derived — the bandpass strips the
+  data down to drum-relevant content first, then a simple
+  envelope walk picks local maxima above an absolute floor.
+- **Beat grid** — autocorrelation of the onset spike train,
+  yielding (period, phase, confidence). Drawn as canvas-wide
+  dashed vertical lines with adaptive density (thins at low
+  zoom). Snap target.
+
+Algorithm details: `.agent/skills/onset-detection.md` and the
+`## What actually shipped (post-iteration)` section of
+`.agent/tasks/v9-onset-detection.md`.
+
+## dB meter (v9)
+
+Premiere/FCP-style stereo meter on the far-right of the dialog
+(50 px panel). Reads RMS at the playhead's audio-frame position
+from `_meter_envelope`. Decays to silence over ~1.5 s when playback
+stops; tracks live during scrub.
+
+Implementation: `sb_audio_meter.build_envelope()` builds the cache;
+`sb_canvas._draw_db_meter()` paints it. Channel count is capped at
+2 — higher-channel-count audio gets fed L/R only.
+
+## Threading model
+
+The v9 analysis pipeline runs on a `threading.Thread`. Critical
+constraint discovered empirically: the dialog timer must be OFF
+during analysis. Each Timer tick contends with the worker for the
+GIL; even a 7 fps timer doubled analysis time. Solution:
+
+- `_refresh_timer` checks playback / hover-anim only — not
+  analysis.
+- Worker fires `c4d.SpecialEventAdd(PLUGIN_ID_COMMAND)` on
+  completion. The dialog's `CoreMessage` handler matches the id
+  and calls `_poll_analysis_thread` on the main thread.
+- The busy panel paints once at start, again at completion. No
+  animation during analysis.
+
+Two-phase start so the busy panel actually paints before the
+worker steals the GIL: click → set label + Redraw + post a
+deferred event → CoreMessage handler spawns the worker on the
+NEXT event tick (after the redraw has been serviced).
 
 ## Playback sync
 

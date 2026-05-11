@@ -14,6 +14,13 @@ that the canvas applies during drag/resize.
 # Model constraints
 MAX_TRACKS      = 4    # hard cap on track count
 MIN_SHOT_FRAMES = 1    # smallest legal shot duration
+# Minimum frame gap between two adjacent same-track shots. With a
+# gap of 1, shots A and B abut as: A.out_frame == N → B.in_frame
+# == N + 2 (frame N+1 is empty between them). The single empty
+# frame renders as a small visual gap at most zooms, and editorially
+# avoids two clips "sharing" a boundary frame. Snap targets, ripple,
+# and overlap-trim all respect this constant.
+CLIP_GAP_FRAMES = 0
 
 
 def _make_shot(shot_id, in_frame, out_frame, cam_name, track):
@@ -62,19 +69,21 @@ def _active_shot_at(shots, frame):
 # ---------------------------------------------------------------------------
 
 def _collect_edit_points(shots, exclude_id=None, extra_points=None):
-    """All cross-track edit points: every shot's in_frame and (out_frame + 1).
-    For hard cuts, those are the same set of values where one clip yields to
-    the next. Excludes the dragged shot to avoid self-snapping.
+    """All cross-track edit points: every shot's in_frame and its
+    cut-after frame (`out_frame + 1 + CLIP_GAP_FRAMES`). The cut-after
+    point is where the *next* clip's in_frame would land — accounting
+    for the required `CLIP_GAP_FRAMES` empty frames between adjacent
+    clips. Excludes the dragged shot to avoid self-snapping.
 
-    `extra_points` is an optional iterable of additional snap targets the
-    caller wants treated as edit points — e.g. the playhead frame, the
-    play-range in/out, or any future user-defined markers."""
+    `extra_points` is an optional iterable of additional snap targets
+    the caller wants treated as edit points — e.g. the playhead
+    frame, the play-range in/out, or any future user-defined markers."""
     pts = set()
     for s in shots:
         if s["id"] == exclude_id:
             continue
         pts.add(s["in_frame"])
-        pts.add(s["out_frame"] + 1)
+        pts.add(s["out_frame"] + 1 + CLIP_GAP_FRAMES)
     if extra_points:
         for p in extra_points:
             pts.add(int(p))
@@ -99,26 +108,31 @@ def _magnetic_snap_position(shots, target_id, want_in, want_out, snap_frames,
 
     best_offset = 0
     best_dist   = snap_frames + 1
+    # Dragged shot's "cut after" is (out + 1 + CLIP_GAP_FRAMES): the
+    # frame the NEXT clip would start at if abutting (with gap).
+    drag_cut_after = want_out + 1 + CLIP_GAP_FRAMES
     for ep in edit_points:
         # Align dragged shot's IN to this edit point
         d = ep - want_in
         if abs(d) < best_dist:
             best_dist, best_offset = abs(d), d
-        # Align dragged shot's "cut after" (out + 1) to this edit point
-        d = ep - (want_out + 1)
+        # Align dragged shot's "cut after" to this edit point
+        d = ep - drag_cut_after
         if abs(d) < best_dist:
             best_dist, best_offset = abs(d), d
 
     if best_dist <= snap_frames:
         new_in  = want_in  + best_offset
         new_out = want_out + best_offset
-        # Report every edit point the snapped shot's IN or (OUT+1) lands on,
-        # so the canvas can draw an indicator at each.
+        new_cut_after = new_out + 1 + CLIP_GAP_FRAMES
+        # Report every edit point the snapped shot's IN or
+        # cut-after lands on, so the canvas can draw an indicator
+        # at each.
         targets = []
         if new_in in edit_points:
             targets.append(new_in)
-        if (new_out + 1) in edit_points and (new_out + 1) != new_in:
-            targets.append(new_out + 1)
+        if new_cut_after in edit_points and new_cut_after != new_in:
+            targets.append(new_cut_after)
         return new_in, new_out, tuple(sorted(targets))
     return want_in, want_out, ()
 
@@ -206,12 +220,17 @@ def _resolve_resize(shots, target_id, edge, want_frame, mode, snap_frames=0,
                 extra_points=extra_points)
             target["in_frame"] = max(0, min(snapped, target["out_frame"] - MIN_SHOT_FRAMES))
         else:
-            # The "cut after" is out_frame + 1 — snap that to an edit point,
+            # The "cut after" is out_frame + 1 + CLIP_GAP_FRAMES —
+            # the next clip's in_frame would land here if abutting
+            # with the required gap. Snap that to an edit point,
             # then convert back to out_frame.
+            cut_after = target["out_frame"] + 1 + CLIP_GAP_FRAMES
             snapped, snap_targets = _magnetic_snap_edge(
-                shots, target_id, target["out_frame"] + 1, snap_frames,
+                shots, target_id, cut_after, snap_frames,
                 extra_points=extra_points)
-            target["out_frame"] = max(target["in_frame"] + MIN_SHOT_FRAMES, snapped - 1)
+            target["out_frame"] = max(
+                target["in_frame"] + MIN_SHOT_FRAMES,
+                snapped - 1 - CLIP_GAP_FRAMES)
         shots = _replace_overlap(shots, target)
     elif mode == "ripple":
         shots = _ripple_around(shots, target)
@@ -230,7 +249,10 @@ def _ripple_around(shots, target):
         [s for s in shots if s["id"] != target["id"] and _shot_track(s) == _shot_track(target)],
         key=lambda s: s["in_frame"])
 
-    cursor = target["out_frame"] + 1
+    # Cursor tracks "the frame the next shot's in_frame can land
+    # on" — `out_frame + 1 + CLIP_GAP_FRAMES` keeps the required
+    # empty frame(s) between adjacent shots.
+    cursor = target["out_frame"] + 1 + CLIP_GAP_FRAMES
     pushed_right = False
     for s in same:
         if s["in_frame"] >= target["in_frame"]:
@@ -241,12 +263,14 @@ def _ripple_around(shots, target):
                 s["in_frame"]  = cursor
                 s["out_frame"] = cursor + dur
                 pushed_right = True
-            cursor = s["out_frame"] + 1
+            cursor = s["out_frame"] + 1 + CLIP_GAP_FRAMES
         out.append(s)
 
     if not pushed_right:
-        # Try pushing earlier shots leftward instead
-        cursor = target["in_frame"] - 1
+        # Try pushing earlier shots leftward instead. Symmetric:
+        # cursor tracks the frame the next earlier shot's out_frame
+        # can land on — `in_frame - 1 - CLIP_GAP_FRAMES`.
+        cursor = target["in_frame"] - 1 - CLIP_GAP_FRAMES
         out = [s for s in shots if s["id"] == target["id"] or _shot_track(s) != _shot_track(target)]
         for s in sorted(same, key=lambda x: -x["in_frame"]):
             if s["out_frame"] <= target["out_frame"]:
@@ -255,9 +279,9 @@ def _ripple_around(shots, target):
                     s = dict(s)
                     s["out_frame"] = max(MIN_SHOT_FRAMES - 1, cursor)
                     s["in_frame"]  = max(0, s["out_frame"] - dur)
-                    cursor = s["in_frame"] - 1
+                    cursor = s["in_frame"] - 1 - CLIP_GAP_FRAMES
                 else:
-                    cursor = s["in_frame"] - 1
+                    cursor = s["in_frame"] - 1 - CLIP_GAP_FRAMES
             out.append(s)
 
     return out
@@ -345,15 +369,18 @@ def _replace_overlap(shots, target):
             # Fully covered — drop
             continue
         s = dict(s)
+        # Trims leave a CLIP_GAP_FRAMES-frame gap between the
+        # trimmed clip and the target so adjacent clips never share
+        # a boundary frame (and visually never touch).
         if s["in_frame"] < target["in_frame"] and s["out_frame"] <= target["out_frame"]:
             # Trim trailing edge
-            s["out_frame"] = target["in_frame"] - 1
+            s["out_frame"] = target["in_frame"] - 1 - CLIP_GAP_FRAMES
         elif s["in_frame"] >= target["in_frame"] and s["out_frame"] > target["out_frame"]:
             # Trim leading edge
-            s["in_frame"] = target["out_frame"] + 1
+            s["in_frame"] = target["out_frame"] + 1 + CLIP_GAP_FRAMES
         else:
             # Target sits inside s — split or trim trailing (simpler: trim trailing)
-            s["out_frame"] = target["in_frame"] - 1
+            s["out_frame"] = target["in_frame"] - 1 - CLIP_GAP_FRAMES
         if s["out_frame"] - s["in_frame"] >= MIN_SHOT_FRAMES:
             out.append(s)
     return out

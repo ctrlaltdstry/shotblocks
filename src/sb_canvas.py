@@ -11,12 +11,13 @@ null persistence from `sb_persistence`. Does NOT import anything from
 
 import math
 import os
+import threading
 from time import monotonic as _monotonic
 
 import c4d
 
 from sb_shot_model import (
-    MAX_TRACKS, MIN_SHOT_FRAMES,
+    MAX_TRACKS, MIN_SHOT_FRAMES, CLIP_GAP_FRAMES,
     _make_shot, _shot_track, _displayed_lane_count,
     _resolve_position, _resolve_resize, _resolve_group_move,
     _magnetic_snap_edge,
@@ -32,6 +33,8 @@ from sb_toolbar import load_bitmap, tinted_copy, blend_two_bitmaps, HOVER_LIGHTE
 from sb_audio_decode import is_audio_path
 from sb_audio_track  import AudioTrack, AudioTrackError
 from sb_audio_render import draw_waveform
+from sb_audio_onsets import grid_is_displayable, analyse as analyse_audio
+from sb_audio_meter  import FLOOR_DBFS as METER_FLOOR_DBFS
 from sb_audio_playback import AudioPlayback
 
 
@@ -126,9 +129,33 @@ COL_SNAP_INDICATOR = _rgb("ffd60a")
 COL_AUDIO_BODY          = _rgb("1d3a44")  # deep teal, mid-saturation
 COL_AUDIO_BODY_SELECTED = _rgb("2a5666")  # lighter teal when selected
 COL_AUDIO_BORDER        = _rgb("3a6a78")
-COL_AUDIO_WAVEFORM      = _rgb("9be0f0")  # light cyan; pops on the teal body
+COL_AUDIO_WAVEFORM      = _rgb("617c7c")  # white blended 30% against the
+                                          # audio body bg (#1d3a44). C4D
+                                          # 2026's DrawSetPen has no alpha
+                                          # so we color-shift to approximate
+                                          # 30 %-white-on-teal opacity.
+# Selected-state waveform color. The selected audio body bitmap is
+# bright kelly green (#328647 — see src/res/icons/shots/audio-
+# selected-mid.png), so the 30%-white-blend used for the unselected
+# state washes out. Instead we go DARKER on selection: a dim shadow
+# of the bg green that reads as "waveform" against the bright body.
+COL_AUDIO_WAVEFORM_SEL  = _rgb("143620")  # darkened audio-selected green
 COL_AUDIO_CENTERLINE    = _rgb("3a6a78")  # same as border — subtle reference
 COL_AUDIO_LABEL         = _rgb("c0e8f0")
+# v9 analysis visuals.
+#   peak ticks: warm yellow on the audio block — distinct from snap
+#               yellow (snap is brighter). Prominent peaks only;
+#               the onset list is computed but never drawn.
+#   beat grid:  neutral mid-gray, drawn as canvas-wide dashed
+#               vertical lines behind everything. The dash pattern
+#               itself is what differentiates the grid from solid
+#               playhead / range lines.
+COL_AUDIO_PEAK_TICK     = _rgb("ffd166")  # mustard
+COL_BEAT_GRID           = _rgb("3b3b3b")  # midway between #5a5a5a and the
+                                          # lane bg #1c1c1c — visually 50%
+                                          # less prominent than the previous
+                                          # gray. C4D's DrawSetPen has no
+                                          # alpha so we color-shift instead.
 
 # Play-range bar
 COL_RANGE_BAR           = _rgb("3a3a3a")
@@ -136,6 +163,18 @@ COL_RANGE_ACTIVE        = _rgb("4A4A4A")    # surface-4 — neutral lift between
                                              # handles; the accent-blue handles
                                              # mark the boundaries.
 COL_RANGE_HANDLE        = COL_ACCENT
+# Vertical line marking each range handle's column, extending from
+# the range bar's bottom edge down to the canvas bottom. Same blue
+# as the handles themselves — reads as "the range continues all
+# the way down through the timeline."
+COL_RANGE_LINE          = COL_ACCENT
+# Dim overlay drawn over the timeline area OUTSIDE the play range
+# (diagonal hatch pattern — see `_draw_diagonal_hatch`). Picked as
+# the canvas timeline bg (#1c1c1c) darkened by ~10 % so the hatched
+# pixels read as "same color as the bg but slightly darker" rather
+# than as pure black streaks. Combined with the stride gaps between
+# lines, the visual reads as a subtle translucent darkening.
+COL_RANGE_OUTSIDE_DIM   = _rgb("191919")
 COL_RANGE_HANDLE_HOVER  = COL_ACCENT_HOVER
 
 
@@ -144,7 +183,8 @@ COL_RANGE_HANDLE_HOVER  = COL_ACCENT_HOVER
 # ---------------------------------------------------------------------------
 
 RANGE_HEIGHT        = 16          # play-range bar at the very top
-RANGE_HANDLE_PX     = 6           # in/out handle hit-zone width
+RANGE_HANDLE_PX     = 10          # in/out handle hit-zone radius from
+                                  # the handle's anchor frame column
 RULER_HEIGHT        = 24
 RULER_Y_TOP         = RANGE_HEIGHT
 SHOT_Y_TOP          = RANGE_HEIGHT + RULER_HEIGHT + 4
@@ -168,8 +208,54 @@ LEFT_RAIL_WIDTH     = 80
 RAIL_BTN_SIZE       = 24
 RAIL_BTN_GAP        = 4
 RAIL_BTN_TOP        = 6   # vertical inset of the first button row
+
+# Right-side audio meter. A vertical strip on the far right of the
+# dialog hosts a Premiere/FCP-style stereo dB meter — two thin bars
+# with a gradient fill (green → yellow → red), a peak-hold tick,
+# and a dB scale. Reserves horizontal space; the timeline content
+# area's right edge moves left by RIGHT_METER_PANEL_W when audio is
+# loaded so the meter doesn't overlap the timeline.
+RIGHT_METER_PANEL_W   = 50    # total meter panel width
+RIGHT_METER_BAR_W     = 8     # each L/R bar
+RIGHT_METER_BAR_GAP   = 2     # gap between L and R bars
+RIGHT_METER_PAD_X     = 4     # left/right padding inside the panel
+RIGHT_METER_TOP_PAD   = RANGE_HEIGHT + RULER_HEIGHT + 4
+RIGHT_METER_BOT_PAD   = 4
+# Scale labels every 6 dB from 0 down to -54.
+RIGHT_METER_LABELS_DB = (0, -6, -12, -18, -24, -30, -36, -42, -48, -54)
+# Peak-hold sample sticks at the most-recent peak and decays at this
+# many dB per second. 12 dB/s matches the typical DAW visual.
+PEAK_HOLD_DECAY_DB_S  = 12.0
+# When playback stops, the meter bars decay from their last level
+# toward FLOOR_DBFS at this rate — ~1.5 seconds to reach silence
+# from -10 dB. Avoids the bars looking "stuck" on a loud value
+# after pause; matches DAW conventions where stopped means silent.
+METER_PAUSE_DECAY_DB_S = 40.0
+# Color stops along the meter, in dBFS. Below GREEN_TOP_DB the bar
+# is solid green; between GREEN_TOP_DB and YELLOW_TOP_DB it fades
+# green → yellow; above that it fades yellow → red.
+METER_GREEN_TOP_DB    = -18.0
+METER_YELLOW_TOP_DB   = -6.0
+METER_RED_DB          = -3.0  # not strictly used — "red" zone above this
 DEFAULT_SHOT_FRAMES = 48          # 2 s at 24 fps — good starting length
 EDGE_BAND_PX        = 24          # visible darker grip-band at each shot edge
+# Audio-block waveform extends edge-to-edge so the waveform's
+# visible peaks land at the SAME pixel column as their doc-frame
+# projection. Peak ticks and beat-grid lines (both drawn via the
+# canonical `audio_frame_to_doc_frame → _frame_to_x` path) then
+# line up exactly with what the user sees in the waveform — which
+# is what makes a snap feel like it actually snapped to the peak.
+# The dot grips baked into the audio-block edge bitmap are
+# partially overlapped by waveform pixels; the user prefers this
+# over the misalignment caused by a wider inset.
+AUDIO_WF_INSET_PX   = 0
+# Vertical inset on each side of the waveform inside the audio
+# block, in pixels. Centers the waveform vertically and leaves
+# breathing room top/bottom so the peak markers (top) and the
+# block's bottom edge bitmap (bottom) don't visually compete with
+# the waveform crests. At AUDIO_HEIGHT=96 a 14 px inset on each
+# side leaves a 68 px band (~71 % of the block's height).
+AUDIO_WF_INSET_Y    = 14
                                   # (matches the edge PNG width in design space)
 EDGE_HIT_PX         = 24          # click edge-drag zone — matches the band
 CURSOR_EDGE_PX      = 24          # cursor affordance — matches the band
@@ -184,8 +270,14 @@ CURSOR_EDGE_PX      = 24          # cursor affordance — matches the band
 # height (where 8 px radius would have enough pixels to read smoothly),
 # or if C4D ships an anti-aliased shape primitive in its Python API.
 SNAP_PIXEL_RADIUS   = 8           # how close (in pixels) before magnetic snap pulls
-PLAYHEAD_HEAD_W     = 12          # blue triangle head — full width at top
-PLAYHEAD_HEAD_H     = 10          # blue triangle head — height (apex at line)
+PLAYHEAD_HEAD_W     = 12          # blue triangle head — procedural fallback only
+PLAYHEAD_HEAD_H     = 10          # blue triangle head — procedural fallback only
+# Target output sizes (height) for the bitmap-driven icons. Width
+# scales from the source bitmap's aspect ratio so authoring at any
+# reasonable size produces correctly-proportioned output. C4D's
+# DrawBitmap with BMP_NORMALSCALED handles the scale.
+PLAYHEAD_BITMAP_H   = 14          # fits inside the 16 px RANGE_HEIGHT bar
+PEAK_MARKER_BITMAP_H = 8          # fits in the audio block's top label band
 
 # Hover fade — N pre-baked intermediate frames blended between
 # normal and hover at construction time. At draw time we look up the
@@ -214,6 +306,7 @@ MENU_SET_RANGE_THIS = 3002
 MENU_SET_RANGE_SEL  = 3003
 MENU_RANGE_TO_ALL   = 3004
 MENU_DELETE_AUDIO   = 3005
+MENU_CLEAR_RANGE    = 3006
 
 
 # ---------------------------------------------------------------------------
@@ -402,6 +495,12 @@ class ShotblocksTimelineCanvas(c4d.gui.GeUserArea):
         # exactly where the magnetic snap pulled the shot.
         self._snap_indicator_frames   = ()
 
+        # Double-click detection for the range bar. Tracks the
+        # wall-clock time of the last LMB press inside the range
+        # bar; a second press within DOUBLE_CLICK_WINDOW_S clears
+        # the range instead of starting a drag.
+        self._last_range_lmb_t = 0.0
+
         # v7 audio. One track per document. `_audio_doc_id` is the
         # `id(doc)` we last sync'd against — when it changes (the user
         # opened a different document), we reload from the helper null.
@@ -424,12 +523,84 @@ class ShotblocksTimelineCanvas(c4d.gui.GeUserArea):
         self._block_bitmaps_cache = None
         self._glyph_bitmaps_cache = None
         self._rail_buttons_cache  = None
+        # Standalone chrome bitmaps (playhead arrow head, peak marker
+        # arrow). Both lazy-loaded on first read; None on load failure
+        # so the procedural fallback (DrawRectangle triangle / 2-px
+        # line) keeps working.
+        self._chrome_bitmaps_cache = None
         # Name of the rail button under the cursor (or None) — set by
         # _on_cursor_info, drives the hover tint in _draw_rail.
         self._rail_hover = None
         # Name of the rail button held down with LMB (or None) — drives
         # the press tint while the user holds before release.
         self._rail_pressed = None
+
+        # Busy overlay — when set to a string, DrawMsg paints a panel
+        # with that label centered over the timeline area. v9 analysis
+        # uses this together with the worker thread below to keep the
+        # main UI alive during the multi-second FFT pass.
+        # `_busy_started_t` is set when the overlay is shown so the
+        # animated dots in `_draw_busy_overlay` can sample
+        # `_monotonic() - _busy_started_t` for their cycle position.
+        self._busy_label     = None
+        self._busy_started_t = 0.0
+
+        # Right-side dB meter state, all per-channel (typically 2 for
+        # stereo). `_peak_hold_db` is the held-peak yellow tick at the
+        # top of each bar, decaying at PEAK_HOLD_DECAY_DB_S/sec when
+        # the current level falls below it. `_meter_displayed_db` is
+        # what's currently painted in the bar; during playback it
+        # tracks the envelope level at the playhead, when stopped it
+        # decays toward FLOOR_DBFS over METER_PAUSE_DECAY_DB_S so the
+        # bars don't freeze on the last value. `_meter_anim_t` anchors
+        # both decays' clocks.
+        self._peak_hold_db        = []
+        self._meter_displayed_db  = []
+        self._meter_anim_t        = _monotonic()
+        # Last seen playhead_frame; the meter snaps to live envelope
+        # any tick where this changes (treats playhead movement as
+        # "scrubbing" → live read), and decays otherwise.
+        self._meter_last_playhead = -1
+
+        # Waveform peak-cache zoom rebuild. The cache is built at a
+        # fixed `samples_per_column` once on import (cheap renderer
+        # downsample handles any block width). At extreme zoom-in
+        # this looks blocky because one cache column maps to many
+        # pixels. To stay sharp without freezing on every zoom event:
+        # set `_pending_peak_rebuild_t` to a future wall-clock time
+        # whenever the zoom changes; the dialog timer fires
+        # `_maybe_kick_peak_rebuild` each tick, which spawns a worker
+        # thread once the debounce elapses. Completion fires via
+        # SpecialEventAdd → CoreMessage → `_drain_peak_rebuild`.
+        self._pending_peak_rebuild_t = 0.0
+        self._peak_rebuild_thread    = None
+        self._peak_rebuild_result    = None
+        self._peak_rebuild_event_id  = 0
+
+        # v9 analysis worker. Off-main-thread so the FFT loop doesn't
+        # freeze the dialog. The thread populates `_analysis_result`
+        # on success or `_analysis_error` on failure; the main-thread
+        # timer poller (see `_poll_analysis_thread`) observes the
+        # populated field, writes results back to the AudioTrack, and
+        # clears the busy overlay. Strict main-thread / worker
+        # separation: the worker never touches `c4d` or mutates the
+        # AudioTrack; the main thread does both.
+        self._analysis_thread = None
+        self._analysis_result = None
+        self._analysis_error  = None
+        # Two-phase start: True between `_analyse_audio` posting the
+        # deferred SpecialEventAdd and `_spawn_analysis_worker` actually
+        # starting the thread. Lets the busy panel paint before the
+        # worker steals the GIL.
+        self._analysis_pending_start = False
+        # Plugin id the worker thread fires via `c4d.SpecialEventAdd`
+        # to signal completion on the main thread. The dialog sets
+        # this in its CreateLayout via `PLUGIN_ID_COMMAND`. Default
+        # 0 disables the signal (worker still runs, but the result
+        # only ever surfaces if something else calls
+        # `_poll_analysis_thread` — leaves room to fall back to a
+        # timer-based poll if SpecialEventAdd is ever unavailable).
+        self._analysis_complete_event_id = 0
 
 
     # ------------------------------------------------------------------
@@ -458,13 +629,39 @@ class ShotblocksTimelineCanvas(c4d.gui.GeUserArea):
 
     @property
     def _rail_buttons(self):
-        if self._rail_buttons_cache is None:
+        # Retry on every draw if the cache is empty — bitmap loading
+        # can transiently fail in C4D (e.g. an off-main-thread
+        # interaction during plugin init or a SpecialEventAdd-driven
+        # redraw before BaseBitmap is ready). A permanent empty
+        # cache would silently kill the rail buttons; the retry at
+        # most costs one extra `_build_rail_buttons` per draw while
+        # the failure persists.
+        cache = self._rail_buttons_cache
+        if cache is None or not cache:
             try:
                 self._rail_buttons_cache = self._build_rail_buttons()
             except Exception as e:
                 print("[Shotblocks] rail buttons load failed: {}".format(e))
                 self._rail_buttons_cache = []
         return self._rail_buttons_cache
+
+    @property
+    def _chrome_bitmaps(self):
+        """Lazy dict of standalone chrome bitmaps: playhead triangle
+        and peak marker (normal + selected variants). None entries are
+        tolerated by the draw paths which fall back to procedural
+        rendering."""
+        if self._chrome_bitmaps_cache is None:
+            here = os.path.dirname(os.path.abspath(__file__))
+            icons = os.path.join(here, "res", "icons")
+            self._chrome_bitmaps_cache = {
+                # Only the peak markers use chrome bitmaps now —
+                # playhead and range handles draw as procedural
+                # rectangles for the C4D-native look.
+                "peak":          load_bitmap(os.path.join(icons, "peak-marker.png")),
+                "peak-selected": load_bitmap(os.path.join(icons, "peak-marker-selected.png")),
+            }
+        return self._chrome_bitmaps_cache
 
     # ------------------------------------------------------------------
     # Camera-reference cache (live name resolution)
@@ -550,8 +747,24 @@ class ShotblocksTimelineCanvas(c4d.gui.GeUserArea):
 
     def _timeline_x1(self, w):
         """Right edge of the timeline content area (interior of the right
-        padding)."""
-        return w - TIMELINE_PAD_X
+        padding). Shrinks by `RIGHT_METER_PANEL_W` when an audio track
+        is loaded so the dB meter on the far right doesn't overlap
+        the timeline content."""
+        right_pad = TIMELINE_PAD_X
+        if self._audio_track.decoded is not None:
+            right_pad += RIGHT_METER_PANEL_W
+        return w - right_pad
+
+    def _meter_panel_x_bounds(self, w):
+        """Pixel x-bounds of the right-side dB meter panel.
+        (x1, x2) inclusive-exclusive. The panel hugs the right edge
+        of the canvas so no audio content can leak through past it
+        on the right side. Returns None when no audio is loaded."""
+        if self._audio_track.decoded is None:
+            return None
+        x2 = w
+        x1 = x2 - RIGHT_METER_PANEL_W
+        return (x1, x2)
 
     def _frame_to_x(self, frame, w):
         span = max(1, self.visible_last - self.visible_first)
@@ -590,6 +803,77 @@ class ShotblocksTimelineCanvas(c4d.gui.GeUserArea):
         if self._preview_range is not None:
             return self._preview_range
         return _read_range(c4d.documents.GetActiveDocument())
+
+    def _range_is_active(self, range_in, range_out, doc_first, doc_last):
+        """Whether the current play range is meaningfully smaller than
+        the doc — used to decide whether to draw the dim overlay +
+        range lines. A range that spans the full doc is the 'cleared'
+        state and should render as a clean timeline."""
+        # 2-frame tolerance so a range that snaps to the doc bounds
+        # but is off by rounding still reads as "full doc".
+        return (range_in > doc_first + 1) or (range_out < doc_last - 1)
+
+    def _snap_extras(self):
+        """Build the tuple of extra snap-target frames passed to the
+        shot model's `_resolve_*` functions. Includes:
+          - playhead frame (the long-standing reference point)
+          - audio block's in_frame and (out_frame + 1) when audio
+            is loaded
+          - prominent-peak frames from v9 onset analysis, converted
+            from source-rate audio-frames to doc-frames using the
+            track's current trim/in_frame
+
+        All values are ints — the snap matcher compares to shot edge
+        frames, which are integers, and the extras must match.
+        """
+        extras = [self.playhead_frame]
+        track = self._audio_track
+        if track.decoded is None:
+            return tuple(extras)
+        extras.append(int(track.in_frame))
+        extras.append(int(track.out_frame) + 1)
+        # Peaks + beat-grid lines contribute to snap targets only
+        # when analysis is toggled visible — invisible markers
+        # shouldn't grab clips.
+        if track.analysis_visible:
+            doc = c4d.documents.GetActiveDocument()
+            fps = self._doc_fps(doc)
+            in_f  = track.in_frame
+            out_f = track.out_frame
+
+            # Prominent peaks. Source-rate audio-frames → doc-frames
+            # via the track's current trim/in_frame so the snap
+            # targets follow the clip when it's moved or trimmed.
+            # Widen the range check by 1 frame on each side so a peak
+            # right at the clip boundary isn't lost to int rounding.
+            if track.prominent_peaks:
+                for af in track.prominent_peaks:
+                    df = track.audio_frame_to_doc_frame(af, fps)
+                    df_int = int(round(df))
+                    if in_f - 1 <= df_int <= out_f + 1:
+                        extras.append(df_int)
+
+            # Beat-grid lines. Generated from (period, phase) so we
+            # don't store every beat individually. Same int-rounding
+            # tolerance as peaks. The visual grid spans the whole
+            # canvas (incl. before/after the clip), but for snapping
+            # we restrict to the clip's range — snapping to a beat
+            # that doesn't have audio under it would be misleading.
+            grid = track.beat_grid
+            if grid_is_displayable(grid):
+                period_af, phase_af, _conf = grid
+                if period_af > 0:
+                    # Two anchor points → derive doc-frame period.
+                    df0 = track.audio_frame_to_doc_frame(phase_af, fps)
+                    df1 = track.audio_frame_to_doc_frame(phase_af + period_af, fps)
+                    period_df = df1 - df0
+                    if period_df > 0:
+                        # k_lo = first k such that (df0 + k*period_df) >= in_f.
+                        k_lo = int(math.ceil((in_f - df0) / period_df))
+                        k_hi = int(math.floor((out_f - df0) / period_df))
+                        for k in range(k_lo, k_hi + 1):
+                            extras.append(int(round(df0 + k * period_df)))
+        return tuple(extras)
 
     def _pick_tick_step(self, w, target_px=80):
         span = max(1, self.visible_last - self.visible_first)
@@ -693,23 +977,41 @@ class ShotblocksTimelineCanvas(c4d.gui.GeUserArea):
         here = os.path.dirname(os.path.abspath(__file__))
         icons = os.path.join(here, "res", "icons")
 
-        def make(name, state_attr):
+        def make(name, state_attr, click_action=None):
             off = load_bitmap(os.path.join(icons, name + "-off.png"))
             on  = load_bitmap(os.path.join(icons, name + "-on.png"))
-            return {
+            entry = {
                 "name":        name,
                 "state_attr":  state_attr,
                 "off":         off,
                 "on":          on,
-                "off_hover":   tinted_copy(off, (255, 255, 255), HOVER_LIGHTEN),
-                "on_hover":    tinted_copy(on,  (255, 255, 255), HOVER_LIGHTEN),
-                "off_press":   tinted_copy(off, (0,   0,   0),   PRESS_DARKEN),
-                "on_press":    tinted_copy(on,  (0,   0,   0),   PRESS_DARKEN),
+                "off_hover":   tinted_copy(off, (255, 255, 255), HOVER_LIGHTEN) if off else None,
+                "on_hover":    tinted_copy(on,  (255, 255, 255), HOVER_LIGHTEN) if on  else None,
+                "off_press":   tinted_copy(off, (0,   0,   0),   PRESS_DARKEN)  if off else None,
+                "on_press":    tinted_copy(on,  (0,   0,   0),   PRESS_DARKEN)  if on  else None,
             }
+            # Optional custom click handler. When unset, the rail
+            # commit code does the default `setattr(self, state_attr,
+            # not current)`. When set, it calls the named method.
+            if click_action:
+                entry["click_action"] = click_action
+            return entry
 
+        # The analyse button is a toggle whose bitmap follows
+        # `audio_track.analysis_visible`, but its click handler is
+        # custom (`_on_analyse_click`) so the first click on a
+        # never-analysed track *runs* analysis instead of toggling
+        # an empty visibility state. The state_attr_path lets
+        # `_draw_rail` follow a dotted path into a child object,
+        # rather than the simple `getattr(self, attr)` of the
+        # toggle buttons.
         return [
-            make("snap", "_snap_enabled"),
-            make("loop", "_loop_enabled"),
+            make("snap",  "_snap_enabled"),
+            make("loop",  "_loop_enabled"),
+            make("analyse", "_audio_track.analysis_visible",
+                 click_action="_on_analyse_click"),
+            make("waveform", "_audio_track.waveform_visible",
+                 click_action="_on_waveform_click"),
         ]
 
     def _load_block_bitmaps(self):
@@ -804,6 +1106,19 @@ class ShotblocksTimelineCanvas(c4d.gui.GeUserArea):
         y1 = RAIL_BTN_TOP + idx * (RAIL_BTN_SIZE + RAIL_BTN_GAP)
         return x1, y1, x1 + RAIL_BTN_SIZE, y1 + RAIL_BTN_SIZE
 
+    def _resolve_attr_path(self, path):
+        """Read a dotted attribute path off `self`. Returns False on
+        any missing segment so a partially-initialized canvas (e.g.
+        before AudioTrack exists) can't crash the rail draw."""
+        if not path:
+            return False
+        obj = self
+        for seg in path.split("."):
+            obj = getattr(obj, seg, None)
+            if obj is None:
+                return False
+        return obj
+
     def _rail_button_at(self, x, y):
         """Return the button dict (and its index) under (x, y), or
         (None, None) if the cursor isn't over a rail button."""
@@ -857,10 +1172,22 @@ class ShotblocksTimelineCanvas(c4d.gui.GeUserArea):
         committed = inside
         self._rail_pressed = None
         if committed:
-            attr = btn["state_attr"]
-            new_val = not bool(getattr(self, attr, False))
-            setattr(self, attr, new_val)
-            print("[Shotblocks] {} = {}".format(attr.lstrip("_"), new_val))
+            click_action = btn.get("click_action")
+            if click_action:
+                # Custom dispatcher (e.g. analyse: run-then-toggle).
+                fn = getattr(self, click_action, None)
+                if callable(fn):
+                    try:
+                        fn()
+                    except Exception as e:
+                        print("[Shotblocks] rail click {} failed: {}".format(click_action, e))
+            else:
+                # Default: flip the bool the state_attr points to.
+                attr = btn.get("state_attr")
+                if attr and "." not in attr:
+                    new_val = not bool(getattr(self, attr, False))
+                    setattr(self, attr, new_val)
+                    print("[Shotblocks] {} = {}".format(attr.lstrip("_"), new_val))
         self.Redraw()
 
     # ------------------------------------------------------------------
@@ -868,13 +1195,15 @@ class ShotblocksTimelineCanvas(c4d.gui.GeUserArea):
     # ------------------------------------------------------------------
 
     def _hit_test_playhead_head(self, x, y, w):
-        """True if (x, y) is inside the playhead triangle handle's bbox.
-        Hit zone matches the rendered triangle (centered on playhead x,
-        full height = PLAYHEAD_HEAD_H, full width = PLAYHEAD_HEAD_W)."""
-        if y < 0 or y >= PLAYHEAD_HEAD_H:
+        """True if (x, y) is inside the playhead handle's bbox.
+        Hit zone matches the rendered square: PLAYHEAD_HEAD_W pixels
+        wide, anchored to the right at the playhead column (matches
+        C4D's own playhead layout where the cursor line aligns to the
+        right edge of the head)."""
+        if y < 0 or y >= RANGE_HEIGHT:
             return False
         px = self._frame_to_x(self.playhead_frame, w)
-        return abs(x - px) <= PLAYHEAD_HEAD_W // 2
+        return (px - PLAYHEAD_HEAD_W) <= x <= px
 
     def _hit_test_range(self, x, y, w):
         """Range-bar hit test. Returns 'in', 'out', 'body', or None.
@@ -940,16 +1269,21 @@ class ShotblocksTimelineCanvas(c4d.gui.GeUserArea):
             rin_x, rout_x = rout_x, rin_x
         self.DrawSetPen(COL_RANGE_ACTIVE)
         self.DrawRectangle(rin_x, 0, rout_x, RANGE_HEIGHT)
-        # Handles flanking the active region — hover highlight when the
-        # cursor is over a handle.
+        # Handles flanking the active region — solid blue rectangles
+        # in the range bar (C4D-native style). Hover lightens the
+        # color of whichever handle the cursor is over.
         in_handle_color  = (COL_RANGE_HANDLE_HOVER if self._hover_range == "in"
                             else COL_RANGE_HANDLE)
         out_handle_color = (COL_RANGE_HANDLE_HOVER if self._hover_range == "out"
                             else COL_RANGE_HANDLE)
         self.DrawSetPen(in_handle_color)
-        self.DrawRectangle(max(LEFT_RAIL_WIDTH, rin_x - 2), 0, rin_x + 1, RANGE_HEIGHT)
+        # Each handle is 8 px wide (doubled from the original 4 px).
+        # The in handle's right edge anchors at rin_x; the out
+        # handle's left edge anchors at rout_x — so the handles
+        # frame the active range without overlapping it.
+        self.DrawRectangle(max(LEFT_RAIL_WIDTH, rin_x - 7), 0, rin_x, RANGE_HEIGHT)
         self.DrawSetPen(out_handle_color)
-        self.DrawRectangle(rout_x - 1, 0, min(w, rout_x + 2), RANGE_HEIGHT)
+        self.DrawRectangle(rout_x, 0, min(w, rout_x + 7), RANGE_HEIGHT)
         # Bottom border separating range bar from ruler
         self.DrawSetPen(COL_BORDER_SUB)
         self.DrawLine(LEFT_RAIL_WIDTH, RANGE_HEIGHT, w, RANGE_HEIGHT)
@@ -1033,6 +1367,27 @@ class ShotblocksTimelineCanvas(c4d.gui.GeUserArea):
         self.DrawSetPen(COL_BORDER_EMPH)
         self.DrawLine(LEFT_RAIL_WIDTH, t0_bot, w, t0_bot)
 
+        # Audio re-sync runs here (rather than just before
+        # _draw_audio_block as it used to) so the beat grid below has
+        # a current AudioTrack on the very first DrawMsg after a doc
+        # switch — without this the grid wouldn't appear until the
+        # second redraw.
+        self._sync_audio_for_active_doc()
+
+        # v9 beat grid — drawn here so it sits *behind* shots and the
+        # audio block but *above* the lane backgrounds. The lattice
+        # serves as a project-wide rhythmic reference for aligning
+        # cuts; shots and audio paint over it on each track.
+        # Skipped when no audio track, the grid is low-confidence,
+        # or the user has the analysis toggled off.
+        if (self._audio_track.decoded is not None
+                and self._audio_track.analysis_visible
+                and grid_is_displayable(self._audio_track.beat_grid)):
+            try:
+                self._draw_beat_grid(w, h)
+            except Exception as e:
+                print("[Shotblocks] beat-grid draw failed: {}".format(e))
+
         # Orphan-count transition log. Cheap predicate per shot — just a
         # BaseLink dereference. Logging happens *only* on increase so the
         # user gets a single console message per camera deletion.
@@ -1049,9 +1404,8 @@ class ShotblocksTimelineCanvas(c4d.gui.GeUserArea):
             yt     = self._track_y_top(track)
             self._draw_shot_block(shot, w, yt, shot["id"] in self._selected_ids)
 
-        # Audio block (v7) — re-syncs from the doc on first draw or on
-        # doc switch, then renders below track 0.
-        self._sync_audio_for_active_doc()
+        # Audio block (v7) — re-sync happens earlier (before the beat
+        # grid). Just draw the body now if a track is loaded.
         if self._audio_track.decoded is not None:
             self._draw_audio_block(w)
 
@@ -1076,12 +1430,71 @@ class ShotblocksTimelineCanvas(c4d.gui.GeUserArea):
             self.DrawLine(LEFT_RAIL_WIDTH, yt, w, yt)
             self.DrawLine(LEFT_RAIL_WIDTH, yt + SHOT_HEIGHT, w, yt + SHOT_HEIGHT)
 
-        # Playhead (always on top, but only over the timeline area —
-        # the rail paints later and covers any stem that strays left).
+        # Play-range visualization: dim the timeline area OUTSIDE the
+        # active range, and drop a blue vertical line at each handle
+        # column connecting the range-bar handle all the way down to
+        # the canvas bottom. Skipped when the range covers
+        # (effectively) the full doc — that's the "cleared" state
+        # and should look like a clean timeline.
+        doc_for_range = c4d.documents.GetActiveDocument()
+        if doc_for_range is not None:
+            doc_first_r, doc_last_r = self._doc_bounds()
+            if self._range_is_active(range_in, range_out,
+                                     doc_first_r, doc_last_r):
+                rin_x_clamped  = max(LEFT_RAIL_WIDTH, rin_x)
+                rout_x_clamped = max(LEFT_RAIL_WIDTH, rout_x)
+                # Dim spans from the bottom of the RANGE BAR (right
+                # below the handles) down to canvas bottom — covers
+                # the ruler, lanes, and audio block. This connects
+                # visually to the handles instead of leaving a gap
+                # around the ruler labels.
+                dim_top = RANGE_HEIGHT
+                # Translucent dim: 45° diagonal hatch pattern. C4D
+                # 2026's DrawSetPen has no alpha, and tests with
+                # partial-alpha BaseBitmaps (both PNG-loaded and
+                # programmatically constructed with AddChannel)
+                # showed DrawBitmap doesn't honor the alpha channel
+                # when blending against the non-bitmap canvas
+                # surface. A diagonal hatch reads as "translucent"
+                # to the eye without any actual alpha — dark pixels
+                # cover every Nth column on each row, leaving the
+                # underlying timeline content visible through the
+                # gaps. Stride 3 = ~33 % coverage.
+                self.DrawSetPen(COL_RANGE_OUTSIDE_DIM)
+                STRIDE = 8
+                THICK = 1
+                if rin_x_clamped > LEFT_RAIL_WIDTH:
+                    lo_x1 = LEFT_RAIL_WIDTH
+                    lo_x2 = rin_x_clamped - 1
+                    self._draw_diagonal_hatch(
+                        lo_x1, dim_top, lo_x2, h, STRIDE, THICK)
+                if rout_x_clamped < w:
+                    hi_x1 = rout_x_clamped + 1
+                    hi_x2 = w
+                    self._draw_diagonal_hatch(
+                        hi_x1, dim_top, hi_x2, h, STRIDE, THICK)
+                # Blue vertical lines at each handle's column. Start
+                # at y=RANGE_HEIGHT so they connect cleanly to the
+                # bottom edge of the handle rectangle above.
+                self.DrawSetPen(COL_RANGE_LINE)
+                self.DrawLine(rin_x,  RANGE_HEIGHT, rin_x,  h)
+                self.DrawLine(rout_x, RANGE_HEIGHT, rout_x, h)
+
+        # Playhead. C4D-native style: a solid red square in the range
+        # bar with the cursor line aligned to its RIGHT edge (matching
+        # how C4D's own timeline draws the playhead). The square's
+        # left edge sits PLAYHEAD_HEAD_W pixels left of the playhead
+        # frame so the right edge lands exactly on the cursor column.
+        # Drawn AFTER the range dim so the playhead always sits on
+        # top of the muted outside area.
         px = self._frame_to_x(self.playhead_frame, w)
         self.DrawSetPen(COL_CURSOR)
-        self.DrawLine(px, 0, px, h)
-        self._draw_playhead_head(px)
+        # Bottom of the square clamped to RANGE_HEIGHT - 1 (the last
+        # row of the range bar) so it doesn't paint over the boundary
+        # row where the ruler begins. Otherwise the red square reads
+        # as visually "extending beyond" the gray range bar.
+        self.DrawRectangle(px - PLAYHEAD_HEAD_W, 0, px, RANGE_HEIGHT - 1)
+        self.DrawLine(px, RANGE_HEIGHT, px, h)
 
         # Snap indicator — yellow vertical lines at each frame the
         # in-flight drag is currently magnetized to. Drawn after the
@@ -1092,6 +1505,23 @@ class ShotblocksTimelineCanvas(c4d.gui.GeUserArea):
             for frame in self._snap_indicator_frames:
                 ix = self._frame_to_x(frame, w)
                 self.DrawLine(ix, 0, ix, h)
+
+        # Right-side dB meter — drawn before the busy overlay and
+        # the rail so those still paint on top of any pixels that
+        # stray into their territory. The meter reads RMS at the
+        # playhead's audio-frame position from the cached envelope.
+        if self._audio_track.decoded is not None:
+            try:
+                self._draw_db_meter(w, h)
+            except Exception as e:
+                print("[Shotblocks] dB meter draw failed: {}".format(e))
+
+        # Busy overlay — paints over the timeline area when a long-
+        # blocking action (v9 analysis) is in progress. Drawn before
+        # the rail so the rail still reads cleanly underneath but
+        # AFTER everything else, so the dim doesn't leave gaps.
+        if self._busy_label is not None:
+            self._draw_busy_overlay(w, h, self._busy_label)
 
         # Left rail — drawn last so its background covers any chrome that
         # extends to x=0 (e.g. range-bar leftover, ruler leftover, lane
@@ -1107,16 +1537,21 @@ class ShotblocksTimelineCanvas(c4d.gui.GeUserArea):
         self.DrawSetPen(COL_RAIL_BORDER)
         self.DrawLine(LEFT_RAIL_WIDTH - 1, 0, LEFT_RAIL_WIDTH - 1, h)
 
-        # Toggle buttons
+        # Rail buttons. The `state_attr` is a dotted path (typically
+        # a single segment like "_snap_enabled" but the analyse
+        # button uses "_audio_track.analysis_visible" so the bitmap
+        # tracks state on a child object). Bool-evaluates True/False
+        # to pick the on/off bitmap; press/hover variants tint that.
         for i, btn in enumerate(self._rail_buttons):
             bx1, by1, bx2, by2 = self._rail_button_rect(i)
-            state = bool(getattr(self, btn["state_attr"], False))
+            attr = btn.get("state_attr")
+            state = bool(self._resolve_attr_path(attr)) if attr else False
             if self._rail_pressed == btn["name"]:
-                bmp = btn["on_press"] if state else btn["off_press"]
+                bmp = btn.get("on_press") if state else btn.get("off_press")
             elif self._rail_hover == btn["name"]:
-                bmp = btn["on_hover"] if state else btn["off_hover"]
+                bmp = btn.get("on_hover") if state else btn.get("off_hover")
             else:
-                bmp = btn["on"] if state else btn["off"]
+                bmp = btn.get("on") if state else btn.get("off")
             if bmp is None:
                 # Bitmap missing — fall back to a colored rect so the
                 # button is still clickable / debuggable.
@@ -1142,16 +1577,46 @@ class ShotblocksTimelineCanvas(c4d.gui.GeUserArea):
             label_y = yt + (SHOT_HEIGHT - 12) // 2
             self.DrawText(label, 8, label_y)
 
-    def _draw_playhead_head(self, px):
-        # Filled downward triangle. DrawRectangle with y1==y2 is degenerate in
-        # C4D 2026 (renders zero pixels), so each row is an explicit 1-pixel-
-        # tall rect spanning [r, r+1].
-        half = PLAYHEAD_HEAD_W // 2
-        self.DrawSetPen(COL_PLAYHEAD_HEAD)
-        for r in range(PLAYHEAD_HEAD_H):
-            ratio = r / float(max(1, PLAYHEAD_HEAD_H - 1))
-            ww = max(0, int(round(half * (1.0 - ratio))))
-            self.DrawRectangle(px - ww, r, px + ww, r + 1)
+    def _draw_diagonal_hatch(self, x1, y1, x2, y2, stride, thickness=1):
+        """Fill the rect [x1, y1, x2, y2] with a 45° diagonal hatch
+        pattern, drawing one diagonal line every `stride` pixels.
+        `thickness` controls line thickness — C4D's DrawLine is
+        1-pixel wide, so each "thick" line is implemented as N
+        parallel 1-pixel lines offset by 1 px horizontally.
+
+        Used as a translucent-dim approximation when real alpha
+        blending isn't available — the eye reads the gap-between-
+        lines coverage as a darkening overlay rather than a solid
+        block, so the timeline content underneath stays partly
+        visible.
+
+        Caller sets the pen color via DrawSetPen before calling.
+        Each line is clipped to the rect's [x1, x2] range so lines
+        don't extend past the rect's horizontal bounds into
+        adjacent UI areas.
+        """
+        if x2 <= x1 or y2 <= y1 or stride < 1:
+            return
+        rect_h = y2 - y1
+        # Quantize x_top to the stride grid so the hatch is stationary
+        # across pans/zooms regardless of rect position.
+        x_top_start = ((x1 - rect_h) // stride) * stride
+        x_top = x_top_start
+        while x_top <= x2:
+            # Each thick line = N adjacent 1-px diagonals offset by
+            # 1 px in x. Visually merges into a thicker stroke.
+            for off in range(thickness):
+                ax, ay = x_top + off,          y1
+                bx, by = x_top + off + rect_h, y2
+                if ax < x1:
+                    ay = y1 + (x1 - ax)
+                    ax = x1
+                if bx > x2:
+                    by = y2 - (bx - x2)
+                    bx = x2
+                if ax <= bx:
+                    self.DrawLine(ax, ay, bx, by)
+            x_top += stride
 
     def _draw_dashed_hline(self, x1, x2, y, on_px, off_px):
         """Horizontal dashed line via short DrawRectangle segments. C4D
@@ -1670,7 +2135,7 @@ class ShotblocksTimelineCanvas(c4d.gui.GeUserArea):
                 shots, new_shot["id"],
                 new_shot["in_frame"],
                 new_shot["track"], drop_mode, snap_frames,
-                extra_points=(self.playhead_frame,))
+                extra_points=self._snap_extras())
             print("[Shotblocks] created shot id={} cam='{}' frames={}-{} track={}".format(
                 next_id, cam.GetName(), drop_frame, drop_frame + DEFAULT_SHOT_FRAMES,
                 new_shot["track"]))
@@ -1932,11 +2397,22 @@ class ShotblocksTimelineCanvas(c4d.gui.GeUserArea):
 
     def _open_context_menu(self, x, y):
         """Right-click context menu. Entries depend on hit kind: shot →
-        Set Range / Delete / Duplicate; audio block → Delete; empty
-        canvas → Range to All."""
+        Set Range / Delete / Duplicate; audio block → Delete; range
+        bar → Clear Range; empty canvas → Range to All."""
         w = self.GetWidth()
         doc = c4d.documents.GetActiveDocument()
         shots, _ = _read_shots(doc)
+
+        # Range-bar right-click takes priority — its only entry is
+        # "Clear Range" which resets the range to span the full doc
+        # (effectively turning the range visualization off).
+        if y < RANGE_HEIGHT:
+            bc = c4d.BaseContainer()
+            bc.SetString(MENU_CLEAR_RANGE, "Clear Range")
+            result = self._show_popup(bc, x, y)
+            self._dispatch_menu_result(result, doc, shots)
+            return True
+
         shot_id, _region = self._hit_test(x, y, shots, w)
 
         # If the click missed every shot, see if it landed on the audio
@@ -2036,6 +2512,9 @@ class ShotblocksTimelineCanvas(c4d.gui.GeUserArea):
                 in_f  = min(s["in_frame"]  for s in shots)
                 out_f = max(s["out_frame"] for s in shots)
                 self._set_range(doc, in_f, out_f)
+        elif result == MENU_CLEAR_RANGE:
+            doc_first, doc_last = self._doc_bounds()
+            self._set_range(doc, doc_first, doc_last)
 
     def _set_range(self, doc, in_f, out_f):
         """One-shot range write with undo. Used by menu items and I/O hotkeys."""
@@ -2096,6 +2575,12 @@ class ShotblocksTimelineCanvas(c4d.gui.GeUserArea):
             self._duplicate_selected(qualifier=qualifier)
             return True
 
+        # Ctrl+Shift+A → run v9 onset analysis on the audio track.
+        # Mirrors the analyse rail button; faster path for power users.
+        if (qualifier & _QCTRL) and (qualifier & _QSHIFT) and channel == ord('A'):
+            self._analyse_audio()
+            return True
+
         # C4D delivers '=' / '-' as channels 0x3D / 0x2D regardless of
         # Shift state, so Ctrl++ (Shift+=) and Ctrl+_ (Shift+-) reach
         # the same handler — no separate Shift branch needed.
@@ -2153,6 +2638,9 @@ class ShotblocksTimelineCanvas(c4d.gui.GeUserArea):
             return False
         self.visible_first = doc_first
         self.visible_last  = doc_last
+        # Doc range changed → effective zoom changed too. Schedule a
+        # peak-cache rebuild so the waveform paints sharply.
+        self._request_peak_rebuild()
         return True
 
     # ------------------------------------------------------------------
@@ -2264,6 +2752,110 @@ class ShotblocksTimelineCanvas(c4d.gui.GeUserArea):
             del anim[sid]
         if any_changed:
             self.Redraw()
+
+    def _poll_analysis_thread(self):
+        """Main-thread handler for analysis events.
+
+        Called from `CoreMessage(PLUGIN_ID_COMMAND, …)` for two
+        distinct reasons (we tell them apart by what state we're in):
+
+        1. **Pending start.** `_analyse_audio` set the busy label,
+           triggered a redraw, and posted a SpecialEventAdd so this
+           handler would fire one tick later — by which time the
+           busy panel has painted. This branch spawns the worker
+           thread.
+        2. **Completion.** Worker thread finished and posted its own
+           SpecialEventAdd. By the time we're here the worker has
+           exited and populated `_analysis_result` or
+           `_analysis_error`. We drain the result onto the
+           AudioTrack, persist with undo, clear the busy overlay,
+           and redraw.
+        """
+        # Phase 2 of the two-phase start: panel has painted, kick
+        # off the worker now.
+        if self._analysis_pending_start:
+            self._spawn_analysis_worker()
+            return
+
+        thr = self._analysis_thread
+        if thr is None and self._busy_label is None:
+            return
+        # Worker is done OR was already cleaned up but the busy
+        # overlay is still set from the previous tick. Either way:
+        # commit results (if any), tear down the overlay, redraw.
+        if thr is not None:
+            self._analysis_thread = None  # let GC drop the Thread
+            err = self._analysis_error
+            res = self._analysis_result
+            self._analysis_error = None
+            self._analysis_result = None
+            if err is not None:
+                print("[Shotblocks] analyse worker raised: {}".format(err))
+            elif res is not None:
+                onsets, peaks, grid, elapsed = res
+                track = self._audio_track
+                track.onsets          = onsets
+                track.prominent_peaks = peaks
+                track.beat_grid       = grid
+                # First successful run flips visibility on so the
+                # user sees the markers immediately. Subsequent
+                # button clicks toggle without going through this
+                # path (they go through `_on_analyse_click`'s
+                # already-have-data branch).
+                track.analysis_visible = True
+
+                # Persist on the main thread with undo bracketing.
+                doc = c4d.documents.GetActiveDocument()
+                try:
+                    doc.StartUndo()
+                    track._persist_current(doc)
+                    doc.EndUndo()
+                except Exception as e:
+                    print("[Shotblocks] analyse persist failed: {}".format(e))
+                    try:
+                        doc.EndUndo()
+                    except Exception:
+                        pass
+
+                bpm = None
+                conf = 0.0
+                if grid is not None:
+                    period, _phase, conf = grid
+                    if period > 0:
+                        bpm = 60.0 * track.decoded.sample_rate / float(period)
+                print("[Shotblocks] audio analysed: {} onsets, {} peaks, "
+                      "{} ({:.2f}s, conf {:.2f})".format(
+                          len(onsets), len(peaks),
+                          "~{:.0f} BPM".format(bpm) if bpm else "no grid",
+                          elapsed, conf))
+                # Log peak timestamps so the user can compare against
+                # the song. Format: chunks of 8 per line, mm:ss.cc.
+                # Wraps in print so the indent reads cleanly in the
+                # C4D console; "1:23.45" is short enough that 8 fit.
+                if peaks:
+                    sr = track.decoded.sample_rate
+                    def _ts(af):
+                        s = af / float(sr)
+                        return "{:d}:{:05.2f}".format(int(s // 60), s % 60)
+                    timestamps = [_ts(af) for af in peaks]
+                    print("[Shotblocks] peak times:")
+                    for i in range(0, len(timestamps), 8):
+                        print("    " + "  ".join(timestamps[i:i+8]))
+                # One-shot debug: log the snap-target counts so a
+                # user reporting "snap doesn't work" has data to
+                # share. Cheap (only fires on completion).
+                try:
+                    n_extras = len(self._snap_extras())
+                    print("[Shotblocks] snap targets active: {} "
+                          "(includes playhead + audio edges + peaks + grid)".format(
+                              n_extras))
+                except Exception as e:
+                    print("[Shotblocks] snap-targets log failed: {}".format(e))
+                c4d.EventAdd()
+        # Tear down overlay and force a final redraw so the markers
+        # appear in the same paint as the overlay disappears.
+        self._busy_label = None
+        self.Redraw()
 
     def _set_hover_target(self, shot_id, side, on):
         """Set the animation target for a side ('left' or 'right') to
@@ -2380,6 +2972,45 @@ class ShotblocksTimelineCanvas(c4d.gui.GeUserArea):
         c4d.EventAdd()
         self.Redraw()
 
+    def _set_playhead_with_playback_resync(self, new_frame, fps,
+                                            seek_audio=False):
+        """Move the playhead to `new_frame` AND re-anchor playback so
+        the next `_playback_tick` continues from there.
+
+        Without re-anchoring, `_playback_tick` computes
+        `playhead = anchor_frame + (now - anchor_t) * fps` from the
+        ORIGINAL anchor. A scrub-induced playhead change would be
+        overwritten on the very next tick because the elapsed time
+        from the old anchor is unchanged. Re-anchoring resets that
+        clock to "right now at the new frame."
+
+        `seek_audio=False` (the drag-tick case): the audio keeps
+        playing from wherever it was. The video clock follows the
+        scrub smoothly; audio catches up on drag release. Reissuing
+        audio per tick would call `_write_temp_wav` per tick
+        (~tens of ms each) and stutter badly.
+
+        `seek_audio=True` (commit on drag release / click): force a
+        full audio re-issue at the new position. Costly but happens
+        once per scrub gesture.
+        """
+        self.playhead_frame = new_frame
+        if self._playing:
+            self._playback_anchor_t     = _monotonic()
+            self._playback_anchor_frame = new_frame
+            if (seek_audio
+                    and self._audio_track.decoded is not None
+                    and self._audio_playback.is_playing()):
+                target_af = self._audio_track.doc_frame_to_audio_frame(
+                    new_frame, fps)
+                if target_af < 0:
+                    target_af = 0
+                # `sync()` only reissues on BACKWARD jumps (its drift
+                # heuristic). Scrubbing is an explicit seek — call
+                # `play()` directly so forward scrubs reposition the
+                # audio too.
+                self._audio_playback.play(target_af)
+
     # ------------------------------------------------------------------
     # Audio block (v7) — sync, draw, hit-test, drag handlers
     # ------------------------------------------------------------------
@@ -2469,16 +3100,17 @@ class ShotblocksTimelineCanvas(c4d.gui.GeUserArea):
             self.DrawLine(ax1, ay1, ax1, ay2)
             self.DrawLine(ax2, ay1, ax2, ay2)
 
-        # Waveform inset — keep it inside the body's mid slice so the
-        # left/right edge handles (and their dot grips) stay visible.
-        # Mirrors the shot-label band-clamp so a very narrow block
-        # gracefully shrinks the inset.
+        # Waveform extends edge-to-edge so its visible peaks line up
+        # exactly with peak ticks and beat-grid lines (both drawn via
+        # `audio_frame_to_doc_frame → _frame_to_x`). On very narrow
+        # blocks we still leave a tiny inset to avoid drawing past
+        # the body's border bitmap.
         clip_w = ax2 - ax1
-        band_w = max(1, min(EDGE_BAND_PX, clip_w // 3))
+        band_w = min(AUDIO_WF_INSET_PX, max(0, clip_w // 3))
         wf_x1 = ax1 + band_w
         wf_x2 = ax2 - band_w
-        wf_y1 = ay1 + 4
-        wf_y2 = ay2 - 4
+        wf_y1 = ay1 + AUDIO_WF_INSET_Y
+        wf_y2 = ay2 - AUDIO_WF_INSET_Y
         if wf_x2 <= wf_x1 or wf_y2 <= wf_y1 or track.peaks is None:
             return
 
@@ -2488,8 +3120,6 @@ class ShotblocksTimelineCanvas(c4d.gui.GeUserArea):
         # (samples_per_column=256 — see AudioTrack.import_file). We
         # never rebuild during draw — that put a multi-hundred-ms
         # full-file scan into every zoom-drag tick, freezing the UI.
-        # Instead the renderer downsamples the cache slice to
-        # `block_pixels` via nearest-neighbor below.
         doc      = c4d.documents.GetActiveDocument()
         fps      = self._doc_fps(doc)
         af0, af1 = track.audio_frames_for_visible_window(fps)
@@ -2500,21 +3130,67 @@ class ShotblocksTimelineCanvas(c4d.gui.GeUserArea):
         if not peaks_slice:
             return
 
-        # Downsample/upsample the slice to exactly block_pixels columns
-        # so 1 list entry = 1 pixel column. Cheap nearest-neighbor pick.
+        # When the user drags the right edge past end-of-audio, the
+        # block's pixel width is wider than the audio actually covers.
+        # Project the audio's end (`af1`, already clamped to
+        # `decoded.n_frames` by `audio_frames_for_visible_window`) to
+        # a doc-frame and back to pixels — that's how many pixels the
+        # waveform should ACTUALLY paint. The remainder (past end of
+        # audio) draws as silence (centerline only) so the waveform
+        # doesn't visually stretch to fill the extended block.
+        end_df  = track.audio_frame_to_doc_frame(af1, fps)
+        end_x   = self._frame_to_x(end_df, w)
+        wf_audio_x2 = min(wf_x2, max(wf_x1, int(end_x)))
+        audio_pixels = max(1, wf_audio_x2 - wf_x1)
+
+        # Downsample/upsample the slice to exactly audio_pixels columns
+        # so 1 list entry = 1 pixel column of the audio portion. Cheap
+        # nearest-neighbor pick.
         n = len(peaks_slice)
-        if n != block_pixels:
-            scaled = [None] * block_pixels
-            for x in range(block_pixels):
-                scaled[x] = peaks_slice[(x * n) // block_pixels]
+        if n != audio_pixels:
+            scaled = [None] * audio_pixels
+            for x in range(audio_pixels):
+                scaled[x] = peaks_slice[(x * n) // audio_pixels]
             peaks_slice = scaled
 
-        draw_waveform(self,
-                      peaks_slice,
-                      (wf_x1, wf_y1, wf_x2, wf_y2),
-                      fg_rgb=COL_AUDIO_WAVEFORM,
-                      mid_rgb=COL_AUDIO_CENTERLINE,
-                      x_offset=0)
+        # Waveform render — gated on the per-track `waveform_visible`
+        # toggle. When hidden, the audio body and edge handles still
+        # paint; only the waveform line itself is suppressed. Peak
+        # ticks and beat grid have their own independent toggle
+        # (`analysis_visible`).
+        if track.waveform_visible:
+            # Waveform color depends on selection state. The selected
+            # body bitmap is bright kelly green, which washes out the
+            # dim white-blend used on the unselected (dark teal) body.
+            # Switch to a dark-on-green color when selected so the
+            # waveform stays legible.
+            wf_color = COL_AUDIO_WAVEFORM_SEL if self._audio_selected else COL_AUDIO_WAVEFORM
+            draw_waveform(self,
+                          peaks_slice,
+                          (wf_x1, wf_y1, wf_audio_x2, wf_y2),
+                          fg_rgb=wf_color,
+                          mid_rgb=COL_AUDIO_CENTERLINE,
+                          x_offset=0)
+            # Past end-of-audio: draw the centerline only (silence)
+            # so the block reads as "no audio here" rather than a
+            # stretched repeat of the last peaks. Skipped when the
+            # block ends at end-of-audio (the common case).
+            if wf_audio_x2 < wf_x2:
+                cy = (wf_y1 + wf_y2) // 2
+                self.DrawSetPen(COL_AUDIO_CENTERLINE)
+                self.DrawLine(wf_audio_x2, cy, wf_x2, cy)
+
+        # v9 prominent-peak ticks. Skipped fast when the user has
+        # analysis toggled off — we still keep the data on the
+        # AudioTrack so re-toggling on doesn't require re-analyzing.
+        # Wrapped in try/except so a bug in the overlay doesn't kill
+        # the rest of the draw (the rail + playhead are painted after
+        # this and need to render even when the overlay fails).
+        if track.analysis_visible:
+            try:
+                self._draw_audio_overlay(track, ax1, ay1, ax2, ay2)
+            except Exception as e:
+                print("[Shotblocks] audio-overlay draw failed: {}".format(e))
 
         # Label — file basename, top-left of the block.
         try:
@@ -2523,6 +3199,425 @@ class ShotblocksTimelineCanvas(c4d.gui.GeUserArea):
             base = "audio"
         self.DrawSetTextCol(COL_AUDIO_LABEL, _TEXT_BG_TRANS or body_color)
         self.DrawText(base, ax1 + 6, ay1 + 4)
+
+    def _draw_db_meter(self, w, h):
+        """Premiere/FCP-style stereo dB meter on the right edge.
+
+        Two narrow vertical bars side-by-side (L and R), filled
+        bottom-up from -60 dBFS to the current dBFS reading, with a
+        green→yellow→red gradient. A horizontal yellow tick marks the
+        peak-hold (highest level reached recently, decaying at
+        PEAK_HOLD_DECAY_DB_S per second). A dB scale runs along the
+        right side at 6 dB intervals.
+
+        Reads from `AudioTrack.meter_levels_at(audio_frame)` where
+        `audio_frame` is derived from the current playhead position.
+        Falls back to FLOOR_DBFS when the playhead sits outside the
+        clip's audio range.
+        """
+        FLOOR_DBFS = METER_FLOOR_DBFS
+
+        bounds = self._meter_panel_x_bounds(w)
+        if bounds is None:
+            return
+        panel_x1, panel_x2 = bounds
+
+        track = self._audio_track
+        # Read levels at the playhead. The doc-frame → audio-frame
+        # conversion lives on AudioTrack already (used for playback
+        # sync). Returns -1 when playhead is outside the clip.
+        doc = c4d.documents.GetActiveDocument()
+        fps = self._doc_fps(doc) if doc is not None else 24
+        af = track.doc_frame_to_audio_frame(self.playhead_frame, fps)
+        if af >= 0:
+            levels = track.meter_levels_at(af)
+        else:
+            # Playhead outside the clip — meter is silent.
+            env = track.meter_envelope
+            n_ch = env.n_channels if env is not None else 0
+            levels = [FLOOR_DBFS] * n_ch
+        if not levels:
+            return
+
+        n_ch = len(levels)
+        # Reset all per-channel state when the channel count changes
+        # (new audio import with a different layout).
+        if (len(self._peak_hold_db) != n_ch
+                or len(self._meter_displayed_db) != n_ch):
+            self._peak_hold_db       = [FLOOR_DBFS] * n_ch
+            self._meter_displayed_db = [FLOOR_DBFS] * n_ch
+            self._meter_anim_t       = _monotonic()
+
+        # Per-frame state advance. Two animations run in parallel:
+        #   - Bar level: tracks the live envelope during playback OR
+        #     while the playhead is moving (scrub). Decays toward
+        #     FLOOR_DBFS at METER_PAUSE_DECAY_DB_S/sec when the
+        #     playhead has been stationary. Distinguishing scrub from
+        #     pause via "did the frame change since last draw" lets
+        #     scrubbing show live levels without a separate flag.
+        #   - Peak-hold tick: holds the highest recent bar level and
+        #     decays at PEAK_HOLD_DECAY_DB_S.
+        now = _monotonic()
+        dt = max(0.0, now - self._meter_anim_t)
+        self._meter_anim_t = now
+        is_playing = bool(self._playing)
+        playhead_moved = (self.playhead_frame != self._meter_last_playhead)
+        self._meter_last_playhead = self.playhead_frame
+        meter_live = is_playing or playhead_moved
+        for ch in range(n_ch):
+            target = levels[ch]
+            displayed = self._meter_displayed_db[ch]
+            if meter_live:
+                # Snap to the envelope value during playback or scrub.
+                # Visually the meter "is" the audio at the current
+                # playhead frame.
+                displayed = target
+            else:
+                # Stopped + playhead stationary — decay from whatever
+                # was last shown toward FLOOR_DBFS so the bars don't
+                # sit frozen on a loud value.
+                displayed -= METER_PAUSE_DECAY_DB_S * dt
+                if displayed < FLOOR_DBFS:
+                    displayed = FLOOR_DBFS
+            self._meter_displayed_db[ch] = displayed
+
+            # Peak hold: held value can only decrease via decay, snaps
+            # up when current level rises. Tracks the displayed bar
+            # level (not the raw envelope) so the held tick reflects
+            # what the user actually saw.
+            held = self._peak_hold_db[ch]
+            if displayed > held:
+                held = displayed
+            else:
+                held -= PEAK_HOLD_DECAY_DB_S * dt
+                if held < displayed:
+                    held = displayed
+            if held < FLOOR_DBFS:
+                held = FLOOR_DBFS
+            self._peak_hold_db[ch] = held
+
+        # Panel bg.
+        self.DrawSetPen(_rgb("1a1a1a"))
+        self.DrawRectangle(panel_x1, 0, panel_x2, h)
+        self.DrawSetPen(COL_RAIL_BORDER)
+        self.DrawLine(panel_x1, 0, panel_x1, h)
+
+        # Bars area: top of the bars at RIGHT_METER_TOP_PAD, bottom
+        # at h - RIGHT_METER_BOT_PAD. Y maps linearly: top = 0 dB,
+        # bottom = FLOOR_DBFS.
+        bars_y_top = RIGHT_METER_TOP_PAD
+        bars_y_bot = h - RIGHT_METER_BOT_PAD
+        if bars_y_bot - bars_y_top < 20:
+            return  # not enough vertical room to draw a meaningful meter
+        bars_h = bars_y_bot - bars_y_top
+
+        # Stack the bars on the LEFT of the panel; dB scale labels
+        # live to the right of them. Total bar block width:
+        #   n_ch bars + (n_ch - 1) gaps.
+        bars_total_w = n_ch * RIGHT_METER_BAR_W + (n_ch - 1) * RIGHT_METER_BAR_GAP
+        bars_x0 = panel_x1 + RIGHT_METER_PAD_X
+        bars_x_end = bars_x0 + bars_total_w
+
+        # Fill each bar.
+        for ch in range(n_ch):
+            bx1 = bars_x0 + ch * (RIGHT_METER_BAR_W + RIGHT_METER_BAR_GAP)
+            bx2 = bx1 + RIGHT_METER_BAR_W
+
+            # Black bar background (the "headroom" zone above the level).
+            self.DrawSetPen(_rgb("0a0a0a"))
+            self.DrawRectangle(bx1, bars_y_top, bx2, bars_y_bot)
+
+            # Gradient fill from the bottom up to the displayed level
+            # (which during playback equals the envelope, after pause
+            # decays toward FLOOR_DBFS — see the per-frame update above).
+            cur_db = self._meter_displayed_db[ch]
+            level_y = self._db_to_y(cur_db, bars_y_top, bars_y_bot)
+            # Draw row-by-row so each pixel row gets a color matching
+            # its dB. Iterating bars_y_bot → level_y. Per-row pen set
+            # is a few hundred calls per frame at typical dialog sizes
+            # — fine for the meter's update cadence.
+            row = bars_y_bot - 1
+            while row >= level_y:
+                row_db = self._y_to_db(row, bars_y_top, bars_y_bot)
+                self.DrawSetPen(self._meter_color_for_db(row_db))
+                self.DrawLine(bx1, row, bx2 - 1, row)
+                row -= 1
+
+            # Peak-hold tick: thin yellow line at the held dB.
+            held_db = self._peak_hold_db[ch]
+            if held_db > FLOOR_DBFS:
+                hold_y = self._db_to_y(held_db, bars_y_top, bars_y_bot)
+                self.DrawSetPen(self._meter_color_for_db(held_db))
+                self.DrawLine(bx1, hold_y, bx2 - 1, hold_y)
+
+        # dB scale on the right side of the panel.
+        self.DrawSetTextCol(_rgb("9a9a9a"), _rgb("1a1a1a"))
+        scale_x = bars_x_end + 4
+        for db in RIGHT_METER_LABELS_DB:
+            ty = self._db_to_y(db, bars_y_top, bars_y_bot)
+            label = "{:d}".format(db) if db != 0 else "0"
+            # Tick mark.
+            self.DrawSetPen(_rgb("5a5a5a"))
+            self.DrawLine(bars_x_end, ty, scale_x - 1, ty)
+            # Label.
+            self.DrawSetTextCol(_rgb("9a9a9a"), _rgb("1a1a1a"))
+            self.DrawText(label, scale_x, ty - 5)
+        # "dB" label at the bottom.
+        self.DrawText("dB", scale_x, bars_y_bot - 12)
+
+    def _db_to_y(self, db, y_top, y_bot):
+        """Map a dBFS value to a y pixel within [y_top, y_bot].
+        0 dBFS sits at y_top, FLOOR_DBFS at y_bot. Linear in between."""
+        FLOOR_DBFS = METER_FLOOR_DBFS
+        if db >= 0.0:
+            return y_top
+        if db <= FLOOR_DBFS:
+            return y_bot
+        # Progress = 0 at 0 dB → y_top, 1 at FLOOR_DBFS → y_bot.
+        progress = (-db) / (-FLOOR_DBFS)
+        return int(round(y_top + progress * (y_bot - y_top)))
+
+    def _y_to_db(self, y, y_top, y_bot):
+        """Inverse of `_db_to_y`."""
+        FLOOR_DBFS = METER_FLOOR_DBFS
+        if y <= y_top:
+            return 0.0
+        if y >= y_bot:
+            return FLOOR_DBFS
+        progress = (y - y_top) / float(y_bot - y_top)
+        return progress * FLOOR_DBFS
+
+    def _meter_color_for_db(self, db):
+        """Green → yellow → red gradient per dB. Matches Premiere/FCP
+        defaults: solid green below METER_GREEN_TOP_DB (~-18 dB),
+        ramping to yellow at METER_YELLOW_TOP_DB (~-6 dB), then red
+        above ~-3 dB."""
+        if db <= METER_GREEN_TOP_DB:
+            return _rgb("3acb3a")  # solid green
+        if db <= METER_YELLOW_TOP_DB:
+            # Green → yellow
+            t = (db - METER_GREEN_TOP_DB) / float(METER_YELLOW_TOP_DB - METER_GREEN_TOP_DB)
+            r = int(58  + (245 - 58)  * t)
+            g = int(203 + (220 - 203) * t)
+            b = int(58  + (40  - 58)  * t)
+            return c4d.Vector(r / 255.0, g / 255.0, b / 255.0)
+        # Yellow → red above -6 dB
+        t = (db - METER_YELLOW_TOP_DB) / float(0.0 - METER_YELLOW_TOP_DB)
+        if t > 1.0:
+            t = 1.0
+        r = int(245 + (235 - 245) * t)
+        g = int(220 + (50  - 220) * t)
+        b = int(40  + (50  - 40)  * t)
+        return c4d.Vector(r / 255.0, g / 255.0, b / 255.0)
+
+    def _draw_busy_overlay(self, w, h, label):
+        """Paint a static status panel near the canvas center while a
+        long blocking action is in progress.
+
+        v9 analysis runs on a worker thread that needs the GIL to
+        itself — any per-tick redraw on the main thread starves the
+        worker (verified: 60 fps timer turned a 10s analysis into 60s).
+        So the panel paints once when the work starts and once when
+        it finishes; no animation between.
+        """
+        pw = 240
+        ph = 44
+        cx = (LEFT_RAIL_WIDTH + w) // 2
+        cy = h // 2
+        x1 = cx - pw // 2
+        y1 = cy - ph // 2
+        x2 = x1 + pw
+        y2 = y1 + ph
+
+        self.DrawSetPen(_rgb("1c1c1c"))
+        self.DrawRectangle(x1, y1, x2, y2)
+        self.DrawSetPen(COL_ACCENT)
+        self.DrawLine(x1, y1, x2, y1)
+        self.DrawLine(x1, y2, x2, y2)
+        self.DrawLine(x1, y1, x1, y2)
+        self.DrawLine(x2, y1, x2, y2)
+
+        self.DrawSetTextCol(_rgb("e0e0e0"), _rgb("1c1c1c"))
+        text_w = self.DrawGetTextWidth(label)
+        self.DrawText(label, cx - text_w // 2, cy - 6)
+
+    def _draw_beat_grid(self, w, h):
+        """Draw the beat grid as faint dashed vertical lines that span
+        the full canvas (rail-right edge to right border, ruler-bottom
+        to canvas-bottom). The lattice anchors to the audio track —
+        moving / trimming the audio shifts the grid via the same
+        `audio_frame_to_doc_frame` math the peak ticks use, which is
+        why it must be called only when an audio track is loaded.
+
+        Dashing is done by drawing 4-px segments with 4-px gaps. C4D
+        2026's DrawLine doesn't support dash styles directly, so we
+        chunk each vertical line into segments. A 173 BPM track over
+        a 1000-frame project yields maybe ~10 visible beats at typical
+        zoom; the inner segment loop is cheap.
+        """
+        track = self._audio_track
+        grid  = track.beat_grid
+        if grid is None:
+            return
+        period_af, phase_af, _conf = grid
+        if period_af <= 0:
+            return
+
+        doc = c4d.documents.GetActiveDocument()
+        fps = self._doc_fps(doc)
+        # Vertical span: from the bottom of the ruler to the bottom of
+        # the canvas. Skip the range bar + ruler area (they own that
+        # band) so the grid doesn't fight the ruler labels.
+        gy_top = RANGE_HEIGHT + RULER_HEIGHT
+        gy_bot = h
+        x_left = LEFT_RAIL_WIDTH
+        x_right = w
+
+        # Visible doc-frame range. We expand by one period on each
+        # side so the off-screen grid lines just past the edges still
+        # render without sudden pop-in when the user pans.
+        vis_first = self.visible_first
+        vis_last  = self.visible_last
+        if vis_last <= vis_first:
+            return
+
+        # Convert a couple of audio-frame anchor points to doc-frames
+        # so we can derive the grid's doc-frame period and phase
+        # without recomputing per beat. Using two anchors at distance
+        # `period_af` is exact regardless of fractional fps/sr ratio.
+        df_phase = track.audio_frame_to_doc_frame(phase_af, fps)
+        df_phase_plus = track.audio_frame_to_doc_frame(phase_af + period_af, fps)
+        period_df = df_phase_plus - df_phase
+        if period_df <= 0:
+            return
+
+        # Adaptive density: when the timeline is zoomed out enough that
+        # adjacent beats land closer than MIN_BEAT_PX pixels apart, draw
+        # only every Nth beat. N doubles each step (1 → 2 → 4 → 8 …) so
+        # the visible grid stays a clean subdivision of the underlying
+        # beats — drumming-friendly when the user zooms in/out.
+        MIN_BEAT_PX = 12
+        fpp = self._frames_per_pixel(w) or 1.0
+        period_px = period_df / fpp
+        stride = 1
+        while period_px * stride < MIN_BEAT_PX:
+            stride *= 2
+
+        # First k such that (k * period_df + df_phase) >= vis_first.
+        # Snap k_lo to the stride so we draw whichever beats fall on
+        # the chosen subdivision (k = 0, stride, 2*stride, …); without
+        # this, the visible grid would shift back and forth as the
+        # user pans across stride boundaries.
+        k_lo = int(math.floor((vis_first - df_phase) / period_df))
+        k_hi = int(math.ceil((vis_last  - df_phase) / period_df))
+        # Round k_lo DOWN to the nearest stride multiple so the
+        # subdivision is stable across pans. floor-division on
+        # negatives in Python rounds toward -∞, which is what we want.
+        k_lo = (k_lo // stride) * stride
+
+        # Round each beat to an int doc-frame the SAME way `_snap_extras`
+        # rounds its grid targets. Without this, a beat draws at the
+        # exact float position (e.g. doc-frame 17.4 → pixel column N)
+        # but its snap target rounds to int (17 → pixel column N-1 or
+        # N+1 depending on zoom). The visible "sometimes left,
+        # sometimes right" jitter goes away when both paths use the
+        # same int.
+        self.DrawSetPen(COL_BEAT_GRID)
+        DASH_ON  = 4
+        DASH_OFF = 4
+        for k in range(k_lo, k_hi + 1, stride):
+            df_int = int(round(df_phase + k * period_df))
+            x = self._frame_to_x(df_int, w)
+            if x < x_left or x > x_right:
+                continue
+            # Draw the line as alternating 4 px on / 4 px off segments.
+            y = gy_top
+            while y < gy_bot:
+                seg_end = min(y + DASH_ON, gy_bot)
+                self.DrawLine(x, y, x, seg_end)
+                y = seg_end + DASH_OFF
+
+    def _draw_audio_overlay(self, track, ax1, ay1, ax2, ay2):
+        """Draw v9 prominent-peak ticks on the audio block.
+
+        Beat grid is NOT drawn here — it lives in `_draw_beat_grid`
+        which fires once at the start of DrawMsg, behind shots and
+        the audio block (so the grid spans the full canvas, not just
+        the audio body).
+
+        Tick x position is computed via the SAME projection as
+        `_snap_extras` and the snap matcher: audio-frame →
+        doc-frame → `_frame_to_x`. This is what makes a snapped
+        clip edge land *exactly* under a peak tick. The earlier
+        approach interpolated inside the waveform inset
+        (`wf_x1..wf_x2`), which placed ticks ~`band_w` pixels off
+        from the snap-target position; clips would snap to the
+        peak's doc-frame but the visible tick sat to the right.
+
+        The trade is that ticks may drift a few pixels off the
+        underlying waveform peak (because the waveform itself is
+        still drawn inside the inset). That's the right call —
+        the tick's authoritative function is "this is where a
+        snap will land", not "this is where the waveform crests."
+        """
+        if not track.prominent_peaks:
+            return
+        doc = c4d.documents.GetActiveDocument()
+        fps = self._doc_fps(doc)
+        w = self.GetWidth()
+        # Pick the peak marker variant matching the audio block's
+        # selection state. The selected variant is flattened against
+        # the bright kelly green; the normal variant against the dim
+        # green. Falls back to the normal bitmap if the selected one
+        # didn't load.
+        if self._audio_selected:
+            bmp = (self._chrome_bitmaps.get("peak-selected")
+                   or self._chrome_bitmaps.get("peak"))
+        else:
+            bmp = self._chrome_bitmaps.get("peak")
+
+        # Each peak rounds to an int doc-frame the SAME way `_snap_extras`
+        # computes its targets (`int(round(audio_frame_to_doc_frame))`).
+        # Drawing from that int ensures the marker lands on the exact
+        # pixel column a snap will pull to — no 0..1 frame jitter
+        # between visual and snap as zoom or trim shifts the float
+        # projection.
+        if bmp is not None:
+            src_w = bmp.GetBw()
+            src_h = bmp.GetBh()
+            # Scale to a fixed target height, width preserves aspect.
+            # Source can be authored at any reasonable size.
+            if src_h > 0:
+                out_h = PEAK_MARKER_BITMAP_H
+                out_w = max(1, int(round(src_w * out_h / float(src_h))))
+            else:
+                out_w, out_h = src_w, src_h
+            marker_y = ay1 + 1
+            for af in track.prominent_peaks:
+                df_int = int(round(track.audio_frame_to_doc_frame(af, fps)))
+                x = self._frame_to_x(df_int, w)
+                if x < ax1 or x > ax2:
+                    continue
+                try:
+                    self.DrawBitmap(bmp, x - out_w // 2, marker_y, out_w, out_h,
+                                    0, 0, src_w, src_h,
+                                    c4d.BMP_NORMALSCALED | c4d.BMP_ALLOWALPHA)
+                except Exception as e:
+                    print("[Shotblocks] peak bitmap draw failed: {}".format(e))
+                    bmp = None
+                    break
+        if bmp is None:
+            # Procedural fallback: 2-px vertical tick.
+            self.DrawSetPen(COL_AUDIO_PEAK_TICK)
+            tick_y1 = ay1 + 1
+            tick_y2 = ay1 + 13
+            for af in track.prominent_peaks:
+                df_int = int(round(track.audio_frame_to_doc_frame(af, fps)))
+                x = self._frame_to_x(df_int, w)
+                if x < ax1 or x > ax2:
+                    continue
+                self.DrawLine(x,     tick_y1, x,     tick_y2)
+                self.DrawLine(x + 1, tick_y1, x + 1, tick_y2)
 
     def _hit_test_audio(self, x, y, w):
         """Return None, ('audio', 'left'|'right'|'body') for clicks on
@@ -2665,12 +3760,33 @@ class ShotblocksTimelineCanvas(c4d.gui.GeUserArea):
         if y < RANGE_HEIGHT:
             region = self._hit_test_range(x, y, w)
             print("[Shotblocks] LMB on range bar at ({},{}) hit={}".format(x, y, region))
+            # Double-click on the bar (not on a handle) → clear range.
+            # Two LMB presses inside DOUBLE_CLICK_WINDOW_S, on the
+            # body or empty area of the range bar, reset to full doc.
+            DOUBLE_CLICK_WINDOW_S = 0.4
+            now = _monotonic()
+            is_double = ((now - self._last_range_lmb_t) <= DOUBLE_CLICK_WINDOW_S
+                         and region != "in" and region != "out")
+            self._last_range_lmb_t = now
+            if is_double:
+                doc = c4d.documents.GetActiveDocument()
+                doc_first, doc_last = self._doc_bounds()
+                self._set_range(doc, doc_first, doc_last)
+                return True
             if region == "in":
                 self._drag_range_handle("in", x, y)
             elif region == "out":
                 self._drag_range_handle("out", x, y)
             elif region == "body":
                 self._drag_range_body(x, y)
+            else:
+                # Click landed in the range bar but outside the
+                # active range and not on a handle — treat it as a
+                # playhead scrub (snap to click x, drag to scrub).
+                # Mirrors the ruler-band behavior so the user can
+                # reach the playhead from either the range bar's
+                # muted strips or the ruler itself.
+                self._drag_playhead(x, y)
             return True
 
         # Ruler band → scrub the playhead (click + drag).
@@ -2906,7 +4022,7 @@ class ShotblocksTimelineCanvas(c4d.gui.GeUserArea):
             df, dt = compute_delta(adx, ady)
             mode = _qualifier_mode(qual, self._snap_enabled)
             snap_frames = self._snap_frames() if mode == "snap" else 0
-            extra = (self.playhead_frame,)
+            extra = self._snap_extras()
             snap_targets = ()
             if is_group:
                 if mode in ("snap", "ripple"):
@@ -2938,7 +4054,7 @@ class ShotblocksTimelineCanvas(c4d.gui.GeUserArea):
 
         mode = _qualifier_mode(qualifier, self._snap_enabled)
         snap_frames = self._snap_frames() if mode == "snap" else 0
-        extra = (self.playhead_frame,)
+        extra = self._snap_extras()
         doc.StartUndo()
         if is_group:
             new_shots, _ = _resolve_group_move(shots, target_ids, shot_id,
@@ -2979,7 +4095,7 @@ class ShotblocksTimelineCanvas(c4d.gui.GeUserArea):
                 snap_frames = self._snap_frames() if mode == "snap" else 0
                 shots_preview, snap_targets = _resolve_resize(
                     shots, shot_id, edge, want, mode, snap_frames,
-                    extra_points=(self.playhead_frame,))
+                    extra_points=self._snap_extras())
             else:
                 shots_preview = [dict(s) for s in shots]
                 t = next(s for s in shots_preview if s["id"] == shot_id)
@@ -3006,7 +4122,7 @@ class ShotblocksTimelineCanvas(c4d.gui.GeUserArea):
         doc.StartUndo()
         new_shots, _ = _resolve_resize(
             shots, shot_id, edge, want, mode, snap_frames,
-            extra_points=(self.playhead_frame,))
+            extra_points=self._snap_extras())
         _write_shots(doc, new_shots, _read_shots(doc)[1], with_undo=True)
         doc.EndUndo()
         self._snap_indicator_frames = ()
@@ -3066,6 +4182,287 @@ class ShotblocksTimelineCanvas(c4d.gui.GeUserArea):
         self.Redraw()
         print("[Shotblocks] audio track deleted")
 
+    def _on_analyse_click(self):
+        """Rail-button click handler for analyse. Three states:
+
+        - **No audio loaded.** Print and return. The user clicked a
+          button that's effectively disabled.
+        - **No analysis data yet.** Run analysis (which is itself
+          slow — uses the busy overlay and worker thread) and flip
+          `analysis_visible = True` once results land. The `True`
+          flip is tied to the worker-completion handler so a click
+          while results are arriving doesn't get overwritten.
+        - **Analysis data exists.** Pure toggle: flip
+          `analysis_visible` and persist immediately. No re-run.
+          The user's existing markers stay alive; only the canvas
+          visibility changes.
+
+        Hotkey (Ctrl+Shift+A) routes through the same method so the
+        toggle/run logic stays in one place.
+        """
+        track = self._audio_track
+        if track.decoded is None:
+            print("[Shotblocks] analyse: no audio loaded")
+            return
+        # Has analysis already been run?
+        already_have_data = bool(track.prominent_peaks
+                                 or track.onsets
+                                 or track.beat_grid)
+        if already_have_data:
+            doc = c4d.documents.GetActiveDocument()
+            track.analysis_visible = not track.analysis_visible
+            try:
+                doc.StartUndo()
+                track._persist_current(doc)
+                doc.EndUndo()
+            except Exception as e:
+                print("[Shotblocks] analyse toggle persist failed: {}".format(e))
+                try:
+                    doc.EndUndo()
+                except Exception:
+                    pass
+            print("[Shotblocks] analysis visible = {}".format(track.analysis_visible))
+            c4d.EventAdd()
+            self.Redraw()
+            return
+        # First run on this audio — kick off the worker.
+        self._analyse_audio()
+
+    def _on_waveform_click(self):
+        """Rail-button click handler for the waveform toggle. Flips
+        `track.waveform_visible` and persists immediately. No-op when
+        no audio is loaded. Cmd+Z reverts the toggle along with any
+        other helper-null change captured in the same undo step."""
+        track = self._audio_track
+        if track.decoded is None:
+            print("[Shotblocks] waveform toggle: no audio loaded")
+            return
+        doc = c4d.documents.GetActiveDocument()
+        track.waveform_visible = not track.waveform_visible
+        try:
+            doc.StartUndo()
+            track._persist_current(doc)
+            doc.EndUndo()
+        except Exception as e:
+            print("[Shotblocks] waveform toggle persist failed: {}".format(e))
+            try:
+                doc.EndUndo()
+            except Exception:
+                pass
+        print("[Shotblocks] waveform visible = {}".format(track.waveform_visible))
+        c4d.EventAdd()
+        self.Redraw()
+
+    def _analyse_audio(self):
+        """Run v9 onset detection on the current audio track.
+
+        Called by `_on_analyse_click` only when there's no analysis
+        data yet (subsequent clicks just toggle visibility). Sets
+        `analysis_visible = True` on success so the data is shown
+        as soon as it lands.
+
+        Wraps in StartUndo/EndUndo so Cmd+Z reverts the analysis
+        write — the helper-null write inside `_persist_current` will
+        register a single AddUndo on the helper.
+        """
+        if self._audio_track.decoded is None:
+            print("[Shotblocks] analyse: no audio loaded")
+            return
+        if self._analysis_thread is not None and self._analysis_thread.is_alive():
+            # Already analysing — let the existing worker finish.
+            return
+
+        # Two-phase start so the busy panel paints BEFORE the worker
+        # steals the GIL. Phase 1 (this method): set the label,
+        # request a redraw, and post a deferred event back to
+        # ourselves. Phase 2 (the deferred handler, on the next event-
+        # loop tick): actually start the worker thread. Without this
+        # split the worker grabs the GIL before C4D services the
+        # queued DrawMsg, and the user sees a blank ~1s pause before
+        # the panel appears.
+        self._busy_label      = "Analysing audio…"
+        self._busy_started_t  = _monotonic()
+        self._analysis_result = None
+        self._analysis_error  = None
+        self._analysis_pending_start = True
+
+        # Trigger a paint, then poke ourselves so CoreMessage spawns
+        # the worker on the *next* tick — after C4D has had a chance
+        # to dispatch the redraw.
+        self.Redraw()
+        evt_id = self._analysis_complete_event_id
+        if evt_id:
+            try:
+                c4d.SpecialEventAdd(evt_id)
+            except Exception:
+                # Fallback: spawn immediately. The popup-paint delay
+                # comes back, but analysis still works.
+                self._spawn_analysis_worker()
+
+    def _spawn_analysis_worker(self):
+        """Phase 2 of analysis kickoff. Spawns the worker thread.
+
+        Called from `_poll_analysis_thread` when it sees
+        `_analysis_pending_start = True` — i.e. one event tick after
+        `_analyse_audio` posted the deferred SpecialEventAdd. The
+        intervening tick gave C4D time to paint the busy panel.
+        """
+        if not self._analysis_pending_start:
+            return
+        self._analysis_pending_start = False
+
+        decoded = self._audio_track.decoded
+        mono    = self._audio_track.mono
+        # The drum-band signal is heavy to build (~5-8 s biquad pass
+        # over the source-rate mono). Build it INSIDE the worker so
+        # the main thread stays responsive while the busy panel
+        # animates. Cached on the AudioTrack for subsequent analyses.
+        track = self._audio_track
+        complete_event_id = self._analysis_complete_event_id
+
+        def _worker():
+            try:
+                # Lazy build of the drum-band buffer; fine off-thread
+                # because it only reads `decoded` / `mono` (both
+                # immutable from this point) and writes one private
+                # cache slot on the AudioTrack.
+                peak_signal = track.drum_band
+                onsets, peaks, grid, elapsed = analyse_audio(
+                    decoded, mono=mono, peak_signal=peak_signal)
+                self._analysis_result = (onsets, peaks, grid, elapsed)
+            except Exception as e:
+                self._analysis_error = e
+            # Wake the main thread on completion.
+            if complete_event_id:
+                try:
+                    c4d.SpecialEventAdd(complete_event_id)
+                except Exception:
+                    pass
+
+        t = threading.Thread(target=_worker, name="shotblocks-analyse",
+                             daemon=True)
+        self._analysis_thread = t
+        t.start()
+
+    # ------------------------------------------------------------------
+    # Waveform peak-cache zoom rebuild (background, debounced)
+    # ------------------------------------------------------------------
+
+    PEAK_REBUILD_DEBOUNCE_S = 0.25
+
+    def _request_peak_rebuild(self):
+        """Mark that a peak-cache rebuild should run after the debounce
+        window. Called from every zoom-changing code path. Safe to
+        call many times in rapid succession — only the most recent
+        timestamp is used.
+
+        Cheap no-op when no audio is loaded. Wakes the dialog timer
+        so `_maybe_kick_peak_rebuild` runs each tick until the
+        debounce elapses and the worker takes over.
+        """
+        if self._audio_track.decoded is None:
+            return
+        self._pending_peak_rebuild_t = _monotonic() + self.PEAK_REBUILD_DEBOUNCE_S
+        dlg = self._playback_owner_dialog
+        if dlg is not None and hasattr(dlg, "request_anim_tick"):
+            dlg.request_anim_tick()
+
+    def _target_samples_per_column(self):
+        """Compute the ideal `samples_per_column` for the current
+        zoom: one peak-cache column per on-screen pixel of the audio
+        block, mapped through the doc-frame ↔ audio-frame ratio.
+        Returns max(1, …) so very-zoomed-in cases don't ask for
+        impossible sub-sample columns.
+        """
+        track = self._audio_track
+        if track.decoded is None:
+            return 1024
+        w = self.GetWidth()
+        if w <= 0:
+            return 1024
+        fpp = self._frames_per_pixel(w)
+        doc = c4d.documents.GetActiveDocument()
+        fps = self._doc_fps(doc) if doc is not None else 24
+        rate = track.decoded.sample_rate
+        # audio-frames per doc-frame: rate / fps. audio-frames per
+        # on-screen pixel: that times frames_per_pixel.
+        spc = int(round(rate / float(fps) * fpp))
+        return max(1, spc)
+
+    def _maybe_kick_peak_rebuild(self):
+        """Called from the dialog Timer each tick. When the debounce
+        elapsed and no rebuild is currently running, spawn the
+        worker thread.
+
+        The worker captures the target samples_per_column at spawn
+        time, so if the user keeps zooming the rebuild uses the
+        latest zoom state. While the worker runs, additional zoom
+        events post new debounce timestamps but the kick is
+        suppressed (worker.is_alive()) — when this worker finishes,
+        the next tick re-evaluates and kicks a fresh worker if the
+        zoom has changed enough to matter.
+        """
+        if self._pending_peak_rebuild_t <= 0.0:
+            return
+        if _monotonic() < self._pending_peak_rebuild_t:
+            return
+        # Debounce elapsed. Don't stack workers — if one is in flight,
+        # leave the pending timestamp; we'll re-check next tick.
+        if (self._peak_rebuild_thread is not None
+                and self._peak_rebuild_thread.is_alive()):
+            return
+
+        track = self._audio_track
+        if track.decoded is None or track.peaks is None:
+            self._pending_peak_rebuild_t = 0.0
+            return
+
+        target_spc = self._target_samples_per_column()
+        # Cheap escape: skip if the current cache is already a close
+        # match (within ~1% — see `should_rebuild`).
+        from sb_audio_peaks import should_rebuild
+        if not should_rebuild(track.peaks, target_spc):
+            self._pending_peak_rebuild_t = 0.0
+            return
+
+        decoded = track.decoded
+        complete_event_id = self._peak_rebuild_event_id
+        self._pending_peak_rebuild_t = 0.0
+
+        def _worker():
+            try:
+                from sb_audio_peaks import build as build_peaks
+                new_cache = build_peaks(decoded, samples_per_column=target_spc)
+                self._peak_rebuild_result = new_cache
+            except Exception as e:
+                print("[Shotblocks] peak-rebuild worker raised: {}".format(e))
+                self._peak_rebuild_result = None
+            if complete_event_id:
+                try:
+                    c4d.SpecialEventAdd(complete_event_id)
+                except Exception:
+                    pass
+
+        t = threading.Thread(target=_worker, name="shotblocks-peaks",
+                             daemon=True)
+        self._peak_rebuild_thread = t
+        t.start()
+
+    def _drain_peak_rebuild(self):
+        """Main-thread completion handler for the peak-rebuild worker.
+        Triggered by SpecialEventAdd → CoreMessage(PLUGIN_ID_TAG).
+        Swaps the new cache onto the AudioTrack and redraws."""
+        result = self._peak_rebuild_result
+        self._peak_rebuild_result = None
+        self._peak_rebuild_thread = None
+        if result is None:
+            return
+        track = self._audio_track
+        if track.decoded is None:
+            return
+        track.peaks = result
+        self.Redraw()
+
     def _duplicate_selected(self, qualifier=0):
         """Duplicate every selected shot. Each copy lands on track+1 (auto-grow
         up to MAX_TRACKS); at the cap, it falls back to same-track immediately
@@ -3095,15 +4492,18 @@ class ShotblocksTimelineCanvas(c4d.gui.GeUserArea):
                 shots.append(copy)
                 shots, _ = _resolve_position(shots, dup_id, copy["in_frame"],
                                              copy["track"], mode, snap_frames,
-                                             extra_points=(self.playhead_frame,))
+                                             extra_points=self._snap_extras())
             else:
-                new_in = src["out_frame"] + 1
+                # Duplicate lands right after the source with the
+                # required gap so adjacent clips never share a
+                # boundary frame.
+                new_in = src["out_frame"] + 1 + CLIP_GAP_FRAMES
                 copy = _make_shot(dup_id, new_in, new_in + duration,
                                   src["cam_name"], src_track)
                 shots.append(copy)
                 shots, _ = _resolve_position(shots, dup_id, copy["in_frame"],
                                              copy["track"], mode, snap_frames,
-                                             extra_points=(self.playhead_frame,))
+                                             extra_points=self._snap_extras())
             new_ids.add(dup_id)
             # Carry the source shot's camera link forward so the duplicate's
             # name stays in sync with the source camera through future renames.
@@ -3186,23 +4586,55 @@ class ShotblocksTimelineCanvas(c4d.gui.GeUserArea):
         self._commit_range_drag(doc, orig_in, orig_out)
 
     def _drag_range_body(self, mx, my):
-        """Drag the active span between handles to slide both together.
-        The whole span clamps inside the doc's [Min, Max] frame bounds."""
+        """Press in the range-bar body. Distinguishes click vs drag:
+        if the user releases without meaningfully moving the cursor,
+        snap the playhead to the click x. If they drag, slide the
+        active range as before.
+
+        The threshold (CLICK_DRAG_THRESHOLD_PX) is small enough that
+        a deliberate drag feels responsive but accidental jitter
+        during a click stays in the click branch.
+        """
+        CLICK_DRAG_THRESHOLD_PX = 3
         w = self.GetWidth()
         fpp = self._frames_per_pixel(w)
         doc = c4d.documents.GetActiveDocument()
         doc_first, doc_last = self._doc_bounds()
         orig_in, orig_out = _read_range(doc)
         length = orig_out - orig_in
+        max_abs_dx = [0]   # tracks the largest |dx| reached during the gesture
 
         def on_tick(adx, _ady, _qual):
-            delta = int(round(adx * fpp))
-            new_in = max(doc_first, min(orig_in + delta, doc_last - length))
-            self._preview_range = (new_in, new_in + length)
-            self.Redraw()
+            if abs(adx) > max_abs_dx[0]:
+                max_abs_dx[0] = abs(adx)
+            # Only paint the dragged preview once movement clears the
+            # click-vs-drag threshold; below that, leave the range
+            # alone so a click-and-release doesn't visually shift it.
+            if max_abs_dx[0] >= CLICK_DRAG_THRESHOLD_PX:
+                delta = int(round(adx * fpp))
+                new_in = max(doc_first, min(orig_in + delta, doc_last - length))
+                self._preview_range = (new_in, new_in + length)
+                self.Redraw()
 
         self._drag_loop(_KEY_MLEFT, mx, my, on_tick)
-        self._commit_range_drag(doc, orig_in, orig_out)
+        if max_abs_dx[0] >= CLICK_DRAG_THRESHOLD_PX:
+            # Drag — commit the new range position.
+            self._commit_range_drag(doc, orig_in, orig_out)
+        else:
+            # Click — discard any preview and snap the playhead.
+            self._preview_range = None
+            fps = self._doc_fps(doc) if doc is not None else 24
+            target_frame = self._x_to_frame(mx, w)
+            target_frame = max(doc_first, min(doc_last, target_frame))
+            self._set_playhead_with_playback_resync(
+                target_frame, fps, seek_audio=True)
+            if doc is not None:
+                try:
+                    doc.SetTime(c4d.BaseTime(target_frame, fps))
+                except Exception as e:
+                    print("[Shotblocks] SetTime failed: {}".format(e))
+            c4d.EventAdd()
+            self.Redraw()
 
     def _drag_playhead(self, mx, my, snap_on_click=True):
         """Click + drag scrubs the playhead. View state — no doc write, no
@@ -3226,10 +4658,12 @@ class ShotblocksTimelineCanvas(c4d.gui.GeUserArea):
         doc_first, doc_last = self._doc_bounds()
 
         shots, _ = _read_shots(doc) if doc is not None else ([], 0)
-        audio_extras = ()
-        if self._audio_track.decoded is not None:
-            audio_extras = (int(self._audio_track.in_frame),
-                            int(self._audio_track.out_frame) + 1)
+        # Playhead-scrub snap excludes the playhead itself from extras
+        # (otherwise the playhead snaps to its own current position).
+        # Everything else from `_snap_extras` applies — audio block
+        # edges + prominent-peak frames.
+        scrub_extras = tuple(p for p in self._snap_extras()
+                             if p != self.playhead_frame)
 
         def snap_frame(f, qual):
             mode = _qualifier_mode(qual, self._snap_enabled)
@@ -3239,7 +4673,7 @@ class ShotblocksTimelineCanvas(c4d.gui.GeUserArea):
             snapped, targets = _magnetic_snap_edge(
                 shots, target_id=None, edge_frame=f,
                 snap_frames=self._snap_frames(),
-                extra_points=audio_extras)
+                extra_points=scrub_extras)
             self._snap_indicator_frames = targets
             return snapped
 
@@ -3275,10 +4709,20 @@ class ShotblocksTimelineCanvas(c4d.gui.GeUserArea):
                     print("[Shotblocks] scrub DrawViews err: {}".format(e))
                 c4d.EventAdd()
 
+        # Snapshot whether playback was active when the scrub started.
+        # If it was, the helper re-anchors the playback clock and the
+        # drag-end commit seeks the audio.
+        was_playing = self._playing
+
         if snap_on_click:
             raw = self._x_to_frame(mx, w)
             snapped = snap_frame(raw, 0)
-            self.playhead_frame = max(doc_first, min(doc_last, snapped))
+            new_frame = max(doc_first, min(doc_last, snapped))
+            # Re-anchor video clock + playhead. seek_audio=False during
+            # drag — audio resync costs ~tens of ms per call so we defer
+            # to drag-end. Same for the per-tick handler below.
+            self._set_playhead_with_playback_resync(new_frame, fps,
+                                                     seek_audio=False)
             push_to_doc(self.playhead_frame)
             self.Redraw()
         orig_frame = self.playhead_frame
@@ -3288,11 +4732,18 @@ class ShotblocksTimelineCanvas(c4d.gui.GeUserArea):
             snapped = snap_frame(raw, qual)
             new_frame = max(doc_first, min(doc_last, snapped))
             if new_frame != self.playhead_frame:
-                self.playhead_frame = new_frame
+                self._set_playhead_with_playback_resync(new_frame, fps,
+                                                         seek_audio=False)
                 push_to_doc(new_frame)
                 self.Redraw()
 
         self._drag_loop(_KEY_MLEFT, mx, my, on_tick)
+        # Drag committed — if we were playing, seek the audio to the
+        # final scrub frame so audio catches up to the video clock.
+        # The single audio re-issue is fine here (one per gesture).
+        if was_playing and self._playing:
+            self._set_playhead_with_playback_resync(
+                self.playhead_frame, fps, seek_audio=True)
         if self._snap_indicator_frames:
             self._snap_indicator_frames = ()
             self.Redraw()
@@ -3379,6 +4830,10 @@ class ShotblocksTimelineCanvas(c4d.gui.GeUserArea):
             self.Redraw()
 
         self._drag_loop(_KEY_MRIGHT, mx, my, on_tick)
+        # Drag is done — request a peak-cache rebuild at the new zoom
+        # so the waveform sharpens. The debounce lets a rapid double
+        # zoom-drag collapse into a single rebuild.
+        self._request_peak_rebuild()
 
     def _pan_by_wheel(self, delta):
         """Plain scroll wheel = horizontal pan. One wheel notch = ~10% of the
@@ -3404,6 +4859,8 @@ class ShotblocksTimelineCanvas(c4d.gui.GeUserArea):
         self.visible_first, self.visible_last = self._clamp_visible(
             new_first, new_first + span_new)
         self.Redraw()
+        # Debounced waveform peak-cache rebuild at the new zoom level.
+        self._request_peak_rebuild()
 
     # ------------------------------------------------------------------
     # Render preview during drag without committing to the document
