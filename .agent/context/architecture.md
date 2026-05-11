@@ -50,13 +50,13 @@ The system shape. Read this before adding any feature so it lands in the right p
 
 ## C4D plugin object model
 
-**Shotblocks tag** — `TagData` subclass. Applied by the user to a camera object through C4D's standard tag application path: right-click the camera in the Object Manager → Tags → Shotblocks, or via the Tags menu in the menu bar. (Existing tags can be moved between cameras by dragging — standard C4D behavior — but creation is via the menu.) The tag acts as both the configuration surface (parameters exposed on the Attribute Manager) and the host of the procedural rig hierarchy. On apply, the tag generates child nulls under the camera (`world → boom → pan → tilt → camera`) and inserts the camera into the appropriate position in the hierarchy. On remove, it cleans up the nulls and returns the camera to its previous parent.
+**Shotblocks tag** — `TagData` subclass. Applied by the user to a camera object through C4D's standard tag application path: right-click the camera in the Object Manager → Tags → Shotblocks, or via the Tags menu in the menu bar. (Existing tags can be moved between cameras by dragging — standard C4D behavior — but creation is via the menu.) The tag acts as both the configuration surface (parameters exposed on the Attribute Manager) and the host of the procedural rig pipeline. The camera stays where the user put it in the OM; the tag is visible directly on it. **No rig nulls, no reparenting** — the tag's per-frame `Execute` reads the camera's evaluated pose, runs the spring-damper / look-at / etc. math, and writes the result directly to the camera. This is a deliberate departure from the legacy 3D-rig "null chain" pattern: every behavior we need can be implemented as math operating on the camera's pose, and skipping the null chain keeps the OM clean and the tag accessible. See `skills/rig-hierarchy.md` for the historical context and the reasoning.
 
 The tag operates in one of two modes:
 
 - **Additive mode** (default for cameras with prior animation): the user's existing animation is the baseline. Each frame, the tag's procedural pipeline produces *deltas* — small offsets in position, rotation, focal length, focus — that are added to the user's animated values. The user's keyframes/splines/constraints are never modified; the camera's animated transforms are read at each frame and combined with the procedural deltas at output. Disabling the tag immediately reveals the original animation undisturbed.
 
-- **Replace mode** (default for unanimated cameras, or opt-in): the procedural pipeline drives the camera entirely. Boom, pan, tilt nulls produce the camera's transforms directly; any user keyframes on the camera are ignored while the tag is in this mode.
+- **Replace mode** (default for unanimated cameras, or opt-in): the procedural pipeline drives the camera entirely. Preset / look-at / framing-rule outputs combine into a target pose each frame and the tag writes it to the camera. Any user keyframes on the camera are ignored while the tag is in this mode.
 
 Mode selection logic on tag application:
 - Camera has no animated transforms → default to replace mode silently.
@@ -66,6 +66,8 @@ Mode selection logic on tag application:
 The tag is opt-in. A camera without a Shotblocks tag is still draggable into the timeline as a shot — the plugin simply renders that camera's existing animation during the shot's frame range. This is the architectural distinction that lets Shotblocks meet users where they already are: cameras the user already authored work as shots; the procedural goodies are unlocked by adding the tag.
 
 **Rig behaviors** — internal to the Shotblocks tag. When the tag is present and active, it runs the procedural pipeline each frame: spring-damper, look-at, autofocus, noise, framing. These are not separate user-visible tags; they are subsystems of the Shotblocks tag, exposed in its Attribute Manager. Earlier drafts of this architecture had each behavior as its own tag — that's been consolidated because users should not have to wrangle five tags to get a rig working. One tag, multiple behaviors inside.
+
+Each behavior is math that operates on the camera's pose (and on per-behavior state held on the tag). They compose by chaining: spring-damper smooths the incoming target pose; look-at biases rotation toward a target; framing rule offsets that target; noise adds an organic delta; autofocus drives the focus channel. The output is one camera pose per frame, written to the camera directly. No intermediate null objects — the math doesn't need them, and avoiding them keeps the OM clean and the tag accessible (see "Shotblocks tag" above for the no-nulls rationale).
 
 In additive mode, behaviors that are inherently replacement operations (look-at, framing rule) are applied as gentle corrective offsets toward the target rather than full rotation replacement. The user can dial the strength of those offsets from 0% (no effect) to 100% (full look-at, equivalent to replace mode for that channel). Behaviors that are naturally additive (spring damping, noise, autofocus on its own focus channel) work the same in both modes.
 
@@ -91,13 +93,13 @@ When the document advances to frame N:
 2. The active shot's source camera is what renders to the viewport. Sequencer ensures any other Shotblocks-managed cameras are inactive.
 3. Sequencer applies the shot's per-shot rig state (if any) to the camera's Shotblocks tag (if present).
 4. **If the source camera has no Shotblocks tag:** the camera renders its own animation directly. Position, rotation, focal length all come from the camera's own keyframes, splines, or constraints. The shot has no rig state.
-5. **If the source camera has a Shotblocks tag in replace mode:** the tag's procedural pipeline runs (spring-damper, look-at, noise, framing, autofocus, in priority order). The rig nulls produce the camera's transforms; user keyframes on the camera are ignored. On the first frame of a shot, the previous shot's residual physics state is reset.
-6. **If the source camera has a Shotblocks tag in additive mode:** the tag reads the camera's animated transforms at frame N (from the user's keyframes, splines, or constraints). The procedural pipeline computes deltas — offsets in position, rotation, focal length, focus — based on the rig state and the inputs (target position, motion velocity, etc.). The output is `user_animation(N) + procedural_deltas(N)`. The user's keyframes are never written to.
+5. **If the source camera has a Shotblocks tag in replace mode:** the tag's procedural pipeline runs (spring-damper, look-at, noise, framing, autofocus, in priority order). Each behavior is math operating on the camera pose; user keyframes on the camera are ignored. The final pose is written to the camera. On the first frame of a shot, the previous shot's residual physics state is reset.
+6. **If the source camera has a Shotblocks tag in additive mode:** the tag reads the camera's animated pose at frame N (the value left on the camera by the standard animation pass — keyframes, splines, constraints all evaluate before the tag runs). The procedural pipeline smooths / shakes / refocuses on top, writing the result back to the camera. The user's *keyframe data* is never modified — only the camera's per-frame evaluated transform is overwritten, which animation re-establishes on the next frame.
 7. Camera object is now positioned and oriented for frame N. Render proceeds.
 
 This flow runs every frame during playback. Performance discipline lives in the Shotblocks tag's behavior code, not the sequencer core — the sequencer just routes; the tag does the per-frame math (when active).
 
-**v6 status:** spacebar playback engine implements steps 1, 2, and 4 (untagged passthrough — active-shot lookup, active BaseDraw camera routing, the camera's own animation rendering directly). Steps 3, 5, 6 await the Shotblocks-tag pipeline. Mid-playback orphan or gap = hold last camera, keep playing; the dashed-red orphan block is the user's signal.
+**v10 status:** the Shotblocks tag is wired and runs additive-mode spring-damper smoothing on the camera's pose each frame. Replace mode parameter exists in AM but the Execute path short-circuits with a console warning (no presets, look-at, or framing rules yet to drive it). Steps 1, 2, 3, 4, and 6 are implemented; step 5 (replace mode) is a v11 deliverable. No rig nulls were ever generated — the no-nulls decision was made during v10 implementation when the OM-clutter and buried-tag costs became apparent.
 
 ### Slate in additive mode
 
@@ -290,13 +292,15 @@ src/
   rig/
     shotblocks_tag.py       # the TagData class - applied by user to a camera
     parameters.py           # parameter IDs and defaults exposed in Attribute Manager
-    hierarchy.py            # generates/maintains the world→boom→pan→tilt→camera nulls
     behaviors/
       spring_damper.py      # internal subsystem, not a separate tag
       look_at.py
       autofocus.py
       noise_profile.py
       framing_rule.py
+      # (No `hierarchy.py` — the rig is math on the camera's pose,
+      # not a chain of null objects in the OM. See `skills/rig-hierarchy.md`
+      # for the historical context.)
   sequencer/
     core.py                 # shot list, active-shot resolution
     shot.py                 # Shot data class

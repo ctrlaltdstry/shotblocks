@@ -30,6 +30,14 @@ def _make_shot(shot_id, in_frame, out_frame, cam_name, track):
         "out_frame": out_frame,
         "cam_name":  cam_name,
         "track":     track,
+        # v10: per-shot rig overrides. Empty by default; the editing
+        # UI lands in v11. Keys (any optional):
+        #   damping_pos, damping_rot, damping_focal, damping_focus  (float)
+        #   mode_override: "additive" | "replace" | None
+        # The dialog reads this at active-shot transitions and pushes
+        # non-None values into the tag's runtime cache via
+        # sb_rig_tag.push_overrides().
+        "rig_state": {},
     }
 
 

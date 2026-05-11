@@ -422,6 +422,12 @@ class ShotblocksTimelineCanvas(c4d.gui.GeUserArea):
         self.visible_last   = 240
         self.playhead_frame = 60
 
+        # v10: tracks which shot was active on the last call to
+        # _route_camera_for_frame. Used to detect hard-cut transitions
+        # so the rig tag's spring state can be reset (no smoothing
+        # across cuts; constitution principle 4).
+        self._last_active_shot_id = None
+
         # Drag-receive (Object Manager → canvas) state
         self._drag_over   = False
         self._drag_frame  = -1
@@ -2700,10 +2706,21 @@ class ShotblocksTimelineCanvas(c4d.gui.GeUserArea):
         """Resolve the active shot at `frame` and route its source camera
         to the active BaseDraw. On gap or orphan: leave the current camera
         alone — hold last good. The dashed-red orphan block on the timeline
-        is the signal."""
+        is the signal.
+
+        Also drives the v10 rig pipeline:
+        - At active-shot transitions (the shot id changed since last
+          call), push the new shot's `rig_state` overrides into the
+          tag's runtime cache and request a spring reset (hard cut →
+          no smoothing across the cut, per constitution principle 4).
+        - When the active shot stays the same but its `rig_state`
+          changed, push the new overrides without resetting the
+          spring.
+        """
         shots, _ = _read_shots(doc)
         active = _active_shot_at(shots, frame)
         if active is None:
+            self._last_active_shot_id = None
             return
         cam = _get_shot_cam(doc, active.get("id"))
         if cam is None:
@@ -2714,6 +2731,38 @@ class ShotblocksTimelineCanvas(c4d.gui.GeUserArea):
                 bd[c4d.BASEDRAW_DATA_CAMERA] = cam
         except Exception as e:
             print("[Shotblocks] BaseDraw camera set failed: {}".format(e))
+
+        # v10 rig wiring: notify the Shotblocks tag (if any) on the
+        # active camera about the shot transition and its overrides.
+        try:
+            from sb_rig_tag import (
+                ShotblocksTag, push_overrides, request_reset,
+            )
+        except Exception:
+            return
+        tag = None
+        try:
+            t = cam.GetFirstTag()
+            while t is not None:
+                if isinstance(t.GetNodeData(), ShotblocksTag):
+                    tag = t
+                    break
+                t = t.GetNext()
+        except Exception:
+            tag = None
+        if tag is None:
+            self._last_active_shot_id = active.get("id")
+            return
+
+        sid = active.get("id")
+        prev_sid = getattr(self, "_last_active_shot_id", None)
+        overrides = active.get("rig_state") or {}
+        push_overrides(tag, overrides)
+        if sid != prev_sid:
+            # Hard cut. Snap the spring to the new target on its first
+            # frame so there's no carry-over smoothing across the cut.
+            request_reset(tag)
+        self._last_active_shot_id = sid
 
     def _anim_tick(self):
         """Advance each in-flight hover animation toward its target.

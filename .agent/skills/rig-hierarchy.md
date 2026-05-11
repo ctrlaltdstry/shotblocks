@@ -1,43 +1,112 @@
-# Rig Hierarchy
+# Rig Hierarchy — historical note
 
-The standard rig structure. Mirrors physical camera rigs.
+**This document describes an approach the project considered and
+rejected during v10 implementation.** Keeping it here for context so
+future readers understand why the codebase has no rig-null code.
+
+## The legacy approach (rejected)
+
+Physical camera rigs work as a chain of independent joints:
 
 ```
-world_null              — placement and worldspace anchor
+world_null              — placement and worldspace anchor (dolly)
   └─ boom_null          — vertical / crane height (translates Y)
       └─ pan_null       — horizontal rotation (rotates Y)
           └─ tilt_null  — vertical rotation (rotates X)
               └─ camera — focal length, focus, sensor
 ```
 
-## Why this structure
+3D software typically mirrors this with a chain of null objects.
+Most published C4D rig tutorials build exactly this hierarchy. The
+appeal: each null has one job, animations on one channel don't bleed
+into others, spring-damper on each null is independent and well-
+behaved.
 
-Each null has one job. Animating one should not bleed into others.
+The original Shotblocks architecture (v0–v9 docs, pre-v10) called
+for this same null chain, auto-generated when the Shotblocks tag was
+applied to a camera.
 
-- Want a crane up → animate boom_null Y
-- Want a pan → animate pan_null Y rotation
-- Want a tilt → animate tilt_null X rotation
-- Want a dolly → animate world_null position
-- Want a zoom (vs dolly) → animate camera focal length
+## Why we rejected it
 
-## Why not collapse it
+During v10 implementation, the practical costs surfaced:
 
-You could put everything on the camera. But then a "crane up while panning" requires animating two channels in coordinated ways, and the spring-damper on each channel interferes. With separate nulls, each channel is independent and damping behaves correctly.
+1. **OM clutter.** Every tagged camera adds four nulls to the
+   user's Object Manager. After a few cameras, the OM is dominated
+   by Shotblocks scaffolding.
 
-## Generating it
+2. **Buried tag.** Reparenting the camera under the null chain
+   means the Shotblocks tag (which lives on the camera) is now four
+   levels deep. Selecting it requires expanding four nulls in the
+   OM. The tag is the *primary* surface the user interacts with;
+   burying it is hostile.
 
-The Shotblocks tag builds this hierarchy when applied to a camera. The user sees their original camera in the Object Manager; the tag inserts the boom/pan/tilt/world nulls underneath as children of the camera. Hide the nulls from the Object Manager by default, expose them via a toggle for advanced users who want to manually animate them.
+3. **Hiding the nulls breaks the camera.** C4D's `NBIT_OHIDE`
+   hides an object *and its descendants* in the OM. Hiding the four
+   nulls also hides the camera under them — the user looks at the
+   OM and their camera has vanished. There's no built-in way to
+   hide the nulls but show the camera inside.
 
-When the tag is removed, the hierarchy is cleaned up and the camera returns to its previous state.
+4. **The math doesn't need them.** Every behavior in the architecture
+   (spring-damper, look-at, autofocus, noise, framing) can be
+   implemented as math on the camera's pose. The null chain is a
+   convenience for *manual keyframing of separated channels*, not a
+   requirement for procedural behavior.
 
-## Where each behavior runs
+5. **Constitution principle 2.** "The user owns the camera;
+   Shotblocks directs it." Wrapping the user's camera in four
+   plugin-generated objects inverts that.
 
-The Shotblocks tag is the only user-visible tag. Internally, it runs a pipeline of behaviors each frame, applied to specific nulls in the rig hierarchy:
+## What we do instead
 
-- **Spring-damper** → applied per-null (each null can have its own damping parameters in the tag's settings)
-- **Look-at** → drives pan_null and tilt_null toward the configured target
-- **Autofocus** → drives the camera's focus distance based on target or raycast
-- **Noise profile** → typically applied at world_null for whole-rig shake; at camera level for lens-only shake (configurable)
-- **Framing rule** → influences look-at's target offset (e.g., rule-of-thirds places the subject at the upper third instead of dead-center)
+The Shotblocks tag operates directly on the camera's pose each
+frame. Its `Execute`:
 
-These are subsystems of the Shotblocks tag, not separate tags the user manages. The user sees one tag; the implementation internally orchestrates the behaviors in the correct order each frame.
+1. Reads the camera's evaluated pose (post-animation pass, so user
+   keyframes have already been applied).
+2. Runs the procedural pipeline as math:
+   - **Spring-damper** smooths position, rotation, focal length,
+     focus distance. State held on the tag.
+   - **Look-at** (v11+) computes a target rotation from a target
+     object's position.
+   - **Framing rule** (v11+) offsets the look-at target.
+   - **Noise** (v11+) samples a noise function and adds a delta.
+   - **Autofocus** (v11+) computes focus distance from a target or
+     raycast.
+3. Writes the final pose to the camera (via `SetMg` / `SetRelPos` /
+   etc.). The camera's parent in the OM is whatever the user chose
+   — Shotblocks does not reparent.
+
+State that would have lived on the nulls (e.g., the boom's
+keyframable Y height for a crane preset) is exposed instead as
+**parameters on the tag** or **animation tracks on a preset**.
+Presets that author a crane move keyframe a parameter like
+`tag.preset_boom_y`; the tag's Execute reads that parameter and adds
+it to the position output.
+
+## When a user wants to animate the rig manually
+
+In the legacy null-chain design, the answer was "keyframe the boom
+null directly." In the no-nulls design, the answer is one of:
+
+- **Additive mode**: keyframe the camera itself. The tag's
+  spring-damper smooths your animation; everything else layers on
+  top.
+- **Replace mode + preset**: pick a preset that exposes the rig
+  parameter the user wants (boom_y, dolly_x), and keyframe that
+  parameter on the tag.
+
+The first is the common case (motion designers with AE muscle
+memory). The second is the procedural-authoring case.
+
+## Bake-down
+
+Unchanged from the legacy design: the bake-down operation steps
+through the frame range, records the camera's evaluated pose (now
+trivially equal to whatever the tag wrote), and produces reduced
+F-curves on a standard camera. See `skills/fcurve-baking.md`.
+
+## Reference
+
+- Decision made during v10 implementation, 2026-05-11.
+- See `.agent/tasks/v10-rig-pipeline.md` "What actually shipped"
+  for the implementation specifics.

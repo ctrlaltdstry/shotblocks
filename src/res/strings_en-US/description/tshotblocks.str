@@ -1,6 +1,18 @@
 STRINGTABLE Tshotblocks
 {
-    Tshotblocks         "Shotblocks";
-    SHOTBLOCKS_ENABLED  "Enabled";
-    SHOTBLOCKS_DAMPING  "Damping";
+    Tshotblocks                       "Shotblocks";
+    SHOTBLOCKS_ENABLED                "Enabled";
+    SHOTBLOCKS_MODE                   "Mode";
+    SHOTBLOCKS_MODE_ADDITIVE          "Additive (smooth user animation)";
+    SHOTBLOCKS_MODE_REPLACE           "Replace (rig drives camera)";
+    SHOTBLOCKS_DAMPING_POS            "Position Damping";
+    SHOTBLOCKS_DAMPING_ROT            "Rotation Damping";
+    SHOTBLOCKS_SUBSTEP_THRESHOLD      "Substep Threshold (fps)";
+    SHOTBLOCKS_RESET_ON_BOUNDARY      "Reset On Shot Boundary";
+    SHOTBLOCKS_LOOK_AT_TARGET         "Target";
+    SHOTBLOCKS_UP_TARGET              "Up Target";
+    SHOTBLOCKS_LOOK_AT_STRENGTH       "Look-At Strength";
+    SHOTBLOCKS_GRP_DAMPING            "Damping";
+    SHOTBLOCKS_GRP_LOOK_AT            "Look At";
+    SHOTBLOCKS_GRP_ADVANCED           "Advanced";
 }

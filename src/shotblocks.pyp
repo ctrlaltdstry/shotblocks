@@ -24,6 +24,7 @@ if _HERE not in sys.path:
     sys.path.insert(0, _HERE)
 
 from sb_canvas import ShotblocksTimelineCanvas
+from sb_rig_tag import ShotblocksTag
 
 
 # Plugin IDs (testing range).
@@ -38,26 +39,11 @@ PLUGIN_ID_TAG     = 1000001
 PLUGIN_ID_COMMAND = 1000003
 PLUGIN_ID_DIALOG  = PLUGIN_ID_COMMAND
 
-# Tag parameter IDs
-SHOTBLOCKS_ENABLED = 1000
-SHOTBLOCKS_DAMPING = 1001
+# Tag parameter IDs are defined in sb_rig_tag.py (and the .res file).
+# ShotblocksTag itself is imported from there.
 
 # Dialog widget IDs
 ID_CANVAS = 2000
-
-
-# ---------------------------------------------------------------------------
-# Tag
-# ---------------------------------------------------------------------------
-
-class ShotblocksTag(c4d.plugins.TagData):
-    def Init(self, node):
-        node[SHOTBLOCKS_ENABLED] = True
-        node[SHOTBLOCKS_DAMPING] = 0.5
-        return True
-
-    def Execute(self, tag, doc, op, bt, priority, flags):
-        return c4d.EXECUTIONRESULT_OK
 
 
 # ---------------------------------------------------------------------------
@@ -204,6 +190,19 @@ class ShotblocksTimelineDialog(c4d.gui.GeDialog):
         # the camera names through the cache.
         if id == c4d.EVMSG_CHANGE:
             try:
+                # Suppress redraws while C4D's native playback is
+                # running. EVMSG_CHANGE fires on every animation frame,
+                # and a full canvas redraw (every shot block + waveform
+                # + meter + camera-name resolution) is expensive enough
+                # to make C4D's viewport playback visibly stutter. Our
+                # playhead is independent of doc.GetTime() during
+                # C4D-native playback (Shotblocks's own spacebar uses
+                # its own clock), so we don't lose anything by
+                # skipping. A redraw on stop catches the canvas back up.
+                doc = c4d.documents.GetActiveDocument()
+                if (doc is not None
+                        and doc.GetPlayMode() != c4d.DOCUMENT_PLAYMODE_INACTIVE):
+                    return c4d.gui.GeDialog.CoreMessage(self, id, msg)
                 # If the project's total frame range changed (user dialled
                 # in a different length in project settings), refit our
                 # visible window. The helper only refits on actual length
