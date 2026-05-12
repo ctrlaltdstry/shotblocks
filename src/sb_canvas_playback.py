@@ -97,6 +97,15 @@ class PlaybackCanvasMixin(object):
         self._ext_consec_advances = 0
         self._ext_playing       = False
 
+        # The single BaseDraw the camera router is allowed to write
+        # to. Pinned on first need by `_pick_target_basedraw`, which
+        # prefers a perspective viewport over orthographic ones so a
+        # 4-up split (Top/Front/Side/Persp) doesn't see its Top view
+        # hijacked by whichever viewport happened to be focused.
+        # Cleared by `_invalidate_target_basedraw` when the dialog
+        # closes or the BaseDraw is destroyed.
+        self._pinned_basedraw = None
+
     # ------------------------------------------------------------------
     # Playback (v6) — spacebar drives a doc-FPS Timer on the dialog
     # ------------------------------------------------------------------
@@ -108,6 +117,7 @@ class PlaybackCanvasMixin(object):
             if dlg is not None:
                 dlg.stop_playback_timer()
             self._audio_playback.pause()
+            self._apply_selection_follows_playhead()
             print("[Shotblocks] playback paused at frame {}".format(self.playhead_frame))
             return
 
@@ -147,18 +157,122 @@ class PlaybackCanvasMixin(object):
         # down the in-flight DecodedAudio reference and re-bind it to the
         # same data, just to re-issue the temp-file write. The data was
         # bound on import; spacebar should be near-instant.
-        start_af = self._audio_track.doc_frame_to_audio_frame(
-            self.playhead_frame, fps)
-        if self._audio_track.decoded is not None and start_af >= 0:
-            self._audio_playback.play(start_af)
+        # Multi-track audio: build a mix from the playhead onwards and
+        # send the assembled payload to PlaySound. The mix respects
+        # mute/solo + per-track level curves; tracks the playhead
+        # already passed (in_frame < playhead) contribute their
+        # remainder, tracks that start later are zero-padded at the
+        # head so timing stays aligned.
+        self._start_audio_mix_for_playhead(fps)
         print("[Shotblocks] playback started at frame {} ({} fps)".format(
             self.playhead_frame, fps))
 
+    def _start_audio_mix_for_playhead(self, fps):
+        """Build a multi-track mix from the current playhead onwards
+        and hand it to AudioPlayback. Called from spacebar play, C4D
+        external-play detection, and scrub-resync. Skipped when no
+        audio is loaded or no track is audible (mute/solo)."""
+        # Nothing audible → don't bother building a mix.
+        audible = list(self._audible_tracks())
+        if not audible:
+            return
+        payload, sr, nch = self._build_audio_mix(self.playhead_frame)
+        if not payload or sr == 0:
+            return
+        af_per_doc_frame = sr / float(max(1, fps))
+        # Anchor the mix's "start frame" against the playhead so
+        # `sync()`'s backward-jump detection still works when the
+        # user loops back. Without this, every mix re-issue would
+        # look like a backward jump from the engine's perspective.
+        start_af = int(round(self.playhead_frame * af_per_doc_frame))
+        self._audio_playback.play_payload(
+            payload, sample_rate=sr, n_channels=nch,
+            start_audio_frame=start_af)
+
+    def _pick_target_basedraw(self, doc):
+        """Return the BaseDraw the camera router should write to,
+        pinning the choice on first call so subsequent calls keep
+        driving the same viewport even if the user focuses a
+        different one (the 4-up bug — `GetActiveBaseDraw` follows
+        viewport focus and would otherwise hijack Top/Front/Side).
+
+        Selection order:
+        1. The pinned BaseDraw from a previous call, if still alive
+           and still owned by the document.
+        2. The first BaseDraw whose projection is perspective —
+           orthographic views (Top/Front/Side) are never targeted
+           even if they happen to be the active one at first call.
+        3. The active BaseDraw as a last resort (e.g. a layout that
+           genuinely has no perspective view).
+        """
+        bd = self._pinned_basedraw
+        if bd is not None:
+            try:
+                count = doc.GetBaseDrawCount()
+                for i in range(count):
+                    if doc.GetBaseDraw(i) is bd:
+                        return bd
+            except Exception:
+                pass
+            self._pinned_basedraw = None
+
+        try:
+            count = doc.GetBaseDrawCount()
+        except Exception:
+            count = 0
+        for i in range(count):
+            cand = doc.GetBaseDraw(i)
+            if cand is None:
+                continue
+            try:
+                proj = cand[c4d.BASEDRAW_DATA_PROJECTION]
+            except Exception:
+                proj = None
+            if proj == c4d.BASEDRAW_PROJECTION_PERSPECTIVE:
+                self._pinned_basedraw = cand
+                return cand
+
+        try:
+            cand = doc.GetActiveBaseDraw()
+        except Exception:
+            cand = None
+        if cand is not None:
+            self._pinned_basedraw = cand
+        return cand
+
+    def _invalidate_target_basedraw(self):
+        """Drop the pinned BaseDraw so the next route call picks
+        fresh. Called by the dialog when the timeline closes —
+        a re-open against a different document, or after the user
+        rearranged their viewport layout, should be free to pick
+        again."""
+        self._pinned_basedraw = None
+
+    def _release_target_basedraw(self, doc):
+        """Hand the pinned BaseDraw back to C4D's default editor
+        camera. Used whenever the playhead is over a gap or an
+        orphaned shot — Shotblocks has nothing to render, so the
+        viewport returns to its scene-wide default rather than
+        holding the last shot's frame. Setting the BaseDraw's camera
+        link to None is what C4D itself does when the user clears
+        the "Use Camera" slot."""
+        bd = self._pick_target_basedraw(doc)
+        if bd is None:
+            return
+        try:
+            if bd[c4d.BASEDRAW_DATA_CAMERA] is not None:
+                bd[c4d.BASEDRAW_DATA_CAMERA] = None
+        except Exception as e:
+            print("[Shotblocks] BaseDraw camera release failed: {}".format(e))
+
     def _route_camera_for_frame(self, doc, frame):
         """Resolve the active shot at `frame` and route its source camera
-        to the active BaseDraw. On gap or orphan: leave the current camera
-        alone — hold last good. The dashed-red orphan block on the timeline
-        is the signal.
+        to the pinned target BaseDraw (see `_pick_target_basedraw`).
+        On gap or orphan: release the BaseDraw back to C4D's default
+        editor camera — Shotblocks has nothing to render, so the
+        viewport returns to default rather than holding the last shot's
+        frame. The dashed-red orphan block on the timeline remains the
+        visible signal that the user lost the camera reference.
 
         Also drives the v10 rig pipeline:
         - At active-shot transitions (the shot id changed since last
@@ -173,12 +287,22 @@ class PlaybackCanvasMixin(object):
         active = _active_shot_at(shots, frame)
         if active is None:
             self._last_active_shot_id = None
+            self._release_target_basedraw(doc)
             return
         cam = _get_shot_cam(doc, active.get("id"))
         if cam is None:
+            # Orphan: the shot exists at this frame but its source
+            # camera is gone. Treat like a gap.
+            self._last_active_shot_id = None
+            self._release_target_basedraw(doc)
             return
         try:
-            bd = doc.GetActiveBaseDraw()
+            # `_pick_target_basedraw` pins one BaseDraw — preferring
+            # perspective — so 4-up layouts don't see their Top /
+            # Front / Side viewports hijacked. `GetActiveBaseDraw`
+            # would otherwise follow viewport focus and steal whatever
+            # the user clicked into.
+            bd = self._pick_target_basedraw(doc)
             if bd is not None:
                 # Only write the BaseDraw camera when it actually
                 # changed. Re-assigning the same camera every tick
@@ -277,15 +401,12 @@ class PlaybackCanvasMixin(object):
                 # otherwise a same-camera same-shot wrap wouldn't
                 # re-push overrides or re-call request_reset.
                 self._last_active_shot_id = None
-                # Audio: tell playback to re-issue from the new audio
-                # frame (sync() detects the backward jump and reissues
-                # PlaySound). Forward-only sync below would miss the wrap.
-                if self._audio_track.decoded is not None and self._audio_playback.is_playing():
-                    target_af = self._audio_track.doc_frame_to_audio_frame(
-                        self.playhead_frame, fps)
-                    if target_af < 0:
-                        target_af = 0
-                    self._audio_playback.sync(target_af)
+                # Audio: loop wraps need a fresh mix from the new
+                # playhead. The single-track sync() path was
+                # forward-only; with multi-track we just re-issue.
+                if (self._audio_playback.is_playing()
+                        and any(True for _ in self._audible_tracks())):
+                    self._start_audio_mix_for_playhead(fps)
             else:
                 # Stop at out.
                 self.playhead_frame = range_out
@@ -378,21 +499,24 @@ class PlaybackCanvasMixin(object):
         # without further intervention. Calling play() again per
         # tick would rebuild the temp WAV file and stutter the audio.
         if self._ext_consec_advances >= 2 and not self._ext_playing:
-            if self._audio_track.decoded is not None:
-                target_af = self._audio_track.doc_frame_to_audio_frame(
-                    doc_frame, fps)
-                if target_af >= 0:
-                    self._audio_playback.play(target_af)
-                    self._ext_playing = True
-                    # Keep the dialog Timer alive so we can detect
-                    # the C4D pause (a stop produces NO event at all,
-                    # so we have to poll for idleness).
-                    dlg = self._playback_owner_dialog
-                    if dlg is not None:
-                        try:
-                            dlg.request_anim_tick()
-                        except Exception:
-                            pass
+            audible = list(self._audible_tracks())
+            if audible:
+                # Save playhead so mixer uses the C4D-driven frame
+                # (we haven't updated `self.playhead_frame` yet).
+                prev_ph = self.playhead_frame
+                self.playhead_frame = doc_frame
+                self._start_audio_mix_for_playhead(fps)
+                self.playhead_frame = prev_ph
+                self._ext_playing = True
+                # Keep the dialog Timer alive so we can detect
+                # the C4D pause (a stop produces NO event at all,
+                # so we have to poll for idleness).
+                dlg = self._playback_owner_dialog
+                if dlg is not None:
+                    try:
+                        dlg.request_anim_tick()
+                    except Exception:
+                        pass
         # A non-+1 tick (scrub, jump, or playback stopped) drops us
         # out of "external playback" mode; halt the audio that was
         # tracking it. Future +1 runs will start a fresh play().
@@ -480,8 +604,36 @@ class PlaybackCanvasMixin(object):
             self._audio_playback.stop()
             self._ext_playing = False
             self._ext_consec_advances = 0
+            self._apply_selection_follows_playhead()
             return False
         return True
+
+    def _apply_selection_follows_playhead(self):
+        """Selection-Follows-Playhead: stopping playback auto-selects
+        the shot the playhead is currently over (top-track-wins on
+        overlap, same as the active-shot resolver). If the playhead
+        sits in a gap, the selection is cleared. Always on — the
+        spacebar-stop-then-edit pattern is the dominant workflow and
+        the constitution favours minimal hidden modes.
+
+        Triggered from the playback-stop paths only — not from scrub
+        or playhead-jump — so the selection doesn't flicker during
+        a drag.
+        """
+        doc = c4d.documents.GetActiveDocument()
+        if doc is None:
+            return
+        shots, _ = _read_shots(doc)
+        active = _active_shot_at(shots, self.playhead_frame)
+        if active is None:
+            if self._selected_ids:
+                self._selected_ids.clear()
+                self.Redraw()
+            return
+        new_sel = {active["id"]}
+        if new_sel != self._selected_ids:
+            self._selected_ids = new_sel
+            self.Redraw()
 
     def _set_playhead_with_playback_resync(self, new_frame, fps,
                                             seek_audio=False):
@@ -510,14 +662,8 @@ class PlaybackCanvasMixin(object):
             self._playback_anchor_t     = _monotonic()
             self._playback_anchor_frame = new_frame
             if (seek_audio
-                    and self._audio_track.decoded is not None
-                    and self._audio_playback.is_playing()):
-                target_af = self._audio_track.doc_frame_to_audio_frame(
-                    new_frame, fps)
-                if target_af < 0:
-                    target_af = 0
-                # `sync()` only reissues on BACKWARD jumps (its drift
-                # heuristic). Scrubbing is an explicit seek — call
-                # `play()` directly so forward scrubs reposition the
-                # audio too.
-                self._audio_playback.play(target_af)
+                    and self._audio_playback.is_playing()
+                    and any(True for _ in self._audible_tracks())):
+                # Scrubbing is an explicit seek — re-issue from the
+                # new playhead. The mixer handles all audible tracks.
+                self._start_audio_mix_for_playhead(fps)

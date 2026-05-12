@@ -150,6 +150,9 @@ class DrawingCanvasMixin(object):
         # toggle buttons.
         return [
             make("snap",  "_snap_enabled"),
+            make("slip",  "_slip_enabled"),
+            make("pen",   "_pen_enabled"),
+            make("razor", "_razor_enabled"),
             make("loop",  "_loop_enabled"),
             make("analyse", "_audio_track.analysis_visible",
                  click_action="_on_analyse_click"),
@@ -246,12 +249,13 @@ class DrawingCanvasMixin(object):
 
     def _rail_button_rect(self, idx):
         """Return (x1, y1, x2, y2) — bbox of the button at index `idx`
-        in canvas-local coords. Buttons are stacked vertically along
-        the top of the rail, then wrap if the rail ever needs more
-        than one column (not yet)."""
-        from sb_canvas import LEFT_RAIL_WIDTH, RAIL_BTN_SIZE, RAIL_BTN_TOP, RAIL_BTN_GAP
-        # Single-column layout for now: one button per row.
-        x1 = (LEFT_RAIL_WIDTH - RAIL_BTN_SIZE) // 2  # centered horizontally
+        in canvas-local coords. Buttons stack vertically along the
+        LEFT edge of the rail (Premiere convention) so the right
+        portion of the rail is reserved for per-track row controls."""
+        from sb_canvas import (
+            RAIL_BTN_SIZE, RAIL_BTN_TOP, RAIL_BTN_GAP, RAIL_ROW_PAD_X,
+        )
+        x1 = RAIL_ROW_PAD_X
         y1 = RAIL_BTN_TOP + idx * (RAIL_BTN_SIZE + RAIL_BTN_GAP)
         return x1, y1, x1 + RAIL_BTN_SIZE, y1 + RAIL_BTN_SIZE
 
@@ -280,15 +284,60 @@ class DrawingCanvasMixin(object):
                 return btn, i
         return None, None
 
+    def _track_row_at(self, x, y):
+        """Hit-test the per-track row controls. Returns
+        (kind, idx, control) where control ∈ {'lock','chip','eye','mute','solo'},
+        or (None, None, None) if the cursor isn't on a row control.
+        Cursor must be inside the rail (x < LEFT_RAIL_WIDTH); a hit
+        inside a row's Y range but not on any specific control still
+        returns (None, None, None) so the rail's empty space stays
+        non-interactive."""
+        from sb_canvas import LEFT_RAIL_WIDTH, SHOT_HEIGHT
+        if x >= LEFT_RAIL_WIDTH:
+            return None, None, None
+        # Video rows.
+        from sb_shot_model import _displayed_lane_count
+        try:
+            import c4d
+            doc = c4d.documents.GetActiveDocument()
+            from sb_persistence import _read_shots
+            shots, _ = _read_shots(doc) if doc is not None else ([], 0)
+        except Exception:
+            shots = []
+        lane_count = max(1, _displayed_lane_count(shots))
+        for track in range(lane_count):
+            yt = self._track_y_top(track)
+            if not (yt <= y < yt + SHOT_HEIGHT):
+                continue
+            rects = self._track_row_rects(yt, SHOT_HEIGHT, "video")
+            for name, (rx1, ry1, rx2, ry2) in rects.items():
+                if rx1 <= x < rx2 and ry1 <= y < ry2:
+                    return "video", track, name
+            return None, None, None
+        # Audio row.
+        if getattr(self, "_audio_tracks", None):
+            from sb_canvas_audio import AUDIO_HEIGHT
+            for lane in self._audio_lanes_in_use():
+                ay1, ay2 = self._audio_lane_y_bounds(lane)
+                if not (ay1 <= y < ay2):
+                    continue
+                rects = self._track_row_rects(ay1, AUDIO_HEIGHT, "audio")
+                for name, (rx1, ry1, rx2, ry2) in rects.items():
+                    if rx1 <= x < rx2 and ry1 <= y < ry2:
+                        return "audio", lane, name
+                return None, None, None
+        return None, None, None
+
     # ------------------------------------------------------------------
     # Drawing — left rail
     # ------------------------------------------------------------------
 
     def _draw_rail(self, w, h, lane_count):
         """Paint the left rail: background, divider, toggle buttons,
-        and per-track labels aligned with each track row."""
+        and per-track row controls (Railcut-style: lock, target chip
+        with label, name, eye for video / M+S for audio)."""
         from sb_canvas import (
-            COL_BG_RAIL, COL_RAIL_BORDER, COL_RAIL_LABEL,
+            COL_BG_RAIL, COL_RAIL_BORDER,
             COL_ACCENT, COL_BORDER_EMPH,
             LEFT_RAIL_WIDTH, SHOT_HEIGHT,
         )
@@ -328,15 +377,200 @@ class DrawingCanvasMixin(object):
             except Exception as e:
                 print("[Shotblocks] rail bitmap draw failed: {}".format(e))
 
-        # Per-track labels — "Track N" left-aligned in the rail, vertically
-        # centered with each track row. Only labels for tracks that are
-        # currently displayed (lane_count comes from the active shot list).
-        self.DrawSetTextCol(COL_RAIL_LABEL, COL_BG_RAIL)
+        # Per-track row controls. Each video track plus the audio block
+        # (when present) gets a row of controls inline with its body.
         for track in range(lane_count):
             yt = self._track_y_top(track)
-            label = "Track {}".format(track)
-            label_y = yt + (SHOT_HEIGHT - 12) // 2
-            self.DrawText(label, 8, label_y)
+            self._draw_track_row("video", track, yt, SHOT_HEIGHT,
+                                 label="V{}".format(track + 1))
+        # Audio rows — one per occupied lane. Lane index is the
+        # AudioTrack `.track` field, NOT the list index; two clips
+        # sharing a lane (after a razor split) collapse to one row.
+        if getattr(self, "_audio_tracks", None):
+            from sb_canvas_audio import AUDIO_HEIGHT
+            for lane in self._audio_lanes_in_use():
+                ay1, _ay2 = self._audio_lane_y_bounds(lane)
+                self._draw_track_row("audio", lane, ay1, AUDIO_HEIGHT,
+                                     label="A{}".format(lane + 1))
+
+    def _track_row_rects(self, row_top, row_h, kind):
+        """Geometry for the per-track row controls. Returns a dict
+        keyed by control name ('lock', 'chip', 'eye', 'mute', 'solo')
+        whose values are (x1, y1, x2, y2) tuples — used by both the
+        drawer and the hit-test. `kind` is 'video' or 'audio'; the
+        video row gets an eye, the audio row gets M + S."""
+        from sb_canvas import (
+            LEFT_RAIL_WIDTH, RAIL_BTN_SIZE, RAIL_LOCK_SIZE,
+            RAIL_CHIP_W, RAIL_CHIP_H, RAIL_EYE_SIZE,
+            RAIL_MS_W, RAIL_MS_H, RAIL_MS_GAP, RAIL_ROW_PAD_X,
+        )
+        # Rail buttons own the left column; per-track controls start
+        # after them so the chip doesn't compete with Snap/Slip etc.
+        left_col_end = RAIL_BTN_SIZE + RAIL_ROW_PAD_X * 2
+        # Vertical centerline of the row.
+        cy = row_top + row_h // 2
+
+        # Lock — leftmost, right after the rail buttons column.
+        lock_x1 = left_col_end
+        lock_y1 = cy - RAIL_LOCK_SIZE // 2
+        lock = (lock_x1, lock_y1,
+                lock_x1 + RAIL_LOCK_SIZE, lock_y1 + RAIL_LOCK_SIZE)
+
+        # Target chip — to the right of the lock.
+        chip_x1 = lock[2] + RAIL_ROW_PAD_X
+        chip_y1 = cy - RAIL_CHIP_H // 2
+        chip = (chip_x1, chip_y1,
+                chip_x1 + RAIL_CHIP_W, chip_y1 + RAIL_CHIP_H)
+
+        rects = {"lock": lock, "chip": chip}
+
+        # Right cluster — eye (video) or M+S (audio), right-aligned
+        # inside the rail.
+        right_edge = LEFT_RAIL_WIDTH - RAIL_ROW_PAD_X
+        if kind == "video":
+            eye_x2 = right_edge
+            eye_x1 = eye_x2 - RAIL_EYE_SIZE
+            eye_y1 = cy - RAIL_EYE_SIZE // 2
+            rects["eye"] = (eye_x1, eye_y1,
+                            eye_x2, eye_y1 + RAIL_EYE_SIZE)
+        else:
+            s_x2 = right_edge
+            s_x1 = s_x2 - RAIL_MS_W
+            m_x2 = s_x1 - RAIL_MS_GAP
+            m_x1 = m_x2 - RAIL_MS_W
+            ms_y1 = cy - RAIL_MS_H // 2
+            ms_y2 = ms_y1 + RAIL_MS_H
+            rects["mute"] = (m_x1, ms_y1, m_x2, ms_y2)
+            rects["solo"] = (s_x1, ms_y1, s_x2, ms_y2)
+        return rects
+
+    def _draw_track_row(self, kind, idx, row_top, row_h, label):
+        """Paint one per-track row of controls. `kind` is 'video' or
+        'audio'; `idx` is the track index; `label` is the short tag
+        that goes inside the target chip ('V1', 'A1', ...)."""
+        from sb_canvas import (
+            COL_BG_RAIL,
+            COL_RAIL_CHIP_OFF, COL_RAIL_CHIP_ON,
+            COL_RAIL_CHIP_LABEL, COL_RAIL_CHIP_LABEL_ON,
+            COL_RAIL_ICON_OFF, COL_RAIL_ICON_ON, COL_RAIL_ICON_HOVER,
+            COL_RAIL_SOLO_ON, COL_RAIL_MUTE_ON,
+            _TEXT_BG_TRANS,
+        )
+        attrs = self._track_attrs(kind, idx)
+        rects = self._track_row_rects(row_top, row_h, kind)
+        hover   = self._track_ctrl_hover
+        pressed = self._track_ctrl_pressed
+
+        def _ctrl_color(name, on_color, off_color=COL_RAIL_ICON_OFF):
+            """Pick a pen color for control `name` based on its
+            on/off state plus hover/press chrome."""
+            key = (kind, idx, name)
+            base = on_color if name == "chip_state_marker" else \
+                   (on_color if attrs.get(name, False) else off_color)
+            if pressed == key:
+                return on_color
+            if hover == key and not attrs.get(name, False):
+                return COL_RAIL_ICON_HOVER
+            return base
+
+        # Target chip — colored block with the label inside. Cyan when
+        # targeted, grey when not. Chip is the dominant rail affordance
+        # so it gets the largest hit-target.
+        cx1, cy1, cx2, cy2 = rects["chip"]
+        chip_on = attrs["targeted"]
+        chip_bg = COL_RAIL_CHIP_ON if chip_on else COL_RAIL_CHIP_OFF
+        # Press feedback — darken/lighten by repainting with the
+        # alternate state so the user sees the click registered before
+        # release.
+        if pressed == (kind, idx, "chip"):
+            chip_bg = COL_RAIL_CHIP_OFF if chip_on else COL_RAIL_CHIP_ON
+        self.DrawSetPen(chip_bg)
+        self.DrawRectangle(cx1, cy1, cx2, cy2)
+        # Label inside the chip — white on the cyan ON state, light
+        # grey on the OFF state.
+        chip_text_col = COL_RAIL_CHIP_LABEL_ON if chip_on else COL_RAIL_CHIP_LABEL
+        self.DrawSetTextCol(chip_text_col, _TEXT_BG_TRANS or chip_bg)
+        # Approximate centering: glyphs are ~6 px wide × 12 px tall in
+        # C4D's default font. Two-char labels (V1, A1) center on a 30 px
+        # chip with a 9 px left offset.
+        text_x = cx1 + max(2, (cx2 - cx1 - 6 * max(1, len(label))) // 2)
+        text_y = cy1 + (cy2 - cy1 - 12) // 2
+        self.DrawText(label, text_x, text_y)
+
+        # Lock — small padlock-style glyph. C4D 2026 GeUserArea has no
+        # native glyph; we draw a simple rectangle + bow procedurally
+        # so we don't need to ship icons yet. The body is a 2-tone
+        # box; the bow is a thin half-circle approximation (two short
+        # lines).
+        lx1, ly1, lx2, ly2 = rects["lock"]
+        locked = attrs["locked"]
+        lock_col = COL_RAIL_ICON_ON if locked else COL_RAIL_ICON_OFF
+        if hover == (kind, idx, "lock") and not locked:
+            lock_col = COL_RAIL_ICON_HOVER
+        if pressed == (kind, idx, "lock"):
+            lock_col = COL_RAIL_ICON_ON if not locked else COL_RAIL_ICON_OFF
+        self.DrawSetPen(lock_col)
+        body_top = ly1 + (ly2 - ly1) // 2
+        self.DrawRectangle(lx1 + 2, body_top, lx2 - 2, ly2 - 1)
+        # Bow (shackle) — vertical sides + top. Open when unlocked
+        # (right side detached), closed when locked.
+        bow_top = ly1 + 1
+        bow_left = lx1 + 3
+        bow_right = lx2 - 3
+        self.DrawLine(bow_left,  bow_top, bow_left,  body_top - 1)
+        if locked:
+            self.DrawLine(bow_right, bow_top, bow_right, body_top - 1)
+        else:
+            self.DrawLine(bow_right, bow_top + 2, bow_right, body_top - 1)
+        self.DrawLine(bow_left + 1,  bow_top, bow_right - 1, bow_top)
+
+        # Right-side cluster — eye for video, M+S for audio.
+        if kind == "video":
+            ex1, ey1, ex2, ey2 = rects["eye"]
+            visible = attrs["visible"]
+            eye_col = COL_RAIL_ICON_ON if visible else COL_RAIL_ICON_OFF
+            if hover == (kind, idx, "eye") and visible:
+                eye_col = COL_RAIL_ICON_HOVER
+            if pressed == (kind, idx, "eye"):
+                eye_col = COL_RAIL_ICON_OFF if visible else COL_RAIL_ICON_ON
+            self.DrawSetPen(eye_col)
+            # Open-eye glyph approximation: top arc (2 lines) + center
+            # pupil dot, OR a single horizontal line + cross when hidden.
+            ecx = (ex1 + ex2) // 2
+            ecy = (ey1 + ey2) // 2
+            if visible:
+                self.DrawLine(ex1, ecy, ex2, ecy)
+                # eye top + bottom lashes
+                self.DrawLine(ex1 + 2, ecy - 2, ex2 - 2, ecy - 2)
+                self.DrawLine(ex1 + 2, ecy + 2, ex2 - 2, ecy + 2)
+                self.DrawRectangle(ecx - 1, ecy - 1, ecx + 1, ecy + 1)
+            else:
+                # Closed eye / hidden — a flat dash and a slash through.
+                self.DrawLine(ex1, ecy, ex2, ecy)
+                self.DrawLine(ex1, ey1, ex2, ey2)
+        else:
+            # Mute / Solo — two small lozenges, colored when active.
+            mx1, my1, mx2, my2 = rects["mute"]
+            muted = attrs["muted"]
+            m_col = COL_RAIL_MUTE_ON if muted else COL_RAIL_ICON_OFF
+            if hover == (kind, idx, "mute") and not muted:
+                m_col = COL_RAIL_ICON_HOVER
+            self.DrawSetPen(m_col)
+            self.DrawRectangle(mx1, my1, mx2, my2)
+            self.DrawSetTextCol(COL_BG_RAIL if muted else COL_RAIL_ICON_OFF,
+                                _TEXT_BG_TRANS or m_col)
+            self.DrawText("M", mx1 + 3, my1 + (my2 - my1 - 12) // 2)
+
+            sx1, sy1, sx2, sy2 = rects["solo"]
+            soloed = attrs["solo"]
+            s_col = COL_RAIL_SOLO_ON if soloed else COL_RAIL_ICON_OFF
+            if hover == (kind, idx, "solo") and not soloed:
+                s_col = COL_RAIL_ICON_HOVER
+            self.DrawSetPen(s_col)
+            self.DrawRectangle(sx1, sy1, sx2, sy2)
+            self.DrawSetTextCol(COL_BG_RAIL if soloed else COL_RAIL_ICON_OFF,
+                                _TEXT_BG_TRANS or s_col)
+            self.DrawText("S", sx1 + 3, sy1 + (sy2 - sy1 - 12) // 2)
 
     # ------------------------------------------------------------------
     # Drawing — primitives (used by DrawMsg and shot-block fallback)

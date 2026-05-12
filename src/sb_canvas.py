@@ -25,10 +25,11 @@ from sb_shot_model import (
 from sb_persistence import (
     _read_shots, _write_shots,
     _read_range, _write_range,
+    _read_tracks, _write_tracks,
     _get_or_create_helper,
     _set_shot_cam_link, _get_shot_cam, _clear_shot_cam_link,
 )
-from sb_audio_track  import AudioTrackError
+from sb_audio_track  import AudioTrack, AudioTrackError
 from sb_audio_onsets import grid_is_displayable
 from sb_canvas_audio import (
     AudioCanvasMixin, drag_audio_path,
@@ -59,6 +60,16 @@ COL_BG_TIMELINE   = _rgb("1C1C1C")
 COL_BG_RAIL       = _rgb("141414")  # rail still distinguishably darker than timeline
 COL_RAIL_BORDER   = _rgb("2a2a2a")  # vertical divider between rail and timeline
 COL_RAIL_LABEL    = _rgb("888888")
+# Per-track row controls — Railcut-style layout (chip+lock+name+eye/M/S).
+COL_RAIL_CHIP_OFF    = _rgb("3a3a3a")  # untargeted target chip background
+COL_RAIL_CHIP_ON     = _rgb("2C7CD3")  # targeted = Maxon blue (matches COL_ACCENT)
+COL_RAIL_CHIP_LABEL  = _rgb("dddddd")
+COL_RAIL_CHIP_LABEL_ON = _rgb("FFFFFF")
+COL_RAIL_ICON_OFF    = _rgb("707070")  # lock/eye/M/S in resting state
+COL_RAIL_ICON_ON     = _rgb("dddddd")  # lock engaged / eye on / M or S engaged
+COL_RAIL_ICON_HOVER  = _rgb("aaaaaa")
+COL_RAIL_SOLO_ON     = _rgb("eac84a")  # warm yellow when solo'd (Premiere convention)
+COL_RAIL_MUTE_ON     = _rgb("d96b6b")  # warm red when muted
 # Lane backgrounds. Both colors match the bitmap shot-body fill (#1C1C1C
 # in src/res/svg/shot-*.svg) so the bitmap's rounded-corner cutouts blend
 # seamlessly with the lane behind them — without this, the lane bg would
@@ -144,6 +155,12 @@ COL_RANGE_LINE          = COL_ACCENT
 # pixels read as "same color as the bg but slightly darker" rather
 # than as pure black streaks. Combined with the stride gaps between
 # lines, the visual reads as a subtle translucent darkening.
+#
+# We tried 1×1 checker / 2×2 checker / vertical stripe dithers for a
+# smoother dim — visually nicer, but per-pixel DrawRectangle / DrawLine
+# in the per-frame repaint stuttered playback. The BMP_TRANSPARENTALPHA
+# bitmap path didn't help (binary alpha flattens to fully opaque in
+# C4D 2026). The diagonal hatch costs ~N/stride lines and stays fast.
 COL_RANGE_OUTSIDE_DIM   = _rgb("191919")
 COL_RANGE_HANDLE_HOVER  = COL_ACCENT_HOVER
 
@@ -169,13 +186,27 @@ LANE_GAP            = 2
 TIMELINE_PAD_X      = 8
 
 # Left rail. A fixed-width column on the left side of the canvas hosts
-# the global tools (Snap, Loop) and per-track labels ("Track 0", etc.).
-# The frame-to-x mapping starts AFTER this column. NLE convention —
-# Premiere/Resolve put track headers on the left.
-LEFT_RAIL_WIDTH     = 80
+# the global tools (Snap, Loop, Pen) at the top and per-track row
+# controls (lock, target chip, name, eye-or-M+S) inline with each
+# track row. NLE convention — Premiere/Resolve/Railcut put per-track
+# headers on the left.
+LEFT_RAIL_WIDTH     = 120
 RAIL_BTN_SIZE       = 24
 RAIL_BTN_GAP        = 4
 RAIL_BTN_TOP        = 6   # vertical inset of the first button row
+
+# Per-track row layout. Reading left → right inside the rail: lock
+# icon, target chip (carries the track label inside it), free space,
+# then eye-or-M+S on the right. Same layout for the audio row,
+# substituting M+S for the eye.
+RAIL_LOCK_SIZE      = 14
+RAIL_CHIP_W         = 30
+RAIL_CHIP_H         = 20
+RAIL_EYE_SIZE       = 14
+RAIL_MS_W           = 14
+RAIL_MS_H           = 14
+RAIL_MS_GAP         = 2
+RAIL_ROW_PAD_X      = 4   # left/right padding inside the row
 
 # Right-side audio meter sizing + meter colors + audio-block insets all
 # live in `sb_canvas_audio.py`. `RIGHT_METER_PANEL_W` is re-imported
@@ -233,6 +264,13 @@ MENU_SET_RANGE_SEL  = 3003
 MENU_RANGE_TO_ALL   = 3004
 MENU_DELETE_AUDIO   = 3005
 MENU_CLEAR_RANGE    = 3006
+# Level-keyframe interpolation menu (Pen-mode right-click on a node).
+MENU_LVL_DELETE       = 3010
+MENU_LVL_INTERP_LIN   = 3011
+MENU_LVL_INTERP_HOLD  = 3012
+MENU_LVL_INTERP_IN    = 3013
+MENU_LVL_INTERP_OUT   = 3014
+MENU_LVL_INTERP_INOUT = 3015
 
 
 # ---------------------------------------------------------------------------
@@ -254,6 +292,12 @@ _KEY_MMIDDLE = getattr(c4d, "KEY_MMIDDLE", 61442)
 _KEY_DELETE    = getattr(c4d, "KEY_DELETE",    None)
 _KEY_BACKSPACE = getattr(c4d, "KEY_BACKSPACE", None)
 _KEY_D         = getattr(c4d, "KEY_D",         None)
+# Arrow keys — Up/Down for edit-point navigation (jump playhead to
+# nearest cut). Verified in C4D 2026: KEY_UP=61824, KEY_DOWN=61825.
+_KEY_UP        = getattr(c4d, "KEY_UP",        61824)
+_KEY_DOWN      = getattr(c4d, "KEY_DOWN",      61825)
+_KEY_LEFT      = getattr(c4d, "KEY_LEFT",      61826)
+_KEY_RIGHT     = getattr(c4d, "KEY_RIGHT",     61827)
 
 # Spacebar channel — verified empirically in C4D 2026: channel 61728 (0xf120),
 # matching c4d.KEY_SPACE. ASCII 32 is included as a fallback for older builds.
@@ -347,6 +391,10 @@ class ShotblocksTimelineCanvas(AudioCanvasMixin, DrawingCanvasMixin, DragCanvasM
         self.visible_first  = 0
         self.visible_last   = 240
         self.playhead_frame = 60
+        # Stashed (visible_first, visible_last) from before the last
+        # `\` zoom-to-fit toggle, so a second press restores the
+        # user's prior zoom. None when nothing's stashed.
+        self._zoom_fit_stash = None
 
         # `_last_active_shot_id` (active-shot transition tracker used
         # by `_route_camera_for_frame` to reset the rig spring on hard
@@ -370,6 +418,36 @@ class ShotblocksTimelineCanvas(AudioCanvasMixin, DrawingCanvasMixin, DragCanvasM
         # Snap-to-edge toggle (UI checkbox in toolbar). When on, no-modifier
         # drops/moves use snap-to-edge instead of replace.
         self._snap_enabled = False
+
+        # Slip-tool toggle (rail button). When on, a body-drag on the
+        # audio block slides the source window underneath instead of
+        # moving the block on the timeline — the clip is a window over
+        # the full audio file, and slip changes which portion of the
+        # source plays through that window. Edge resize stays edge
+        # resize regardless of slip mode. Session-only, like Snap.
+        self._slip_enabled = False
+
+        # Pen-tool toggle (rail button). When on, clicks on the audio
+        # block body add/move level keyframes instead of selecting or
+        # moving the clip. Edge resize stays edge resize regardless.
+        # Migrates to the left tool palette in Round 3 alongside Razor,
+        # Slide, and Slip — those four become palette tools together,
+        # so for v13 the rail button is the temporary home.
+        self._pen_enabled = False
+
+        # Razor-tool toggle (rail button). When on, clicks on a shot
+        # or audio block split it at the click frame (or at the
+        # nearest snap target within snap radius when snap is on).
+        # Edge clicks still resize; only body clicks split.
+        self._razor_enabled = False
+
+        # Selection-Follows-Playhead is always on — stopping playback
+        # auto-selects the shot the playhead lands on (across all
+        # tracks, top track wins on overlap, same as the active-shot
+        # resolver). Triggers on stop only, not on scrub or jump, so
+        # the selection doesn't flicker during dragging. No toggle —
+        # the constitution favours minimal hidden modes, and the
+        # spacebar-stop-then-edit pattern is the dominant workflow.
 
         # Once-per-type drag-debug log
         self._logged_obj_types = set()
@@ -433,6 +511,31 @@ class ShotblocksTimelineCanvas(AudioCanvasMixin, DrawingCanvasMixin, DragCanvasM
         # the press tint while the user holds before release. Shared
         # between drawing and input clusters; canvas-owned.
         self._rail_pressed = None
+
+        # Per-track state — keyed by (kind, idx) where kind is
+        # "video" or "audio" and idx is the track index (audio: 0
+        # for the single track until multi-clip audio ships). Defaults
+        # for an unseen key are computed by `_track_attrs` (targeted
+        # True, locked False, visible True, muted False, solo False).
+        # Hydrated from persistence on document load; written back
+        # when toggles change.
+        self._track_state = {}
+
+        # Pen-mode level keyframe hover/drag state. `_hover_idx` is
+        # the index of the keyframe under the cursor (or -1); the
+        # canvas drawer paints hovered/pressed nodes larger. Held
+        # during a drag so the moved node stays visually emphasized.
+        # Level-keyframe hover/press state — (track_idx, kf_idx) where
+        # -1 means "no hit". Tracked per-clip so razor-split clips and
+        # lane-2+ clips both register hover, not just tracks[0].
+        self._level_kf_hover_idx   = (-1, -1)
+        self._level_kf_pressed_idx = (-1, -1)
+        # Track-row hover/press state for the per-track controls
+        # (lock chip, target chip, eye, M, S). Stored as
+        # ("kind", idx, "control") tuples so the drawer can pick a
+        # hover/press tint without re-scanning hit-tests.
+        self._track_ctrl_hover   = None
+        self._track_ctrl_pressed = None
 
         # Audio cluster — see `AudioCanvasMixin._audio_init_state`.
         # Owns the AudioTrack, AudioPlayback, dB-meter buffers, busy
@@ -744,6 +847,296 @@ class ShotblocksTimelineCanvas(AudioCanvasMixin, DrawingCanvasMixin, DragCanvasM
     # (top, bottom) Y of the audio block, used by both the draw path
     # and the canvas-side hover-band/hit-test code.
 
+    # ------------------------------------------------------------------
+    # Per-track state — targeted / locked / visible / muted / solo
+    # ------------------------------------------------------------------
+
+    _TRACK_DEFAULTS = {
+        "targeted": True,   # included in playhead-driven edits
+        "locked":   False,  # blocks all mutations
+        "visible":  True,   # video-only — locked tracks still draw, hidden tracks don't
+        "muted":    False,  # audio-only — track skipped at temp-WAV write time
+        "solo":     False,  # audio-only — exclusive playback when any track soloed
+    }
+
+    def _track_attrs(self, kind, idx):
+        """Return the merged attribute dict for a track. Missing keys
+        fall back to `_TRACK_DEFAULTS` so a brand-new track behaves
+        sensibly without an explicit entry. The returned dict is a
+        copy — mutate it freely without affecting persisted state.
+        """
+        out = dict(self._TRACK_DEFAULTS)
+        out.update(self._track_state.get((kind, int(idx)), {}))
+        return out
+
+    def _set_track_attr(self, kind, idx, attr, value):
+        """Flip one attribute on a per-track entry. Writes through to
+        the in-memory dict only; caller is responsible for invoking
+        `_persist_tracks` (so multi-attr changes batch into a single
+        helper-null write)."""
+        key = (kind, int(idx))
+        cur = dict(self._track_state.get(key, {}))
+        cur[attr] = bool(value)
+        # Drop keys that match the default — keeps persisted blob small.
+        if cur[attr] == self._TRACK_DEFAULTS.get(attr):
+            cur.pop(attr, None)
+        if cur:
+            self._track_state[key] = cur
+        else:
+            self._track_state.pop(key, None)
+
+    def _track_is_locked(self, kind, idx):
+        """Fast-path lock check — used by every mutation entry point."""
+        return self._track_attrs(kind, idx)["locked"]
+
+    def _any_video_track_locked(self, track_ids):
+        """True iff any of the given video track indices is locked.
+        Used by the multi-shot mutation entry points (group move,
+        nudge, delete-selection) to gate the whole operation."""
+        return any(self._track_is_locked("video", t) for t in track_ids)
+
+    def _any_audio_solo(self):
+        """True iff any audio track is soloed. While true, non-solo
+        tracks are silenced (Premiere/FCP convention). Currently we
+        ship a single audio track so this collapses to a per-track
+        flag check, but the shape is forward-compatible."""
+        for (kind, _idx), attrs in self._track_state.items():
+            if kind == "audio" and attrs.get("solo"):
+                return True
+        return False
+
+    def _audio_level_curve_fn(self):
+        """Return a callable suitable for `AudioPlayback.play`'s
+        `level_curve_fn` argument, or None when no automation exists
+        (so playback can skip the per-frame walk entirely)."""
+        track = self._audio_track
+        if track is None or not track.level_keyframes:
+            return None
+        return track.evaluate_level
+
+    def _audio_clip_end_af(self, doc):
+        """Return the audio-frame index one past the clip's trimmed
+        right edge — i.e. the cap to pass to `AudioPlayback.play` so
+        Windows stops at the visual end of the block rather than
+        continuing into source samples past `out_frame`.
+
+        Returns None when there's no audio loaded; the playback
+        engine treats that as 'play to end of decoded buffer'."""
+        track = self._audio_track
+        if track is None or track.decoded is None:
+            return None
+        fps = self._doc_fps(doc)
+        # `out_frame` is inclusive; we want the frame just past it
+        # in audio-frame space so the temp WAV stops at the trimmed
+        # right edge. doc_frame_to_audio_frame returns -1 outside
+        # the clip — when the right edge sits at a valid doc-frame
+        # we step one past, otherwise fall back to decoded.n_frames
+        # so a clip extended past end-of-audio still plays to EOF.
+        end_af = track.doc_frame_to_audio_frame(track.out_frame, fps)
+        if end_af < 0:
+            return track.decoded.n_frames
+        # +1 frame so the LAST doc-frame is included. Past that,
+        # the timeline is empty and audio should stop.
+        rate = track.decoded.sample_rate
+        af_per_frame = rate / float(max(1, fps))
+        return min(track.decoded.n_frames,
+                   end_af + max(1, int(round(af_per_frame))))
+
+    def _build_audio_mix(self, start_doc_frame, max_doc_frames=None):
+        """Mix every audible audio track into one 16-bit PCM payload
+        starting at `start_doc_frame`. Each track is trimmed to its
+        in/out, gain-curved, then summed onto a common output buffer
+        positioned by `track.in_frame - start_doc_frame`.
+
+        Returns (payload_bytes, sample_rate, n_channels). When no
+        audio is audible, returns (b'', 0, 0) so the caller can
+        decide whether to skip playback entirely.
+
+        The mix uses the first audible track's (sample_rate,
+        n_channels) as the output format. Tracks with mismatched
+        rates/channels are skipped with a one-time warning — the
+        full converter (audioop.ratecv + tomono/tostereo) is
+        deferred until we ship multi-format audio import.
+
+        `max_doc_frames` caps the output length in doc-frames; when
+        None, extends to the rightmost out_frame of any audible
+        track. Used by callers that want to pre-cap to a range.
+        """
+        import audioop
+        doc = c4d.documents.GetActiveDocument()
+        fps = self._doc_fps(doc)
+
+        audible = list(self._audible_tracks())
+        if not audible:
+            return b"", 0, 0
+
+        # Use the first track's format as the output format. All
+        # other tracks must match (we don't ship a converter yet).
+        _, first_track = audible[0]
+        sample_rate = first_track.decoded.sample_rate
+        n_channels  = first_track.decoded.n_channels
+        bytes_per_frame = 2 * n_channels  # 16-bit PCM
+
+        # Determine output length in audio-frames.
+        af_per_doc_frame = sample_rate / float(max(1, fps))
+        rightmost_out = max(t.out_frame for _, t in audible)
+        last_doc_frame = rightmost_out
+        if max_doc_frames is not None:
+            last_doc_frame = min(last_doc_frame,
+                                 start_doc_frame + int(max_doc_frames) - 1)
+        n_doc_frames = max(0, last_doc_frame - start_doc_frame + 1)
+        if n_doc_frames <= 0:
+            return b"", 0, 0
+        n_audio_frames = max(1, int(round(n_doc_frames * af_per_doc_frame)))
+        out_size = n_audio_frames * bytes_per_frame
+        # 32-bit accumulator avoids int16 overflow when N tracks sum.
+        accum = bytearray(n_audio_frames * 4 * n_channels)
+        # We'll accumulate as little-endian signed 32-bit via int.from_bytes
+        # only at the final step; build in audioop's signed-16 space using
+        # `audioop.add(a, b, 2)` on an extended-buffer per track.
+        # audioop.add returns int16-clamping bytes, so to avoid early clamp
+        # we widen via `audioop.lin2lin(buf, 2, 4)` before adding, then
+        # narrow at the end with optional saturation.
+        # NB: lin2lin extends 16→32 cleanly. add(a, b, 4) then sums as
+        # signed-32 and won't overflow until ~32k tracks (we're fine).
+        zero_chunk = b"\x00" * out_size  # int16 zero
+        accum32 = audioop.lin2lin(zero_chunk, 2, 4)  # 4-byte signed zero buf
+
+        mismatched_logged = False
+        for idx, track in audible:
+            if track.decoded is None:
+                continue
+            if (track.decoded.sample_rate != sample_rate
+                    or track.decoded.n_channels != n_channels):
+                if not mismatched_logged:
+                    mismatched_logged = True
+                    print("[Shotblocks] mix: track {} format mismatch "
+                          "(rate {}/{}, ch {}/{}) — skipped".format(
+                              idx, track.decoded.sample_rate, sample_rate,
+                              track.decoded.n_channels, n_channels))
+                continue
+
+            # Source slice: audio-frame range covering [clip in_frame,
+            # min(clip out_frame, last_doc_frame)] mapped through
+            # trim_start.
+            clip_start_doc = max(track.in_frame, start_doc_frame)
+            clip_end_doc   = min(track.out_frame, last_doc_frame)
+            if clip_end_doc < clip_start_doc:
+                continue
+            # Audio-frame range within the source buffer.
+            src_af0 = track.doc_frame_to_audio_frame(clip_start_doc, fps)
+            src_af1 = track.doc_frame_to_audio_frame(clip_end_doc, fps)
+            if src_af0 < 0 or src_af1 < 0:
+                # Clip extends past end-of-audio; clamp.
+                src_af0 = max(0, src_af0)
+                src_af1 = min(track.decoded.n_frames - 1, max(src_af0, src_af1))
+            if src_af1 <= src_af0:
+                continue
+            src_af1 += 1  # exclusive end
+            src_af1 = min(src_af1, track.decoded.n_frames)
+            b0 = src_af0 * bytes_per_frame
+            b1 = src_af1 * bytes_per_frame
+            chunk = bytes(track.decoded.samples[b0:b1])
+            if not chunk:
+                continue
+
+            # Apply level curve if this track has keyframes.
+            if track.level_keyframes:
+                chunk = self._audio_playback._apply_level_curve(
+                    chunk, track.decoded, src_af0, track.evaluate_level)
+
+            # Position the chunk in the output buffer. Offset in
+            # audio-frames against `start_doc_frame`.
+            dst_af0 = int(round((clip_start_doc - start_doc_frame)
+                                * af_per_doc_frame))
+            dst_b0 = dst_af0 * bytes_per_frame
+            # Truncate chunk to fit in the output buffer (in case
+            # the source extends past out_frame for any reason).
+            avail_bytes = out_size - dst_b0
+            if avail_bytes <= 0:
+                continue
+            if len(chunk) > avail_bytes:
+                chunk = chunk[:avail_bytes]
+            # Widen chunk to 32-bit, pad to full output length, then
+            # add into the accumulator.
+            chunk32 = audioop.lin2lin(chunk, 2, 4)
+            # Pad chunk32 with zeros on either side so it aligns with
+            # the accumulator. Each int16 frame is 4 bytes in 32-bit
+            # space, so multiply offsets by 2.
+            pre  = b"\x00" * (dst_b0 * 2)
+            post = b"\x00" * (len(accum32) - len(pre) - len(chunk32))
+            if post and len(post) > 0:
+                padded = pre + chunk32 + post
+            else:
+                padded = pre + chunk32
+                if len(padded) < len(accum32):
+                    padded = padded + b"\x00" * (len(accum32) - len(padded))
+                elif len(padded) > len(accum32):
+                    padded = padded[:len(accum32)]
+            accum32 = audioop.add(accum32, padded, 4)
+
+        # Narrow accumulator back to int16 with saturation. audioop.lin2lin
+        # narrows by truncation (not saturation), which would wrap loud
+        # sums. Pre-attenuate so a 2-track mix at 0 dBFS each can't
+        # exceed int16 range. -6 dB headroom = factor 0.5.
+        attenuated = audioop.mul(accum32, 4, 0.5)
+        payload = audioop.lin2lin(attenuated, 4, 2)
+        return payload, sample_rate, n_channels
+
+    def _audio_is_audible(self, idx=0):
+        """True when the audio track at `idx` should be heard.
+        Muted always silences; with any solo active, only the
+        soloed tracks play."""
+        attrs = self._track_attrs("audio", idx)
+        if attrs["muted"]:
+            return False
+        if self._any_audio_solo() and not attrs["solo"]:
+            return False
+        return True
+
+    def _hydrate_tracks_from_doc(self, doc):
+        """Replace the in-memory track state with what's persisted on
+        the active doc. Idempotent — safe to call from every DrawMsg.
+        Cheap: a single helper-null read; only updates the dict when
+        the persisted blob changed since the last hydration."""
+        if doc is None:
+            return
+        sig = getattr(self, "_tracks_loaded_sig", None)
+        try:
+            persisted = _read_tracks(doc)
+        except Exception as e:
+            print("[Shotblocks] _read_tracks failed: {}".format(e))
+            return
+        # Cheap order-independent signature.
+        new_sig = tuple(sorted(
+            (k, tuple(sorted(v.items()))) for k, v in persisted.items()))
+        if new_sig == sig:
+            return
+        self._track_state = persisted
+        self._tracks_loaded_sig = new_sig
+
+    def _persist_tracks(self, doc):
+        """Write the current in-memory track state to the helper null,
+        wrapped in undo. Skips when the doc is None."""
+        if doc is None:
+            return
+        try:
+            doc.StartUndo()
+            _write_tracks(doc, self._track_state, with_undo=True)
+            doc.EndUndo()
+        except Exception as e:
+            print("[Shotblocks] _persist_tracks failed: {}".format(e))
+            try:
+                doc.EndUndo()
+            except Exception:
+                pass
+            return
+        # Refresh the signature so the next hydrate is a no-op.
+        new_sig = tuple(sorted(
+            (k, tuple(sorted(v.items()))) for k, v in self._track_state.items()))
+        self._tracks_loaded_sig = new_sig
+        c4d.EventAdd()
+
     def _y_to_track(self, y, lane_count):
         t0_top = self._track_0_top()
         if y >= t0_top + SHOT_HEIGHT:
@@ -762,6 +1155,82 @@ class ShotblocksTimelineCanvas(AudioCanvasMixin, DrawingCanvasMixin, DragCanvasM
     # the input-cluster click handler (sets `_rail_pressed`, runs the
     # MouseDrag loop, commits the toggle); the rail-button hit-test
     # helpers it calls resolve via MRO.
+
+    def _handle_track_row_click(self, x, y):
+        """Process a click on a per-track row control (chip/lock/eye/M/S).
+        Mirrors the rail-button click pattern: press visual on press,
+        commit only if release is over the same control, persist + redraw
+        on commit. Returns True iff the click was consumed."""
+        kind, idx, ctrl = self._track_row_at(x, y)
+        if ctrl is None:
+            return False
+        key = (kind, idx, ctrl)
+        self._track_ctrl_pressed = key
+        self.Redraw()
+        # Use the same drag-loop scaffolding as rail buttons so the
+        # press tint follows the cursor in/out of the control rect.
+        accum_dx = 0
+        accum_dy = 0
+        inside = True
+        try:
+            self.MouseDragStart(_KEY_MLEFT, x, y, _MOUSE_DRAG_FLAG)
+            while True:
+                state = self.MouseDrag()
+                drag_state, dx, dy, _q = self._parse_drag_state(state)
+                if self._is_drag_terminal(drag_state):
+                    break
+                accum_dx += int(dx or 0)
+                accum_dy += int(dy or 0)
+                cur_x = x + accum_dx
+                cur_y = y + accum_dy
+                # Recompute inside on every tick — the row may have
+                # moved if a sibling track was deleted mid-drag (rare,
+                # but harmless to re-resolve).
+                hit_kind, hit_idx, hit_ctrl = self._track_row_at(cur_x, cur_y)
+                still_inside = (hit_kind == kind and hit_idx == idx
+                                and hit_ctrl == ctrl)
+                if still_inside != inside:
+                    inside = still_inside
+                    self._track_ctrl_pressed = key if inside else None
+                    self.Redraw()
+            self.MouseDragEnd()
+        except Exception as e:
+            print("[Shotblocks] track-row drag loop raised: {}".format(e))
+        self._track_ctrl_pressed = None
+        if not inside:
+            self.Redraw()
+            return True
+        # Commit — flip the matching attribute and persist.
+        attr_map = {
+            "chip": "targeted",
+            "lock": "locked",
+            "eye":  "visible",
+            "mute": "muted",
+            "solo": "solo",
+        }
+        attr = attr_map.get(ctrl)
+        if attr is None:
+            self.Redraw()
+            return True
+        cur = self._track_attrs(kind, idx)[attr]
+        self._set_track_attr(kind, idx, attr, not cur)
+        doc = c4d.documents.GetActiveDocument()
+        self._persist_tracks(doc)
+        print("[Shotblocks] track {}/{} {} = {}".format(
+            kind, idx, attr, not cur))
+        # Mute/solo audibility changes need to take effect mid-playback.
+        # Rebuild the mix from the current playhead so the change is
+        # heard immediately. Same path as a scrub-resync.
+        if kind == "audio" and attr in ("muted", "solo") and self._playing:
+            any_audible = any(True for _ in self._audible_tracks())
+            playing_now = self._audio_playback.is_playing()
+            if any_audible:
+                fps = self._doc_fps(doc)
+                self._start_audio_mix_for_playhead(fps)
+            elif playing_now:
+                self._audio_playback.stop()
+        self.Redraw()
+        return True
 
     def _handle_rail_click(self, x, y):
         """Process a click in the rail area. Hit-tests against the rail
@@ -1006,6 +1475,14 @@ class ShotblocksTimelineCanvas(AudioCanvasMixin, DrawingCanvasMixin, DragCanvasM
         # switch — without this the grid wouldn't appear until the
         # second redraw.
         self._sync_audio_for_active_doc()
+        # Per-track state (target/lock/visibility/mute/solo) lives on
+        # the same helper null as shots & audio. Hydrate once per draw;
+        # the function self-debounces via a signature cache so the cost
+        # is one helper-null read on idle frames.
+        try:
+            self._hydrate_tracks_from_doc(c4d.documents.GetActiveDocument())
+        except Exception as e:
+            print("[Shotblocks] _hydrate_tracks_from_doc failed: {}".format(e))
 
         # v9 beat grid — drawn here so it sits *behind* shots and the
         # audio block but *above* the lane backgrounds. The lattice
@@ -1031,16 +1508,34 @@ class ShotblocksTimelineCanvas(AudioCanvasMixin, DrawingCanvasMixin, DragCanvasM
                   "Cmd+Z to restore.".format(orphan_count))
         self._last_orphan_count = orphan_count
 
-        # Shots
-        for shot in shots:
+        # Shots. During an in-flight move/resize drag, paint the
+        # dragged shot(s) LAST so their edges stay visible on top of
+        # neighbors as the drag approaches them. Otherwise the right
+        # edge of a left-to-right resize disappears under whichever
+        # shot is later in iteration order.
+        drag_top_ids = self._drag_top_ids
+        if drag_top_ids:
+            bottom = [s for s in shots if s["id"] not in drag_top_ids]
+            top    = [s for s in shots if s["id"] in drag_top_ids]
+            draw_order = bottom + top
+        else:
+            draw_order = shots
+        for shot in draw_order:
             track  = _shot_track(shot)
+            # Skip shots on tracks the user has hidden via the eye
+            # toggle. Locked tracks still draw — only visibility
+            # gates the paint.
+            if not self._track_attrs("video", track)["visible"]:
+                continue
             yt     = self._track_y_top(track)
             self._draw_shot_block(shot, w, yt, shot["id"] in self._selected_ids)
 
-        # Audio block (v7) — re-sync happens earlier (before the beat
-        # grid). Just draw the body now if a track is loaded.
-        if self._audio_track.decoded is not None:
-            self._draw_audio_block(w)
+        # Audio blocks — draw every loaded audio track. Each lane
+        # stacks below the video tracks; the audio mixin owns the Y
+        # math. Empty placeholder tracks (decoded=None) are skipped.
+        for ai, atrack in enumerate(self._audio_tracks):
+            if atrack.decoded is not None:
+                self._draw_audio_block(w, track_idx=ai)
 
         # Marquee selection rectangle (1px warm-yellow outline)
         if self._marquee_rect is not None:
@@ -1092,7 +1587,10 @@ class ShotblocksTimelineCanvas(AudioCanvasMixin, DrawingCanvasMixin, DragCanvasM
                 # to the eye without any actual alpha — dark pixels
                 # cover every Nth column on each row, leaving the
                 # underlying timeline content visible through the
-                # gaps. Stride 3 = ~33 % coverage.
+                # gaps. Stride 8 keeps the call count low enough
+                # for the per-frame playback redraw; smoother
+                # dithers (checker, vstripe) were tried and
+                # stuttered playback.
                 self.DrawSetPen(COL_RANGE_OUTSIDE_DIM)
                 STRIDE = 8
                 THICK = 1
@@ -1229,8 +1727,16 @@ class ShotblocksTimelineCanvas(AudioCanvasMixin, DrawingCanvasMixin, DragCanvasM
         drop_track = self._drag_track
 
         if audio_path is not None:
+            # Resolve which audio lane the drop landed on. If y is
+            # inside an existing audio lane row, drop there (replacing
+            # that lane's content). Otherwise create a new lane at
+            # the next free index. Falls back to lane 0 if local_xy
+            # isn't available (legacy single-track behavior).
+            drop_audio_lane = 0
+            if local_xy is not None:
+                drop_audio_lane = self._resolve_audio_drop_lane(local_xy[1])
             self._clear_drag()
-            return self._import_audio_file(audio_path, drop_frame)
+            return self._import_audio_file(audio_path, drop_frame, drop_audio_lane)
 
         # Drop-on-existing-shot → relink that shot's camera. Works on
         # orphans (the architecture's primary use case) AND healthy shots
@@ -1250,15 +1756,54 @@ class ShotblocksTimelineCanvas(AudioCanvasMixin, DrawingCanvasMixin, DragCanvasM
 
     # `_drag_audio_path` is now `drag_audio_path` in `sb_canvas_audio`.
 
-    def _import_audio_file(self, audio_path, drop_frame):
-        """Bring a WAV or MP3 file in as the document's audio track.
-        Replaces any existing track. Wraps the persistence write in
-        undo so the user can Cmd+Z back to no-audio."""
+    def _resolve_audio_drop_lane(self, y):
+        """Translate a drop's local y to an audio lane index. If the
+        cursor sits inside an existing loaded audio lane's row, drop
+        there (replaces that lane's content). Otherwise create a new
+        lane appended at the next free index. Used by the drag-receive
+        path when an audio file is being dropped on the canvas."""
+        # If no audio loaded yet, lane 0 is the home.
+        loaded_count = sum(1 for t in self._audio_tracks if t.decoded is not None)
+        if loaded_count == 0:
+            return 0
+        # Check whether y lands inside an existing lane row.
+        for i, t in enumerate(self._audio_tracks):
+            if t.decoded is None:
+                continue
+            ay1, ay2 = self._audio_y_bounds(i)
+            if ay1 <= y <= ay2:
+                return i
+        # Y is below the audio strip (or above it) — append a new lane.
+        return loaded_count
+
+    def _import_audio_file(self, audio_path, drop_frame, drop_lane=0):
+        """Bring a WAV or MP3 file in as a document audio track.
+        If `drop_lane` is inside the existing range, REPLACES that
+        lane's contents; if it's the next free index, APPENDS a new
+        lane. Wraps the persistence write in undo so the user can
+        Cmd+Z back."""
         doc = c4d.documents.GetActiveDocument()
+        # Make sure a slot exists for `drop_lane`. New lanes get a
+        # fresh AudioTrack instance whose persist callback wires
+        # back to this canvas.
+        while len(self._audio_tracks) <= drop_lane:
+            t = AudioTrack()
+            t._persist_cb = self._persist_audio_tracks
+            self._audio_tracks.append(t)
+        target = self._audio_tracks[drop_lane]
         try:
             doc.StartUndo()
             _get_or_create_helper(doc)
-            self._audio_track.import_file(audio_path, doc, drop_in_frame=drop_frame)
+            target.import_file(audio_path, doc,
+                               drop_in_frame=drop_frame,
+                               drop_track=drop_lane)
+            # Persist the full list (not just `target`) so a fresh-
+            # appended lane gets serialized at the same time.
+            from sb_persistence import _write_audios
+            payload = [t.to_persisted_dict(doc)
+                       for t in self._audio_tracks
+                       if t.decoded is not None or t.path]
+            _write_audios(doc, payload, with_undo=False)
             doc.EndUndo()
         except AudioTrackError as e:
             print("[Shotblocks] audio import failed: {}".format(e))
@@ -1455,10 +2000,33 @@ class ShotblocksTimelineCanvas(AudioCanvasMixin, DrawingCanvasMixin, DragCanvasM
         if x < LEFT_RAIL_WIDTH:
             btn, _idx = self._rail_button_at(x, y)
             new_rail_hover = btn["name"] if btn is not None else None
+            # Per-track row control hover — independent from rail
+            # buttons; both can be None and the rail still paints.
+            kind, idx, ctrl = self._track_row_at(x, y)
+            new_row_hover = (kind, idx, ctrl) if ctrl is not None else None
         else:
             new_rail_hover = None
+            new_row_hover  = None
         if new_rail_hover != self._rail_hover:
             self._rail_hover = new_rail_hover
+            self.Redraw()
+        if new_row_hover != self._track_ctrl_hover:
+            self._track_ctrl_hover = new_row_hover
+            self.Redraw()
+        # Level-keyframe hover — resolve which audio clip the cursor
+        # is on (if any) and check its keyframes. Storing a tuple
+        # (track_idx, kf_idx) so post-razor clips on lanes != 0
+        # also get the larger hover-radius node.
+        w = self.GetWidth()
+        new_kf_hover = (-1, -1)
+        hit = self._hit_test_audio(x, y, w)
+        if hit is not None:
+            _kind, hit_idx, _region = hit
+            kfi = self._hit_test_level_kf(x, y, w, hit_idx)
+            if kfi >= 0:
+                new_kf_hover = (hit_idx, kfi)
+        if new_kf_hover != self._level_kf_hover_idx:
+            self._level_kf_hover_idx = new_kf_hover
             self.Redraw()
         new_band  = self._compute_hover_band(x, y)
         new_range = self._compute_hover_range(x, y)
@@ -1524,16 +2092,26 @@ class ShotblocksTimelineCanvas(AudioCanvasMixin, DrawingCanvasMixin, DragCanvasM
         Y_BUFFER = 2
         doc = c4d.documents.GetActiveDocument()
 
-        if self._audio_track.decoded is not None:
-            ay1, ay2 = self._audio_y_bounds()
-            if ay1 - Y_BUFFER <= y <= ay2 + Y_BUFFER:
-                ax1, ax2 = self._audio_x_bounds(w)
-                if ax1 <= x <= ax2:
-                    edge_zone = min(CURSOR_EDGE_PX, max(1, (ax2 - ax1) // 3))
-                    if (x - ax1) <= edge_zone:
-                        return ("audio", "left")
-                    if (ax2 - x) <= edge_zone:
-                        return ("audio", "right")
+        # Audio clips — iterate every loaded entry so multi-clip-per-
+        # lane (post-razor or just two A1/A2 clips) all show hover
+        # edges. Returned id matches the `hover_key` the audio drawer
+        # uses ("audio" for idx 0, "audio_<i>" otherwise) so the
+        # animation system writes to and reads from the same slot.
+        for i, atrack in enumerate(self._audio_tracks):
+            if atrack.decoded is None:
+                continue
+            ay1, ay2 = self._audio_y_bounds(i)
+            if not (ay1 - Y_BUFFER <= y <= ay2 + Y_BUFFER):
+                continue
+            ax1, ax2 = self._audio_x_bounds(w, i)
+            if not (ax1 <= x <= ax2):
+                continue
+            edge_zone = min(CURSOR_EDGE_PX, max(1, (ax2 - ax1) // 3))
+            hover_key = "audio" if i == 0 else "audio_{}".format(i)
+            if (x - ax1) <= edge_zone:
+                return (hover_key, "left")
+            if (ax2 - x) <= edge_zone:
+                return (hover_key, "right")
 
         shots, _ = _read_shots(doc)
         for shot in shots:
@@ -1646,6 +2224,19 @@ class ShotblocksTimelineCanvas(AudioCanvasMixin, DrawingCanvasMixin, DragCanvasM
             self._dispatch_menu_result(result, doc, shots)
             return True
 
+        # Level-keyframe right-click — only when a node is under the
+        # cursor. Independent of Pen mode being on; the user might
+        # right-click a node from a previous Pen session without re-
+        # entering the mode. Need to resolve which clip first so we
+        # check the right keyframe list.
+        audio_hit = self._hit_test_audio(x, y, w)
+        if audio_hit is not None:
+            _kind, hit_idx, _region = audio_hit
+            kf_idx = self._hit_test_level_kf(x, y, w, hit_idx)
+            if kf_idx >= 0:
+                self._show_level_kf_menu(x, y, kf_idx, doc, hit_idx)
+                return True
+
         shot_id, _region = self._hit_test(x, y, shots, w)
 
         # If the click missed every shot, see if it landed on the audio
@@ -1659,9 +2250,11 @@ class ShotblocksTimelineCanvas(AudioCanvasMixin, DrawingCanvasMixin, DragCanvasM
         bc = c4d.BaseContainer()
 
         if audio_hit is not None:
-            # Make the audio block the active selection so Delete (and any
-            # later audio menu items) are unambiguous about what they target.
+            # Make the hit audio block the active selection so Delete
+            # (and any later audio menu items) are unambiguous about
+            # what they target. `audio_hit` shape: ("audio", idx, region).
             self._audio_selected = True
+            self._audio_selected_idx = audio_hit[1]
             self._selected_ids.clear()
             self.Redraw()
             bc.SetString(MENU_DELETE_AUDIO, "Delete Audio Track")
@@ -1699,6 +2292,52 @@ class ShotblocksTimelineCanvas(AudioCanvasMixin, DrawingCanvasMixin, DragCanvasM
         self._dispatch_menu_result(result, doc, shots)
         return True
 
+    def _show_level_kf_menu(self, x, y, kf_index, doc, track_idx=0):
+        """Right-click menu for a level keyframe on the audio clip at
+        `track_idx`. Lists the interp modes (with a marker on the
+        current one) and a Delete entry. Persists with undo on change."""
+        if not (0 <= track_idx < len(self._audio_tracks)):
+            return
+        track = self._audio_tracks[track_idx]
+        if track is None or not (0 <= kf_index < len(track.level_keyframes)):
+            return
+        kf = track.level_keyframes[kf_index]
+        cur = kf.get("interp", "linear")
+
+        def _label(name, code):
+            return ("• " if cur == code else "  ") + name
+
+        bc = c4d.BaseContainer()
+        bc.SetString(MENU_LVL_INTERP_LIN,   _label("Linear",        "linear"))
+        bc.SetString(MENU_LVL_INTERP_HOLD,  _label("Hold",          "hold"))
+        bc.SetString(MENU_LVL_INTERP_IN,    _label("Ease In",       "ease_in"))
+        bc.SetString(MENU_LVL_INTERP_OUT,   _label("Ease Out",      "ease_out"))
+        bc.SetString(MENU_LVL_INTERP_INOUT, _label("Ease In/Out",   "ease_in_out"))
+        # Separator + delete.
+        bc.InsData(0, c4d.BaseContainer())  # menu separator (best effort)
+        bc.SetString(MENU_LVL_DELETE, "Delete Keyframe")
+        result = self._show_popup(bc, x, y)
+        if result in (None, 0):
+            return
+        if result == MENU_LVL_DELETE:
+            track.remove_level_keyframe(kf_index)
+        else:
+            mapping = {
+                MENU_LVL_INTERP_LIN:   "linear",
+                MENU_LVL_INTERP_HOLD:  "hold",
+                MENU_LVL_INTERP_IN:    "ease_in",
+                MENU_LVL_INTERP_OUT:   "ease_out",
+                MENU_LVL_INTERP_INOUT: "ease_in_out",
+            }
+            new_interp = mapping.get(result)
+            if new_interp is None:
+                return
+            track.set_level_keyframe(kf_index, interp=new_interp)
+        # Persist + redraw via the multi-track writer.
+        self._persist_audio_tracks(doc)
+        self._refresh_audio_loaded_sig(doc)
+        self.Redraw()
+
     def _show_popup(self, bc, x, y):
         """Convert canvas-local coords to monitor screen via Local2Screen and
         invoke ShowPopupDialog. Returns the selected menu id, or 0 on dismiss."""
@@ -1733,17 +2372,22 @@ class ShotblocksTimelineCanvas(AudioCanvasMixin, DrawingCanvasMixin, DragCanvasM
             sel = [s for s in shots if s["id"] in self._selected_ids]
             if sel:
                 s = sel[0]
-                self._set_range(doc, s["in_frame"], s["out_frame"])
+                # Shot frames are inclusive [in, out]; the range model
+                # is half-open [in, out_exclusive). The range bar's
+                # right edge is drawn at frame x = out, so without the
+                # +1 it lands on the shot's last frame and visually
+                # cuts into the shot.
+                self._set_range(doc, s["in_frame"], s["out_frame"] + 1)
         elif result == MENU_SET_RANGE_SEL:
             sel = [s for s in shots if s["id"] in self._selected_ids]
             if sel:
                 in_f  = min(s["in_frame"]  for s in sel)
-                out_f = max(s["out_frame"] for s in sel)
+                out_f = max(s["out_frame"] for s in sel) + 1
                 self._set_range(doc, in_f, out_f)
         elif result == MENU_RANGE_TO_ALL:
             if shots:
                 in_f  = min(s["in_frame"]  for s in shots)
-                out_f = max(s["out_frame"] for s in shots)
+                out_f = max(s["out_frame"] for s in shots) + 1
                 self._set_range(doc, in_f, out_f)
         elif result == MENU_CLEAR_RANGE:
             doc_first, doc_last = self._doc_bounds()
@@ -1837,7 +2481,192 @@ class ShotblocksTimelineCanvas(AudioCanvasMixin, DrawingCanvasMixin, DragCanvasM
                 self._set_range(doc, cur_in, new_out)
                 return True
 
+        # Up / Down arrow → jump playhead to previous / next edit point
+        # (any shot in_frame or out_frame across all tracks). NLE
+        # convention; lets the user step from cut to cut without
+        # eyeballing the timeline.
+        if not (qualifier & (_QCTRL | _QSHIFT | _QALT)):
+            if channel == _KEY_UP:
+                self._jump_to_edit_point(direction=-1)
+                return True
+            if channel == _KEY_DOWN:
+                self._jump_to_edit_point(direction=+1)
+                return True
+
+        # Backslash → toggle between fit-all zoom and the previous
+        # zoom (Railcut / Premiere convention). Stash the current
+        # window before fitting so the next press restores it. If we
+        # were already at fit-all, restore the stash if there is one;
+        # otherwise no-op.
+        if (not (qualifier & (_QCTRL | _QSHIFT | _QALT))
+                and channel == ord('\\')):
+            self._toggle_zoom_fit()
+            return True
+
+        # `/` → set play range to selection (or to all shots if
+        # nothing is selected). Mirrors the right-click menu entries
+        # "Set Range to Selection" / "Range to All" — one keystroke
+        # to fit the range bar around the work you're focused on.
+        if (not (qualifier & (_QCTRL | _QSHIFT | _QALT))
+                and channel == ord('/')):
+            self._range_to_selection_or_all()
+            return True
+
+        # Alt + arrow → nudge selected shots.
+        #   Alt+Left/Right       = ±1 frame
+        #   Alt+Shift+Left/Right = ±10 frames
+        #   Alt+Up/Down          = ±1 track (Up = up, Down = down)
+        # Conflict-free with bare Up/Down (edit-point jump) because Alt
+        # is required here. Ctrl-held is excluded to leave room for
+        # future C4D-style transport hotkeys.
+        if (qualifier & _QALT) and not (qualifier & _QCTRL):
+            shift = bool(qualifier & _QSHIFT)
+            step = 10 if shift else 1
+            if channel == _KEY_LEFT:
+                self._nudge_selection(df=-step, dt=0)
+                return True
+            if channel == _KEY_RIGHT:
+                self._nudge_selection(df=+step, dt=0)
+                return True
+            if channel == _KEY_UP and not shift:
+                self._nudge_selection(df=0, dt=-1)
+                return True
+            if channel == _KEY_DOWN and not shift:
+                self._nudge_selection(df=0, dt=+1)
+                return True
+
         return False
+
+    def _nudge_selection(self, df, dt):
+        """Move all selected shots by (df frames, dt tracks) as a rigid
+        group. Uses `_resolve_group_move` in replace mode so collisions
+        trim neighbors (same as a drag-move). No-op if nothing is
+        selected.
+        """
+        if not self._selected_ids:
+            return
+        doc = c4d.documents.GetActiveDocument()
+        shots, next_id = _read_shots(doc)
+        target_ids = set(self._selected_ids)
+        # Track lock — bail if any selected shot lives on a locked
+        # track, OR (for a vertical nudge) if any destination track
+        # is locked.
+        from sb_shot_model import _shot_track as _st
+        src_tracks = {_st(s) for s in shots if s["id"] in target_ids}
+        if self._any_video_track_locked(src_tracks):
+            print("[Shotblocks] nudge blocked: source track locked")
+            return
+        if dt != 0:
+            dst_tracks = {t + dt for t in src_tracks}
+            if self._any_video_track_locked(dst_tracks):
+                print("[Shotblocks] nudge blocked: destination track locked")
+                return
+        # Anchor = the first selected shot (any selected shot works for
+        # non-snap mode; we're not snapping).
+        anchor_id = next(iter(target_ids))
+        new_shots, _ = _resolve_group_move(
+            shots, target_ids, anchor_id, df, dt,
+            mode="replace", snap_frames=0)
+        doc.StartUndo()
+        _write_shots(doc, new_shots, next_id, with_undo=True)
+        doc.EndUndo()
+        c4d.EventAdd()
+        self.Redraw()
+
+    def _range_to_selection_or_all(self):
+        """`/` hotkey: set play range to current selection, or to the
+        full extent of all shots if nothing is selected. Matches the
+        right-click menu's "Set Range to Selection" / "Range to All"
+        entries. Shot frames are inclusive [in, out]; the range model
+        is half-open [in, out_exclusive), so out_f = max_out + 1 to
+        keep the range bar's right edge hugging the shot's tail rather
+        than cutting one frame into it."""
+        doc = c4d.documents.GetActiveDocument()
+        shots, _ = _read_shots(doc)
+        if self._selected_ids:
+            sel = [s for s in shots if s["id"] in self._selected_ids]
+            if not sel:
+                return
+            in_f  = min(s["in_frame"]  for s in sel)
+            out_f = max(s["out_frame"] for s in sel) + 1
+        elif shots:
+            in_f  = min(s["in_frame"]  for s in shots)
+            out_f = max(s["out_frame"] for s in shots) + 1
+        else:
+            return
+        self._set_range(doc, in_f, out_f)
+
+    def _toggle_zoom_fit(self):
+        """Toggle the visible window between the doc's full range and
+        whatever the user had before the last fit."""
+        doc = c4d.documents.GetActiveDocument()
+        if doc is None:
+            return
+        fps = self._doc_fps(doc)
+        try:
+            doc_first = int(doc.GetMinTime().GetFrame(fps))
+            doc_last  = int(doc.GetMaxTime().GetFrame(fps))
+        except Exception:
+            return
+        if doc_last <= doc_first:
+            return
+        at_fit = (self.visible_first, self.visible_last) == (doc_first, doc_last)
+        stash = getattr(self, "_zoom_fit_stash", None)
+        if at_fit and stash is not None:
+            # Restore the pre-fit window.
+            self.visible_first, self.visible_last = stash
+            self._zoom_fit_stash = None
+        else:
+            # Stash the current window and snap to fit-all.
+            self._zoom_fit_stash = (self.visible_first, self.visible_last)
+            self.visible_first = doc_first
+            self.visible_last  = doc_last
+        self._request_peak_rebuild()
+        self.Redraw()
+
+    def _jump_to_edit_point(self, direction):
+        """Move the playhead to the nearest edit point in `direction`
+        (-1 = previous, +1 = next). Edit points are every shot's
+        `in_frame` and `out_frame + 1` (the cut-after frame) across all
+        tracks. If no edit point exists in that direction, the playhead
+        doesn't move.
+
+        Audio playback re-seeks if running, so the user can spacebar-
+        play, Up/Down to the next cut, and continue without an audio
+        gap or drift.
+        """
+        doc = c4d.documents.GetActiveDocument()
+        shots, _ = _read_shots(doc)
+        if not shots:
+            return
+        # Build the set of edit points. `out_frame + 1` rather than
+        # `out_frame` because a shot covers [in, out] inclusive — the
+        # cut happens AFTER `out`, at `out + 1`.
+        points = set()
+        for s in shots:
+            points.add(int(s["in_frame"]))
+            points.add(int(s["out_frame"]) + 1)
+        cur = self.playhead_frame
+        if direction < 0:
+            candidates = [p for p in points if p < cur]
+            if not candidates:
+                return
+            target = max(candidates)
+        else:
+            candidates = [p for p in points if p > cur]
+            if not candidates:
+                return
+            target = min(candidates)
+        fps = self._doc_fps(doc)
+        self._set_playhead_with_playback_resync(
+            target, fps, seek_audio=True)
+        # Mirror to C4D's transport so the viewport jumps with us.
+        try:
+            doc.SetTime(c4d.BaseTime(target, fps))
+        except Exception as e:
+            print("[Shotblocks] edit-point jump SetTime failed: {}".format(e))
+        c4d.EventAdd()
+        self.Redraw()
 
     # ------------------------------------------------------------------
     # Doc sync — visible window auto-fits to the doc's total frame range
@@ -1990,8 +2819,12 @@ class ShotblocksTimelineCanvas(AudioCanvasMixin, DrawingCanvasMixin, DragCanvasM
     def _on_left_press(self, x, y, qualifier):
         # Rail click — handled before any timeline gesture. The rail
         # owns x in [0, LEFT_RAIL_WIDTH); modifiers don't change rail
-        # behavior (no Alt+drag-pan inside the rail).
+        # behavior (no Alt+drag-pan inside the rail). Try the per-track
+        # row controls first; if the click missed them, fall through to
+        # the global rail buttons.
         if x < LEFT_RAIL_WIDTH:
+            if self._handle_track_row_click(x, y):
+                return True
             self._handle_rail_click(x, y)
             return True
 
@@ -2055,17 +2888,43 @@ class ShotblocksTimelineCanvas(AudioCanvasMixin, DrawingCanvasMixin, DragCanvasM
         # shot click.
         audio_hit = self._hit_test_audio(x, y, w)
         if audio_hit is not None:
-            _kind, region = audio_hit
+            _kind, track_idx, region = audio_hit
             self._audio_selected = True
+            self._audio_selected_idx = track_idx
             # Clear shot selection so only the audio block reads selected.
             self._selected_ids.clear()
             self.Redraw()
+            ctrl_held = bool(qualifier & _QCTRL)
             if region == "left":
-                self._drag_audio_resize("left", x, y)
+                self._drag_audio_resize("left", x, y, track_idx)
             elif region == "right":
-                self._drag_audio_resize("right", x, y)
+                self._drag_audio_resize("right", x, y, track_idx)
+            elif self._razor_enabled and region == "body":
+                # Razor on audio body — split at click frame (or
+                # snap target). Returns False if the click was too
+                # close to an edge to produce two non-empty halves.
+                self._razor_audio_at(x, y, w, track_idx)
+            elif self._pen_enabled:
+                # Pen mode on the audio body: hit an existing node and
+                # drag it, or add a new one at the click position and
+                # immediately enter the drag loop. Edge-resize bypasses
+                # this above so the user can still trim while Pen is on.
+                kf_idx = self._hit_test_level_kf(x, y, w, track_idx)
+                if kf_idx < 0:
+                    kf_idx = self._add_level_kf_at(x, y, w, track_idx)
+                if kf_idx >= 0:
+                    self._drag_level_kf(kf_idx, x, y, track_idx)
+            elif self._slip_enabled or ctrl_held:
+                # Slip: either the rail-button tool is on (so slip is
+                # the default body-drag), or the user held Ctrl to
+                # invoke slip as a one-off gesture without flipping
+                # the tool. Plain body-drag in this branch still moves
+                # the clip on the timeline.
+                # (Alt+drag is reserved for canvas pan — see
+                # `_on_left_press` above — so slip uses Ctrl.)
+                self._drag_audio_slip(x, y, track_idx)
             else:
-                self._drag_audio_move(x, y)
+                self._drag_audio_move(x, y, track_idx)
             return True
 
         # Click anywhere else clears audio selection.
@@ -2103,6 +2962,9 @@ class ShotblocksTimelineCanvas(AudioCanvasMixin, DrawingCanvasMixin, DragCanvasM
         # If clicked shot is already in a multi-selection, leave selection
         # intact and let _drag_move move the whole selection as a group.
 
+        if self._razor_enabled and region == "body":
+            self._razor_shot_at(shot_id, x, y, w)
+            return True
         if region == "body":
             self._drag_move(shot_id, x, y)
         elif region in ("left", "right"):
@@ -2123,6 +2985,94 @@ class ShotblocksTimelineCanvas(AudioCanvasMixin, DrawingCanvasMixin, DragCanvasM
     # Selection operations (delete, duplicate)
     # ------------------------------------------------------------------
 
+    def _razor_target_frame(self, x, w):
+        """Convert click x to a doc-frame, snapping to nearby edit
+        points when Snap is enabled. Reuses `_snap_frames` /
+        `_snap_extras` so the razor lines up with the same targets
+        as other gestures (shot edges, peak markers, beat grid)."""
+        raw = self._x_to_frame(x, w)
+        if not self._snap_enabled:
+            return raw
+        from sb_shot_model import _magnetic_snap_edge
+        doc = c4d.documents.GetActiveDocument()
+        shots, _ = _read_shots(doc) if doc is not None else ([], 0)
+        snapped, _targets = _magnetic_snap_edge(
+            shots, target_id=None, edge_frame=raw,
+            snap_frames=self._snap_frames(),
+            extra_points=self._snap_extras())
+        return snapped
+
+    def _razor_shot_at(self, shot_id, x, y, w):
+        """Razor-tool click on a shot's body — split it at the click
+        frame (snapped if Snap is on). Refuses to split if the click
+        is too close to either edge to produce two non-empty halves.
+        Wrapped in undo so a single Cmd+Z restores the pre-split shot."""
+        from sb_shot_model import _split_shot, _shot_track
+        doc = c4d.documents.GetActiveDocument()
+        if doc is None:
+            return
+        shots, next_id = _read_shots(doc)
+        target = next((s for s in shots if s["id"] == shot_id), None)
+        if target is None:
+            return
+        # Track lock check — locked tracks block all mutations,
+        # razor included.
+        if self._track_is_locked("video", _shot_track(target)):
+            print("[Shotblocks] razor blocked: track locked")
+            return
+        frame = self._razor_target_frame(x, w)
+        new_shots = _split_shot(shots, shot_id, frame, next_id)
+        if new_shots is shots:
+            print("[Shotblocks] razor: split refused at frame {}".format(frame))
+            return
+        # Carry the source shot's camera link forward to the new
+        # right-half id so the right half stays connected to the
+        # same camera (same orphan/live state).
+        src_cam = self._cam_refs.get(shot_id) or _get_shot_cam(doc, shot_id)
+        doc.StartUndo()
+        _write_shots(doc, new_shots, next_id + 1, with_undo=True)
+        if src_cam is not None:
+            self._remember_cam(next_id, src_cam)
+        doc.EndUndo()
+        c4d.EventAdd()
+        self.Redraw()
+        print("[Shotblocks] razor: split shot {} at frame {} → new id {}".format(
+            shot_id, frame, next_id))
+
+    def _razor_audio_at(self, x, y, w, track_idx):
+        """Razor-tool click on an audio block — split that lane's
+        clip at the click frame (snapped). The right half stays on
+        the same lane immediately after the cut."""
+        doc = c4d.documents.GetActiveDocument()
+        if doc is None:
+            return
+        if self._track_is_locked("audio", track_idx):
+            print("[Shotblocks] razor blocked: audio track locked")
+            return
+        track = self._audio_tracks[track_idx]
+        if track.decoded is None:
+            return
+        frame = self._razor_target_frame(x, w)
+        right = track.split_at(frame, doc)
+        if right is None:
+            print("[Shotblocks] razor: audio split refused at frame {}".format(frame))
+            return
+        # Insert the right half immediately after the source on its
+        # OWN lane index — visually it stays in the same row. The
+        # canvas list ordering follows lane number (the audio
+        # renderer iterates `_audio_tracks` in index order). Each
+        # lane currently holds one clip; the right half therefore
+        # appends as a new entry whose `.track` matches the source
+        # lane and the renderer paints it in the same row.
+        right.track = track.track
+        # Insert at track_idx + 1 so audio_tracks list order doesn't
+        # diverge from lane order. Subsequent draws look up by index.
+        self._audio_tracks.insert(track_idx + 1, right)
+        self._persist_audio_tracks(doc)
+        self._refresh_audio_loaded_sig(doc)
+        print("[Shotblocks] razor: split audio at frame {} (lane {})".format(
+            frame, track_idx))
+
     def _delete_selected(self):
         if self._audio_selected:
             self._delete_selected_audio()
@@ -2132,6 +3082,12 @@ class ShotblocksTimelineCanvas(AudioCanvasMixin, DrawingCanvasMixin, DragCanvasM
         doc = c4d.documents.GetActiveDocument()
         shots, next_id = _read_shots(doc)
         target_ids = set(self._selected_ids)
+        # Track lock — block if any selected shot lives on a locked track.
+        from sb_shot_model import _shot_track as _st
+        touched = {_st(s) for s in shots if s["id"] in target_ids}
+        if self._any_video_track_locked(touched):
+            print("[Shotblocks] delete blocked: track locked")
+            return
         new_shots = [s for s in shots if s["id"] not in target_ids]
         if len(new_shots) == len(shots):
             return
@@ -2163,6 +3119,18 @@ class ShotblocksTimelineCanvas(AudioCanvasMixin, DrawingCanvasMixin, DragCanvasM
         shots, next_id = _read_shots(doc)
         srcs = [s for s in shots if s["id"] in self._selected_ids]
         if not srcs:
+            return
+        # Track lock — block when any source OR landing track is locked.
+        # Duplicates target track+1 (or same track at the cap), so both
+        # must be unlocked for the operation to succeed cleanly.
+        from sb_shot_model import _shot_track as _st
+        touched = set()
+        for s in srcs:
+            t = _st(s)
+            touched.add(t)
+            touched.add(min(t + 1, MAX_TRACKS - 1))
+        if self._any_video_track_locked(touched):
+            print("[Shotblocks] duplicate blocked: track locked")
             return
 
         new_ids = set()

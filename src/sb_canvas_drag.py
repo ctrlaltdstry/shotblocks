@@ -92,6 +92,15 @@ class DragCanvasMixin(object):
         # exactly where the magnetic snap pulled the shot.
         self._snap_indicator_frames = ()
 
+        # Shot IDs that should paint LAST during the in-flight drag,
+        # so the dragged shot's edges always stay visible on top of
+        # neighbors as it approaches them. Without this, the right
+        # edge of a left-to-right resize disappears behind the next
+        # shot in iteration order (the dragged shot is earlier in
+        # the in_frame-sorted list and gets painted over). Empty
+        # when no drag is active.
+        self._drag_top_ids = set()
+
     # ------------------------------------------------------------------
     # Drag loops — uses MouseDragStart / MouseDrag / MouseDragEnd
     # ------------------------------------------------------------------
@@ -215,6 +224,15 @@ class DragCanvasMixin(object):
 
         is_group = (shot_id in self._selected_ids and len(self._selected_ids) > 1)
         target_ids = set(self._selected_ids) if is_group else {shot_id}
+        # Track lock — any shot on a locked track blocks the whole
+        # gesture. Group move would have to ripple onto locked tracks
+        # too, so we treat the gesture as atomic.
+        touched_tracks = {_shot_track(s) for s in shots
+                          if s["id"] in target_ids}
+        if self._any_video_track_locked(touched_tracks):
+            print("[Shotblocks] move blocked: track locked")
+            return
+        self._drag_top_ids = set(target_ids)
 
         orig_in    = target["in_frame"]
         orig_out   = target["out_frame"]
@@ -284,6 +302,7 @@ class DragCanvasMixin(object):
 
         result = self._drag_loop(_KEY_MLEFT, mx, my, on_tick)
         self._render_preview_shots(None)
+        self._drag_top_ids = set()
         if result is None:
             return
         accum_dx, accum_dy, qualifier = result
@@ -318,10 +337,14 @@ class DragCanvasMixin(object):
         target = next((s for s in shots if s["id"] == shot_id), None)
         if target is None:
             return
+        if self._track_is_locked("video", _shot_track(target)):
+            print("[Shotblocks] resize blocked: track locked")
+            return
 
         orig_in  = target["in_frame"]
         orig_out = target["out_frame"]
         fpp = self._frames_per_pixel(w)
+        self._drag_top_ids = {shot_id}
 
         def on_tick(adx, _ady, qual):
             delta_frames = int(round(adx * fpp))
@@ -349,6 +372,7 @@ class DragCanvasMixin(object):
 
         result = self._drag_loop(_KEY_MLEFT, mx, my, on_tick)
         self._render_preview_shots(None)
+        self._drag_top_ids = set()
         if result is None:
             return
         accum_dx, _accum_dy, qualifier = result

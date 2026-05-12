@@ -82,9 +82,12 @@ COL_BEAT_GRID           = _rgb("3b3b3b")  # midway between #5a5a5a and the
 # Audio-only layout constants
 # ---------------------------------------------------------------------------
 
-AUDIO_HEIGHT        = 96   # audio tracks render at 2x shot height per design;
-                           # not yet wired into track-Y math (waits for the
-                           # audio subsystem in v7+).
+AUDIO_HEIGHT        = 48   # each audio lane renders at the same row
+                           # height as a video track (Railcut convention).
+                           # Stack vertically; the canvas owns the math.
+AUDIO_WAVEFORM_INSET_HISTORICAL = 14  # the v9 inset assumed a 96px row.
+                                       # 48px rows want a tighter inset;
+                                       # see `AUDIO_WF_INSET_Y` below.
 
 # Horizontal interior padding mirrors the canvas-level constant; the
 # audio block extends edge-to-edge so the waveform's visible peaks
@@ -101,9 +104,9 @@ AUDIO_WF_INSET_PX   = 0
 # block, in pixels. Centers the waveform vertically and leaves
 # breathing room top/bottom so the peak markers (top) and the
 # block's bottom edge bitmap (bottom) don't visually compete with
-# the waveform crests. At AUDIO_HEIGHT=96 a 14 px inset on each
-# side leaves a 68 px band (~71 % of the block's height).
-AUDIO_WF_INSET_Y    = 14
+# the waveform crests. At AUDIO_HEIGHT=48 a 6 px inset on each side
+# leaves a 36 px band (~75 % of the block's height).
+AUDIO_WF_INSET_Y    = 6
 
 # Right-side audio meter. A vertical strip on the far right of the
 # dialog hosts a Premiere/FCP-style stereo dB meter — two thin bars
@@ -128,6 +131,15 @@ PEAK_HOLD_DECAY_DB_S  = 12.0
 # from -10 dB. Avoids the bars looking "stuck" on a loud value
 # after pause; matches DAW conventions where stopped means silent.
 METER_PAUSE_DECAY_DB_S = 40.0
+# Release ballistics during playback. The bar attacks instantly
+# (snaps up when the envelope spikes — that's what a peak meter
+# is supposed to show) but falls at this rate when the envelope
+# drops, so a kick drum doesn't make the bar visually pump down to
+# silence between hits. 20 dB/s is roughly PPM-style: snappy
+# enough to track a fade-out, slow enough to read steady levels
+# without flicker. Compare: VU meters use ~11 dB/s, broadcast
+# PPMs ~24 dB/s.
+METER_RELEASE_DB_S    = 20.0
 # Color stops along the meter, in dBFS. Below GREEN_TOP_DB the bar
 # is solid green; between GREEN_TOP_DB and YELLOW_TOP_DB it fades
 # green → yellow; above that it fades yellow → red.
@@ -286,17 +298,28 @@ class AudioCanvasMixin(object):
         canvas's `__init__` so a fresh canvas has zeroed buffers,
         empty caches, and a ready AudioTrack / AudioPlayback pair.
         """
-        # v7 audio. One track per document. `_audio_doc_id` is the
-        # `id(doc)` we last sync'd against — when it changes (the user
-        # opened a different document), we reload from the helper null.
-        self._audio_track    = AudioTrack()
+        # Audio tracks — list of `AudioTrack` instances. The first
+        # entry pre-exists as an empty track so legacy code that
+        # touched `self._audio_track` (now a property → tracks[0])
+        # still has something to read. New tracks are appended on
+        # subsequent drops; the user can also drop onto a specific
+        # lane via the drag-receive Y resolution.
+        self._audio_tracks = [AudioTrack()]
+        self._audio_tracks[0]._persist_cb = self._persist_audio_tracks
         self._audio_playback = AudioPlayback()
         self._audio_doc_id   = None
         # Selection / hover for the audio block. Keys parallel to the
-        # shot-block conventions: 'audio' is the singleton id (we have
-        # one audio block per document in v7).
+        # shot-block conventions; the audio selection is currently a
+        # single bool — multi-clip audio selection (Ctrl/Shift like
+        # shots) ships in a follow-up.
         self._audio_selected = False
         self._audio_drag_logged_types = set()
+        # Index of the audio track that owns the current selection
+        # (0-based, into `_audio_tracks`). Read alongside
+        # `_audio_selected`; meaningless when `_audio_selected` is
+        # False. Defaults to 0 for back-compat with the single-track
+        # selection model.
+        self._audio_selected_idx = 0
 
         # Standalone chrome bitmaps (peak marker). Lazy-loaded on first
         # read; None on load failure so the procedural fallback
@@ -392,6 +415,74 @@ class AudioCanvasMixin(object):
         return self._chrome_bitmaps_cache
 
     # ------------------------------------------------------------------
+    # Multi-track audio helpers
+    # ------------------------------------------------------------------
+
+    @property
+    def _audio_track(self):
+        """Back-compat accessor returning the first audio track.
+        Pre-multi-track code (and any path that still treats audio as
+        a singleton) reads through here. New code should iterate
+        `self._audio_tracks` directly. The list is guaranteed non-empty:
+        a placeholder AudioTrack is constructed in `_audio_init_state`."""
+        return self._audio_tracks[0]
+
+    @_audio_track.setter
+    def _audio_track(self, _value):
+        # No-op setter — kept so any legacy code that tried to
+        # reassign the singleton fails loudly rather than silently
+        # diverging from `_audio_tracks[0]`.
+        raise AttributeError(
+            "Direct assignment of _audio_track is unsupported; mutate "
+            "AudioTrack fields or use AudioCanvasMixin._audio_tracks instead.")
+
+    def _audible_tracks(self):
+        """Yield (list_idx, track) for every clip that should be heard
+        right now — decoded, on an unmuted lane, and (under solo) on a
+        soloed lane. Skips placeholder tracks (decoded is None). State
+        is keyed by LANE number (`AudioTrack.track`), not by list index,
+        so multiple clips on the same lane share the same mute/solo
+        flags."""
+        any_solo = self._any_audio_solo()
+        for i, t in enumerate(self._audio_tracks):
+            if t.decoded is None:
+                continue
+            attrs = self._track_attrs("audio", int(t.track))
+            if attrs["muted"]:
+                continue
+            if any_solo and not attrs["solo"]:
+                continue
+            yield i, t
+
+    def _persist_audio_tracks(self, doc):
+        """Write the doc-level audio list (one dict per non-empty
+        track). Called by AudioTrack mutators via their `_persist_cb`
+        and by the canvas after add/delete/reorder operations.
+
+        Wrapped in undo here so callers don't need to bracket. The
+        existing single-helper-null undo pattern still applies — every
+        write to the helper's BC must follow a single AddUndo, and
+        `_write_audios` does that internally."""
+        if doc is None:
+            return
+        from sb_persistence import _write_audios
+        # Skip tracks that have never been imported (placeholder slot).
+        payload = [t.to_persisted_dict(doc)
+                   for t in self._audio_tracks
+                   if t.decoded is not None or t.path]
+        try:
+            doc.StartUndo()
+            _write_audios(doc, payload, with_undo=True)
+            doc.EndUndo()
+        except Exception as e:
+            print("[Shotblocks] _persist_audio_tracks failed: {}".format(e))
+            try:
+                doc.EndUndo()
+            except Exception:
+                pass
+        c4d.EventAdd()
+
+    # ------------------------------------------------------------------
     # Geometry helpers
     # ------------------------------------------------------------------
 
@@ -406,23 +497,57 @@ class AudioCanvasMixin(object):
         x1 = x2 - RIGHT_METER_PANEL_W
         return (x1, x2)
 
-    def _audio_x_bounds(self, w):
-        """Pixel bounds of the audio block on screen. Mirrors
-        `_shot_x_bounds` for shots."""
-        return self._shot_x_bounds(self._audio_track.in_frame,
-                                   self._audio_track.out_frame, w)
+    def _audio_x_bounds(self, w, list_idx=0):
+        """Pixel bounds of an audio block on screen. `list_idx` is the
+        index into `self._audio_tracks` — used to look up the actual
+        clip's in/out. (Two clips can share a lane after a razor
+        split; their lane index is the `.track` field on AudioTrack.)"""
+        t = self._audio_tracks[list_idx]
+        return self._shot_x_bounds(t.in_frame, t.out_frame, w)
 
-    def _audio_y_bounds(self):
-        """(top, bottom) Y bounds of the audio block in canvas pixels.
-        Audio renders below track 0, separated by LANE_GAP. Used by
-        the draw path AND by the canvas-side `_compute_hover_band`
-        (the audio block's hover-edge detection).
-        """
+    def _audio_y_bounds(self, list_idx=0):
+        """(top, bottom) Y bounds of one audio CLIP's lane row in
+        canvas pixels. Reads the AudioTrack's `.track` field so two
+        clips on the same lane (e.g. after a razor split) render in
+        the same row regardless of list position."""
         from sb_canvas import SHOT_HEIGHT, LANE_GAP
+        lane = 0
+        if 0 <= list_idx < len(self._audio_tracks):
+            lane = max(0, int(self._audio_tracks[list_idx].track))
         t0_bot   = self._track_0_top() + SHOT_HEIGHT
-        audio_top = t0_bot + LANE_GAP
+        audio_top = t0_bot + LANE_GAP + lane * (AUDIO_HEIGHT + LANE_GAP)
         audio_bot = audio_top + AUDIO_HEIGHT
         return audio_top, audio_bot
+
+    def _audio_lane_y_bounds(self, lane):
+        """Y bounds for a lane index (not a list index). Used by the
+        rail row drawer which iterates by lane, not by list."""
+        from sb_canvas import SHOT_HEIGHT, LANE_GAP
+        t0_bot   = self._track_0_top() + SHOT_HEIGHT
+        audio_top = t0_bot + LANE_GAP + max(0, int(lane)) * (AUDIO_HEIGHT + LANE_GAP)
+        audio_bot = audio_top + AUDIO_HEIGHT
+        return audio_top, audio_bot
+
+    def _audio_lanes_in_use(self):
+        """Sorted unique list of lane indices currently occupied by a
+        loaded audio clip. Used by the rail drawer to render one row
+        per occupied lane (not one row per audio-track-list entry)."""
+        lanes = set()
+        for t in self._audio_tracks:
+            if t.decoded is not None:
+                lanes.add(int(t.track))
+        return sorted(lanes)
+
+    def _audio_total_y_bounds(self):
+        """Cover the full audio strip — first occupied lane's top
+        through last occupied lane's bottom. Used by hit-test
+        filters that need to reject y outside the audio area."""
+        lanes = self._audio_lanes_in_use()
+        if not lanes:
+            return self._audio_lane_y_bounds(0)
+        first_top, _ = self._audio_lane_y_bounds(lanes[0])
+        _, last_bot   = self._audio_lane_y_bounds(lanes[-1])
+        return first_top, last_bot
 
     # ------------------------------------------------------------------
     # Sync (load/clear in-memory state from persistence)
@@ -443,84 +568,183 @@ class AudioCanvasMixin(object):
         if doc is None:
             return
 
-        from sb_persistence import _read_audio
-        persisted = _read_audio(doc)
-        track     = self._audio_track
+        from sb_persistence import _read_audios
+        persisted_list = _read_audios(doc)
 
-        if persisted is None:
-            # Doc has no audio. If we currently hold one, drop it.
-            if track.decoded is not None:
+        if not persisted_list:
+            # Doc has no audio. Drop everything we hold; keep one
+            # empty placeholder (legacy invariant — `self._audio_track`
+            # always returns a valid AudioTrack instance).
+            need_clear = any(t.decoded is not None for t in self._audio_tracks)
+            if need_clear:
                 self._audio_playback.stop()
-                track._reset()
+                for t in self._audio_tracks:
+                    t._reset()
+                self._audio_tracks = [self._audio_tracks[0]]
+                self._audio_tracks[0]._persist_cb = self._persist_audio_tracks
                 print("[Shotblocks] audio cleared (doc has no audio)")
+            self._audio_loaded_sig = ()
             return
 
-        # Build a cheap signature from the persisted dict and compare.
-        # Path resolution differs between persisted (project-relative
-        # string) and in-memory (absolute) so we can't compare path
-        # strings directly. Compare the placement keys instead — they
-        # uniquely identify the audio state for our purposes.
-        sig_persisted = (
-            bool(persisted.get("path_is_relative", False)),
-            persisted.get("path", ""),
-            int(persisted.get("in_frame",  0)),
-            int(persisted.get("out_frame", 0)),
-            int(persisted.get("trim_start_audio_frames", 0)),
+        # Per-track signature. Same fields as the v7 single-track
+        # signature, repeated per entry. Order-sensitive so two
+        # docs with the same N tracks in different order still
+        # round-trip correctly.
+        new_sig = tuple(
+            (bool(p.get("path_is_relative", False)),
+             p.get("path", ""),
+             int(p.get("track", 0)),
+             int(p.get("in_frame",  0)),
+             int(p.get("out_frame", 0)),
+             int(p.get("trim_start_audio_frames", 0)))
+            for p in persisted_list
         )
         sig_loaded = getattr(self, "_audio_loaded_sig", None)
-        if sig_persisted == sig_loaded:
+        if new_sig == sig_loaded:
             return
 
+        # Resize the in-memory track list to match persisted count.
+        # Keep already-loaded tracks where signatures still match so we
+        # don't re-decode files unnecessarily.
+        while len(self._audio_tracks) < len(persisted_list):
+            t = AudioTrack()
+            t._persist_cb = self._persist_audio_tracks
+            self._audio_tracks.append(t)
+        while len(self._audio_tracks) > max(1, len(persisted_list)):
+            removed = self._audio_tracks.pop()
+            removed._reset()
+
+        for i, p in enumerate(persisted_list):
+            tr = self._audio_tracks[i]
+            try:
+                # `load_from_doc` reads the persisted dict via
+                # `_read_audio` — for multi-track, we need a path
+                # that targets THIS dict, not the first one. Do a
+                # direct rebuild from the dict to avoid that.
+                self._load_audio_track_from_dict(tr, p, doc)
+            except Exception as e:
+                print("[Shotblocks] audio track {} load failed: {}".format(i, e))
+
+        # Sync the playback engine to the first audible track (the
+        # actual mixer ships in R3-6; for now playback still
+        # routes through track 0).
+        first = self._audio_tracks[0]
+        self._audio_playback.set_audio(first.decoded)
+        self._audio_loaded_sig = new_sig
+        print("[Shotblocks] audio loaded for doc: {} track(s)".format(
+            len(persisted_list)))
+
+    def _load_audio_track_from_dict(self, track, d, doc):
+        """Hydrate an AudioTrack from a persisted dict directly,
+        bypassing the legacy `load_from_doc` path (which reads the
+        helper null for the FIRST track only). Used by the
+        multi-track sync."""
+        from sb_audio_decode import load_audio
+        is_rel  = bool(d.get("path_is_relative", False))
+        stored  = d.get("path", "")
+        abs_path = track._from_persisted_path(stored, is_rel, doc)
         try:
-            loaded = track.load_from_doc(doc)
+            decoded = load_audio(abs_path)
         except Exception as e:
-            print("[Shotblocks] audio load_from_doc raised: {}".format(e))
+            print("[Shotblocks] audio decode failed: {}".format(e))
+            # Keep the placement so the canvas can render a
+            # missing-audio state if desired; for now just bail.
+            track._reset()
+            track.path             = abs_path
+            track.path_is_relative = is_rel
+            track.in_frame  = int(d.get("in_frame",  0))
+            track.out_frame = int(d.get("out_frame", 0))
             return
-        self._audio_loaded_sig = sig_persisted
-        self._audio_playback.set_audio(track.decoded if loaded else None)
-        if loaded:
-            print("[Shotblocks] audio loaded for doc: {} ({:.2f}s, {} Hz)".format(
-                track.path,
-                track.decoded.duration_s,
-                track.decoded.sample_rate))
+        from sb_audio_peaks import build as build_peaks
+        track.path             = abs_path
+        track.path_is_relative = is_rel
+        track.decoded          = decoded
+        track.peaks            = build_peaks(decoded, samples_per_column=1024)
+        track._mono            = None
+        track._drum_band       = None
+        track._meter_envelope  = None
+        track.track    = max(0, int(d.get("track", 0)))
+        track.in_frame  = int(d.get("in_frame",  0))
+        track.out_frame = int(d.get("out_frame", track.in_frame
+                                                 + int(decoded.duration_s * 24)))
+        track.trim_start_audio_frames = max(0, int(d.get("trim_start_audio_frames", 0)))
+        # v9 analysis
+        def _ints(seq):
+            try:
+                return [int(x) for x in (seq or [])]
+            except (TypeError, ValueError):
+                return []
+        track.onsets           = _ints(d.get("onsets"))
+        track.prominent_peaks  = _ints(d.get("prominent_peaks"))
+        track.analysis_visible = bool(d.get("analysis_visible", False))
+        track.waveform_visible = bool(d.get("waveform_visible", True))
+        raw_grid = d.get("beat_grid")
+        if isinstance(raw_grid, dict):
+            try:
+                track.beat_grid = (int(raw_grid["period"]),
+                                   int(raw_grid["phase"]),
+                                   float(raw_grid["confidence"]))
+            except (KeyError, TypeError, ValueError):
+                track.beat_grid = None
+        else:
+            track.beat_grid = None
+        # Level keyframes
+        raw_kfs = d.get("level_keyframes") or []
+        kfs = []
+        for k in raw_kfs:
+            try:
+                af   = int(k["af"])
+                gain = float(k.get("gain", 1.0))
+                interp = str(k.get("interp", "linear"))
+            except (TypeError, ValueError, KeyError):
+                continue
+            if interp not in ("linear", "hold", "ease_in",
+                              "ease_out", "ease_in_out"):
+                interp = "linear"
+            kfs.append({"af": af, "gain": max(0.0, min(1.0, gain)),
+                        "interp": interp})
+        kfs.sort(key=lambda k: k["af"])
+        track.level_keyframes = kfs
 
     def _refresh_audio_loaded_sig(self, doc):
         """Update the persistence-signature cache after an in-place
         mutation (drag move/resize). Without this, the next draw's
         sync would see the persisted-vs-loaded mismatch and trigger
-        an expensive re-decode of the same file.
-        Mirrors how `_sync_audio_for_active_doc` builds its signature
-        from the persisted dict — read it back rather than assemble
-        from in-memory state, so we're guaranteed to match."""
+        an expensive re-decode."""
         try:
-            from sb_persistence import _read_audio
-            persisted = _read_audio(doc)
+            from sb_persistence import _read_audios
+            persisted_list = _read_audios(doc)
         except Exception:
-            persisted = None
-        if persisted is None:
-            self._audio_loaded_sig = None
-            return
-        self._audio_loaded_sig = (
-            bool(persisted.get("path_is_relative", False)),
-            persisted.get("path", ""),
-            int(persisted.get("in_frame",  0)),
-            int(persisted.get("out_frame", 0)),
-            int(persisted.get("trim_start_audio_frames", 0)),
+            persisted_list = []
+        self._audio_loaded_sig = tuple(
+            (bool(p.get("path_is_relative", False)),
+             p.get("path", ""),
+             int(p.get("track", 0)),
+             int(p.get("in_frame",  0)),
+             int(p.get("out_frame", 0)),
+             int(p.get("trim_start_audio_frames", 0)))
+            for p in persisted_list
         )
 
     # ------------------------------------------------------------------
     # Drawing — audio block, beat grid, dB meter, busy overlay
     # ------------------------------------------------------------------
 
-    def _draw_audio_block(self, w):
-        track = self._audio_track
-        ax1, ax2 = self._audio_x_bounds(w)
-        ay1, ay2 = self._audio_y_bounds()
+    def _draw_audio_block(self, w, track_idx=0):
+        track = self._audio_tracks[track_idx]
+        ax1, ax2 = self._audio_x_bounds(w, track_idx)
+        ay1, ay2 = self._audio_y_bounds(track_idx)
+        # Selection state — only the selected track's idx shows the
+        # selected body bitmap. Hover state is keyed per-track so
+        # multi-track hover doesn't bleed between rows.
+        is_selected = (self._audio_selected and
+                       self._audio_selected_idx == track_idx)
+        hover_key = "audio" if track_idx == 0 else "audio_{}".format(track_idx)
 
-        body_color = COL_AUDIO_BODY_SELECTED if self._audio_selected else COL_AUDIO_BODY
-        state = "selected" if self._audio_selected else "normal"
-        left_t  = self._hover_t_for("audio", "left")
-        right_t = self._hover_t_for("audio", "right")
+        body_color = COL_AUDIO_BODY_SELECTED if is_selected else COL_AUDIO_BODY
+        state = "selected" if is_selected else "normal"
+        left_t  = self._hover_t_for(hover_key, "left")
+        right_t = self._hover_t_for(hover_key, "right")
         rendered_via_bitmap = self._draw_block_bitmap(
             "audio", state,
             left_t=left_t, right_t=right_t,
@@ -599,7 +823,7 @@ class AudioCanvasMixin(object):
             # dim white-blend used on the unselected (dark teal) body.
             # Switch to a dark-on-green color when selected so the
             # waveform stays legible.
-            wf_color = COL_AUDIO_WAVEFORM_SEL if self._audio_selected else COL_AUDIO_WAVEFORM
+            wf_color = COL_AUDIO_WAVEFORM_SEL if is_selected else COL_AUDIO_WAVEFORM
             draw_waveform(self,
                           peaks_slice,
                           (wf_x1, wf_y1, wf_audio_x2, wf_y2),
@@ -626,6 +850,17 @@ class AudioCanvasMixin(object):
                 self._draw_audio_overlay(track, ax1, ay1, ax2, ay2)
             except Exception as e:
                 print("[Shotblocks] audio-overlay draw failed: {}".format(e))
+
+        # Level-keyframe curve — drawn when keyframes exist OR Pen
+        # mode is active (so the user sees the empty curve they're
+        # about to add to). Wrapped same as the analysis overlay.
+        if track.level_keyframes or getattr(self, "_pen_enabled", False):
+            try:
+                self._draw_level_curve(track, wf_x1, wf_y1,
+                                       min(wf_x2, wf_audio_x2),
+                                       wf_y2, w, track_idx)
+            except Exception as e:
+                print("[Shotblocks] level-curve draw failed: {}".format(e))
 
         # Label — file basename, top-left of the block.
         try:
@@ -661,20 +896,57 @@ class AudioCanvasMixin(object):
             return
         panel_x1, panel_x2 = bounds
 
-        track = self._audio_track
-        # Read levels at the playhead. The doc-frame → audio-frame
-        # conversion lives on AudioTrack already (used for playback
-        # sync). Returns -1 when playhead is outside the clip.
+        # Multi-track meter: sum every audible track's level (in
+        # linear amplitude) at the playhead, convert back to dBFS.
+        # Match the -6 dB headroom we apply in the mixer so the
+        # meter doesn't over-read against actual playback level.
+        import math
         doc = c4d.documents.GetActiveDocument()
         fps = self._doc_fps(doc) if doc is not None else 24
-        af = track.doc_frame_to_audio_frame(self.playhead_frame, fps)
-        if af >= 0:
-            levels = track.meter_levels_at(af)
-        else:
-            # Playhead outside the clip — meter is silent.
-            env = track.meter_envelope
-            n_ch = env.n_channels if env is not None else 0
-            levels = [FLOOR_DBFS] * n_ch
+        # Determine channel count from any loaded track (they should
+        # agree under the multi-track mixer; mismatched ones don't
+        # contribute to the mix anyway).
+        ref_track = None
+        for t in self._audio_tracks:
+            if t.decoded is not None:
+                ref_track = t
+                break
+        if ref_track is None:
+            return
+        env = ref_track.meter_envelope
+        n_ch = env.n_channels if env is not None else 0
+        if n_ch == 0:
+            return
+        # Linear-amplitude accumulators per channel.
+        lin_sum = [0.0] * n_ch
+        for i, track in self._audible_tracks():
+            af = track.doc_frame_to_audio_frame(self.playhead_frame, fps)
+            if af < 0:
+                continue
+            ch_levels = track.meter_levels_at(af)
+            if not ch_levels:
+                continue
+            # Level curve scales the linear amplitude.
+            gain = (track.evaluate_level(af)
+                    if track.level_keyframes else 1.0)
+            if gain <= 1e-4:
+                continue
+            for ci, lvl in enumerate(ch_levels):
+                if ci >= n_ch:
+                    break
+                # dBFS → linear amplitude (10^(dB/20)), scaled by gain.
+                amp = (10.0 ** (lvl / 20.0)) * gain
+                lin_sum[ci] += amp
+        # Apply mixer's -6 dB headroom (factor 0.5) so meter matches
+        # what the user hears.
+        levels = []
+        for amp in lin_sum:
+            amp *= 0.5
+            if amp <= 1e-6:
+                levels.append(FLOOR_DBFS)
+            else:
+                db = 20.0 * math.log10(amp)
+                levels.append(max(FLOOR_DBFS, min(0.0, db)))
         if not levels:
             return
 
@@ -707,10 +979,20 @@ class AudioCanvasMixin(object):
             target = levels[ch]
             displayed = self._meter_displayed_db[ch]
             if meter_live:
-                # Snap to the envelope value during playback or scrub.
-                # Visually the meter "is" the audio at the current
-                # playhead frame.
-                displayed = target
+                # Peak-meter ballistics: instant attack, slow release.
+                # When the envelope spikes higher than the displayed
+                # bar, snap up (that's the entire point of a peak
+                # meter — surface the transient). When it drops,
+                # decay smoothly so a kick drum doesn't make the
+                # bar visually pump down to silence between beats.
+                if target >= displayed:
+                    displayed = target
+                else:
+                    displayed -= METER_RELEASE_DB_S * dt
+                    if displayed < target:
+                        displayed = target
+                    if displayed < FLOOR_DBFS:
+                        displayed = FLOOR_DBFS
             else:
                 # Stopped + playhead stationary — decay from whatever
                 # was last shown toward FLOOR_DBFS so the bars don't
@@ -948,6 +1230,168 @@ class AudioCanvasMixin(object):
                 self.DrawLine(x, y, x, seg_end)
                 y = seg_end + DASH_OFF
 
+    # Level-curve visual constants — colocated so a style tweak
+    # touches one place.
+    _LVL_CURVE_COLOR  = _rgb("eac84a")  # warm yellow line
+    _LVL_NODE_FILL    = _rgb("eac84a")
+    _LVL_NODE_BORDER  = _rgb("141414")
+    _LVL_NODE_RADIUS  = 4
+    _LVL_NODE_HOVER_R = 5
+
+    def _level_curve_y_for_gain(self, gain, wf_y1, wf_y2):
+        """Map a 0..1 gain to a y coordinate inside the waveform band.
+        Unity (1.0) sits near the top; zero at the bottom. Inset 2 px
+        from each edge so the node circle isn't clipped."""
+        g = max(0.0, min(1.0, float(gain)))
+        band_h = max(1, wf_y2 - wf_y1 - 4)
+        return wf_y2 - 2 - int(round(g * band_h))
+
+    def _level_curve_gain_for_y(self, y, wf_y1, wf_y2):
+        """Inverse of `_level_curve_y_for_gain` — used by Pen drag."""
+        band_h = max(1, wf_y2 - wf_y1 - 4)
+        # `y` increases downward; unity sits at the top of the band.
+        rel = (wf_y2 - 2 - int(round(y))) / float(band_h)
+        return max(0.0, min(1.0, rel))
+
+    def _level_kf_screen_pos(self, kf, track, wf_y1, wf_y2, w, fps):
+        """Project a single keyframe to a screen-space (x, y) tuple.
+        Returns None if the projection lands outside the visible
+        canvas (cheap reject for the draw loop)."""
+        df = track.audio_frame_to_doc_frame(kf["af"], fps)
+        x = self._frame_to_x(df, w)
+        y = self._level_curve_y_for_gain(kf["gain"], wf_y1, wf_y2)
+        return (x, y)
+
+    def _draw_level_curve(self, track, wf_x1, wf_y1, wf_x2, wf_y2, w,
+                          track_idx=0):
+        """Paint the level-keyframe polyline + nodes overlaid on the
+        audio block. Segments respect each keyframe's `interp`:
+        - linear:   single straight segment between points
+        - hold:     horizontal then vertical step at the next kf
+        - ease_*:   N-segment polyline approximating the curve
+
+        All drawing is clipped to `[wf_x1, wf_x2]` via a Cohen-Sutherland-
+        style per-segment x-clip. Without this, keyframes whose
+        projected doc-frame falls outside the trimmed clip body would
+        draw lines into the empty timeline space between clips.
+
+        Nodes draw last so they sit on top of the curve.
+        """
+        doc = c4d.documents.GetActiveDocument()
+        fps = self._doc_fps(doc)
+        kfs = track.level_keyframes
+
+        # Empty curve in Pen mode — draw a faint horizontal "unity"
+        # reference line so the user has a visual target. Without
+        # this the audio block looks identical to non-Pen mode.
+        if not kfs:
+            if getattr(self, "_pen_enabled", False):
+                unity_y = self._level_curve_y_for_gain(1.0, wf_y1, wf_y2)
+                self.DrawSetPen(self._LVL_CURVE_COLOR)
+                for x in range(wf_x1, wf_x2, 6):
+                    self.DrawLine(x, unity_y, min(x + 3, wf_x2), unity_y)
+            return
+
+        # Clip-and-draw helper. Both endpoints are kept in float; we
+        # interpolate the y at the clip-edge x and draw the visible
+        # segment.
+        def _clipped_line(ax, ay, bx, by):
+            if bx == ax:
+                # Vertical: only draw if inside x range.
+                if wf_x1 <= ax <= wf_x2:
+                    self.DrawLine(int(ax), int(ay), int(bx), int(by))
+                return
+            # Reorder so a is left of b for the clip math.
+            if ax > bx:
+                ax, ay, bx, by = bx, by, ax, ay
+            # Off-screen reject.
+            if bx < wf_x1 or ax > wf_x2:
+                return
+            # Clip left.
+            if ax < wf_x1:
+                t = (wf_x1 - ax) / float(bx - ax)
+                ay = ay + (by - ay) * t
+                ax = wf_x1
+            # Clip right.
+            if bx > wf_x2:
+                t = (wf_x2 - ax) / float(bx - ax)
+                by = ay + (by - ay) * t
+                bx = wf_x2
+            self.DrawLine(int(ax), int(ay), int(bx), int(by))
+
+        EASE_SEGMENTS = 12
+
+        def _eval_segment_y(a, b, t):
+            """Mirror of AudioTrack.evaluate_level for one segment."""
+            interp = a.get("interp", "linear")
+            if interp == "ease_in":
+                t = t * t
+            elif interp == "ease_out":
+                t = 1.0 - (1.0 - t) * (1.0 - t)
+            elif interp == "ease_in_out":
+                t = t * t * (3.0 - 2.0 * t)
+            return a["gain"] + (b["gain"] - a["gain"]) * t
+
+        self.DrawSetPen(self._LVL_CURVE_COLOR)
+        # Lead-in: from the left edge of the waveform band to the
+        # first keyframe (flat). Skipped when the first keyframe is
+        # already at or left of wf_x1.
+        first_x, first_y = self._level_kf_screen_pos(
+            kfs[0], track, wf_y1, wf_y2, w, fps)
+        if first_x > wf_x1:
+            _clipped_line(wf_x1, first_y, first_x, first_y)
+        # Each pair (a, b) of adjacent keyframes.
+        prev_xy = (first_x, first_y)
+        for i in range(len(kfs) - 1):
+            a, b = kfs[i], kfs[i + 1]
+            ax, ay = prev_xy
+            bx, by = self._level_kf_screen_pos(b, track, wf_y1, wf_y2, w, fps)
+            interp = a.get("interp", "linear")
+            if interp == "hold":
+                _clipped_line(ax, ay, bx, ay)
+            elif interp == "linear":
+                _clipped_line(ax, ay, bx, by)
+            else:
+                # ease_*: polyline approximation in EASE_SEGMENTS steps.
+                last_x, last_y = ax, ay
+                for s in range(1, EASE_SEGMENTS + 1):
+                    t = s / float(EASE_SEGMENTS)
+                    g = _eval_segment_y(a, b, t)
+                    sx = ax + (bx - ax) * t
+                    sy = self._level_curve_y_for_gain(g, wf_y1, wf_y2)
+                    _clipped_line(last_x, last_y, sx, sy)
+                    last_x, last_y = sx, sy
+            prev_xy = (bx, by)
+        # Lead-out: last keyframe to right edge.
+        last_x, last_y = prev_xy
+        if last_x < wf_x2:
+            _clipped_line(last_x, last_y, wf_x2, last_y)
+
+        # Nodes — paint on top of the curve. Hovered/dragged nodes
+        # get a larger radius. Hover/press idx is (track_idx, kf_idx);
+        # only this clip's matches light up.
+        hover_t = getattr(self, "_level_kf_hover_idx",   (-1, -1))
+        press_t = getattr(self, "_level_kf_pressed_idx", (-1, -1))
+        hover_kf_idx = hover_t[1] if hover_t[0] == track_idx else -1
+        press_kf_idx = press_t[1] if press_t[0] == track_idx else -1
+        for i, kf in enumerate(kfs):
+            x, y = self._level_kf_screen_pos(kf, track, wf_y1, wf_y2, w, fps)
+            # Nodes whose projected x is outside the clip body don't
+            # draw — they'd float in empty space.
+            if x < wf_x1 or x > wf_x2:
+                continue
+            r = self._LVL_NODE_HOVER_R if (i == hover_kf_idx or i == press_kf_idx) \
+                                     else self._LVL_NODE_RADIUS
+            # Body — filled square (DrawRectangle is fastest in C4D 2026).
+            self.DrawSetPen(self._LVL_NODE_FILL)
+            self.DrawRectangle(x - r, y - r, x + r, y + r)
+            # 1 px border so the node reads against busy waveform pixels.
+            self.DrawSetPen(self._LVL_NODE_BORDER)
+            self.DrawLine(x - r, y - r, x + r, y - r)
+            self.DrawLine(x - r, y + r, x + r, y + r)
+            self.DrawLine(x - r, y - r, x - r, y + r)
+            self.DrawLine(x + r, y - r, x + r, y + r)
+
     def _draw_audio_overlay(self, track, ax1, ay1, ax2, ay2):
         """Draw v9 prominent-peak ticks on the audio block.
 
@@ -1034,62 +1478,335 @@ class AudioCanvasMixin(object):
     # Hit-test + drag handlers
     # ------------------------------------------------------------------
 
-    def _hit_test_audio(self, x, y, w):
-        """Return None, ('audio', 'left'|'right'|'body') for clicks on
-        the audio block. Used by left-press to dispatch to the right
-        drag handler."""
-        from sb_canvas import EDGE_HIT_PX
-        if self._audio_track.decoded is None:
-            return None
-        ay1, ay2 = self._audio_y_bounds()
-        if y < ay1 or y > ay2:
-            return None
-        ax1, ax2 = self._audio_x_bounds(w)
-        if x < ax1 or x > ax2:
-            return None
-        if x < ax1 + EDGE_HIT_PX:
-            return ("audio", "left")
-        if x > ax2 - EDGE_HIT_PX:
-            return ("audio", "right")
-        return ("audio", "body")
+    # Hit-test radius for Pen-mode node grabs. Larger than the visual
+    # radius so the user doesn't need pixel precision.
+    _LVL_NODE_HIT_PX = 8
 
-    def _drag_audio_move(self, mx, my):
-        """Drag the entire audio block horizontally. Preserves duration
-        and trim. Persists once at drag-end."""
+    def _hit_test_level_kf(self, x, y, w, track_idx=0):
+        """Return the index of the keyframe under (x, y) belonging to
+        the audio clip at `track_idx`, or -1 if no node is within
+        hit radius. Caller is responsible for confirming the outer
+        hit (audio body) first."""
+        if not (0 <= track_idx < len(self._audio_tracks)):
+            return -1
+        track = self._audio_tracks[track_idx]
+        if track.decoded is None or not track.level_keyframes:
+            return -1
+        ay1, ay2 = self._audio_y_bounds(track_idx)
+        wf_y1 = ay1 + AUDIO_WF_INSET_Y
+        wf_y2 = ay2 - AUDIO_WF_INSET_Y
+        doc = c4d.documents.GetActiveDocument()
+        fps = self._doc_fps(doc)
+        best_i  = -1
+        best_d2 = self._LVL_NODE_HIT_PX * self._LVL_NODE_HIT_PX
+        for i, kf in enumerate(track.level_keyframes):
+            kx, ky = self._level_kf_screen_pos(kf, track, wf_y1, wf_y2, w, fps)
+            d2 = (kx - x) * (kx - x) + (ky - y) * (ky - y)
+            if d2 <= best_d2:
+                best_i  = i
+                best_d2 = d2
+        return best_i
+
+    def _drag_level_kf(self, kf_index, mx, my, track_idx=0):
+        """Drag a level-keyframe node on the audio clip at `track_idx`:
+        x → audio frame, y → gain. X is clamped between the neighbors'
+        audio frames so nodes can't cross each other. Persists once
+        at drag-end with undo."""
         from sb_canvas import _KEY_MLEFT
-        track = self._audio_track
+        if not (0 <= track_idx < len(self._audio_tracks)):
+            return
+        track = self._audio_tracks[track_idx]
         if track.decoded is None:
             return
+        if not (0 <= kf_index < len(track.level_keyframes)):
+            return
         doc = c4d.documents.GetActiveDocument()
-        orig_in = track.in_frame
-        w = self.GetWidth()
-        start_frame = self._x_to_frame(mx, w)
+        fps = self._doc_fps(doc)
+        w   = self.GetWidth()
+        ay1, ay2 = self._audio_y_bounds(track_idx)
+        wf_y1 = ay1 + AUDIO_WF_INSET_Y
+        wf_y2 = ay2 - AUDIO_WF_INSET_Y
+        # Snapshot neighboring kf positions so we can clamp the drag
+        # without re-sorting on every tick.
+        kf   = track.level_keyframes[kf_index]
+        prev_af = (track.level_keyframes[kf_index - 1]["af"] + 1) \
+                  if kf_index > 0 else 0
+        next_af = (track.level_keyframes[kf_index + 1]["af"] - 1) \
+                  if kf_index < len(track.level_keyframes) - 1 \
+                  else max(0, track.decoded.n_frames - 1)
+        start_doc_frame = self._x_to_frame(mx, w)
+        orig_af   = kf["af"]
+        orig_gain = kf["gain"]
+        self._level_kf_pressed_idx = (track_idx, kf_index)
 
-        def on_tick(adx, _ady, _qual):
-            cur_frame = self._x_to_frame(mx + adx, w)
-            new_in = orig_in + (cur_frame - start_frame)
-            if new_in < 0:
-                new_in = 0
-            track.set_in_frame(new_in, doc, persist=False)
+        def on_tick(adx, ady, _qual):
+            cur_doc_frame = self._x_to_frame(mx + adx, w)
+            # Horizontal: doc-frame delta → audio-frame delta via the
+            # decoded sample rate (independent of trim, since we're
+            # shifting the keyframe's `af` directly).
+            doc_delta = cur_doc_frame - start_doc_frame
+            rate = track.decoded.sample_rate
+            af_delta = int(round(doc_delta * rate / float(max(1, fps))))
+            new_af = max(prev_af, min(next_af, orig_af + af_delta))
+            kf["af"]   = new_af
+            kf["gain"] = self._level_curve_gain_for_y(my + ady, wf_y1, wf_y2)
             self.Redraw()
 
         self._drag_loop(_KEY_MLEFT, mx, my, on_tick)
-        # Persist once at end with undo.
-        try:
-            doc.StartUndo()
-            _get_or_create_helper(doc)
-            track._persist_current(doc)
-            doc.EndUndo()
-        except Exception as e:
-            print("[Shotblocks] audio move persist failed: {}".format(e))
-        self._refresh_audio_loaded_sig(doc)
-        c4d.EventAdd()
+        self._level_kf_pressed_idx = (-1, -1)
+        # Persist once with undo. The kf may have moved no net distance —
+        # only persist when something actually changed.
+        if kf["af"] != orig_af or kf["gain"] != orig_gain:
+            self._persist_audio_tracks(doc)
+            self._refresh_audio_loaded_sig(doc)
 
-    def _drag_audio_resize(self, edge, mx, my):
+    def _add_level_kf_at(self, x, y, w, track_idx=0):
+        """Pen-mode click on the body of the audio clip at `track_idx`:
+        insert a keyframe at the projected audio frame with gain
+        derived from the click's y position, then return its index so
+        the caller can immediately drag it. Returns -1 when the clip
+        isn't loaded."""
+        if not (0 <= track_idx < len(self._audio_tracks)):
+            return -1
+        track = self._audio_tracks[track_idx]
+        if track.decoded is None:
+            return -1
+        ay1, ay2 = self._audio_y_bounds(track_idx)
+        wf_y1 = ay1 + AUDIO_WF_INSET_Y
+        wf_y2 = ay2 - AUDIO_WF_INSET_Y
+        doc = c4d.documents.GetActiveDocument()
+        fps = self._doc_fps(doc)
+        doc_frame = self._x_to_frame(x, w)
+        af = track.doc_frame_to_audio_frame(doc_frame, fps)
+        if af < 0:
+            # Outside the clip — convert via a forward projection
+            # against the trim so out-of-clip Pen clicks still land
+            # sensibly. We pick the clamped audio-frame anyway.
+            rate = track.decoded.sample_rate
+            rel_doc = doc_frame - track.in_frame
+            af = max(0, track.trim_start_audio_frames + int(round(
+                rel_doc * rate / float(max(1, fps)))))
+            af = min(af, max(0, track.decoded.n_frames - 1))
+        gain = self._level_curve_gain_for_y(y, wf_y1, wf_y2)
+        return track.add_level_keyframe(af, gain)
+
+    def _hit_test_audio(self, x, y, w):
+        """Return None, or ('audio', track_idx, 'left'|'right'|'body')
+        for clicks on an audio block. Walks every loaded audio track
+        and returns the first hit. Cheap because the y-band reject
+        kicks in before any per-track x math when the cursor is
+        outside the audio strip entirely."""
+        from sb_canvas import EDGE_HIT_PX
+        # Fast reject — cursor outside the whole audio strip.
+        any_loaded = False
+        for t in self._audio_tracks:
+            if t.decoded is not None:
+                any_loaded = True
+                break
+        if not any_loaded:
+            return None
+        total_top, total_bot = self._audio_total_y_bounds()
+        if y < total_top or y > total_bot:
+            return None
+        for i, t in enumerate(self._audio_tracks):
+            if t.decoded is None:
+                continue
+            ay1, ay2 = self._audio_y_bounds(i)
+            if y < ay1 or y > ay2:
+                continue
+            ax1, ax2 = self._audio_x_bounds(w, i)
+            if x < ax1 or x > ax2:
+                # Same Y band but a different clip — keep looking.
+                continue
+            if x < ax1 + EDGE_HIT_PX:
+                return ("audio", i, "left")
+            if x > ax2 - EDGE_HIT_PX:
+                return ("audio", i, "right")
+            return ("audio", i, "body")
+        return None
+
+    def _drag_audio_move(self, mx, my, track_idx=0):
+        """Drag an audio clip horizontally AND vertically. Horizontal
+        motion changes `in_frame`/`out_frame`; vertical motion moves
+        the clip to a different audio lane (creating one below the
+        last in-use lane when the cursor drops there). Sibling clips
+        on the destination lane that overlap the moved clip's range
+        are trimmed or removed (replace policy, same as shots)."""
+        from sb_canvas import _KEY_MLEFT, LANE_GAP
+        track = self._audio_tracks[track_idx]
+        if track.decoded is None:
+            return
+        if self._track_is_locked("audio", int(track.track)):
+            print("[Shotblocks] audio move blocked: track locked")
+            return
+        doc = c4d.documents.GetActiveDocument()
+        orig_in    = track.in_frame
+        orig_out   = track.out_frame
+        orig_lane  = int(track.track)
+        duration   = orig_out - orig_in
+        w = self.GetWidth()
+        start_frame = self._x_to_frame(mx, w)
+        row_h = AUDIO_HEIGHT + LANE_GAP
+
+        # Snapshot every OTHER clip so the on-tick preview can re-stage
+        # collisions without mutating them in place.
+        peers = [(i, t) for i, t in enumerate(self._audio_tracks)
+                 if i != track_idx and t.decoded is not None]
+        peer_snapshot = [(i, t.in_frame, t.out_frame, int(t.track))
+                         for i, t in peers]
+
+        def compute_new_lane(ady):
+            # Each row of audio lane height = AUDIO_HEIGHT + LANE_GAP.
+            # `ady > 0` means cursor moved DOWN → lane index goes up.
+            delta_lanes = int(round(ady / float(row_h)))
+            return max(0, orig_lane + delta_lanes)
+
+        def on_tick(adx, ady, _qual):
+            cur_frame = self._x_to_frame(mx + adx, w)
+            new_in = max(0, orig_in + (cur_frame - start_frame))
+            new_lane = compute_new_lane(ady)
+            track.in_frame  = new_in
+            track.out_frame = new_in + duration
+            track.track     = new_lane
+            self.Redraw()
+
+        self._drag_loop(_KEY_MLEFT, mx, my, on_tick)
+        # On drag-end: apply replace-overlap policy against same-lane
+        # peers. Trim or remove peers whose range intersects the
+        # moved clip's new [in, out]. Self-references are skipped.
+        self._resolve_audio_overlap_at(track_idx)
+        self._persist_audio_tracks(doc)
+        self._refresh_audio_loaded_sig(doc)
+
+    def _resolve_audio_overlap_at(self, moved_idx):
+        """Apply replace-mode overlap policy: any sibling clip on the
+        same lane whose [in, out] range intersects the moved clip's
+        range gets trimmed where it overlaps; clips fully covered are
+        removed entirely. Mutates `self._audio_tracks` in place.
+
+        Mid-clip overlap (moved clip fully inside a longer peer)
+        currently TRIMS THE RIGHT EDGE of the peer back to the moved
+        clip's in_frame, which leaves the peer ending before the
+        moved clip begins — a clean cut, no third sliver. A future
+        pass can split-into-two if needed; replace policy on shots
+        does the same simplification.
+        """
+        if not (0 <= moved_idx < len(self._audio_tracks)):
+            return
+        moved = self._audio_tracks[moved_idx]
+        if moved.decoded is None:
+            return
+        m_lane = int(moved.track)
+        m_in, m_out = moved.in_frame, moved.out_frame
+        to_remove = []
+        for i, t in enumerate(self._audio_tracks):
+            if i == moved_idx or t.decoded is None:
+                continue
+            if int(t.track) != m_lane:
+                continue
+            t_in, t_out = t.in_frame, t.out_frame
+            # No overlap
+            if t_out < m_in or t_in > m_out:
+                continue
+            # Peer fully inside the moved range → remove.
+            if t_in >= m_in and t_out <= m_out:
+                to_remove.append(i)
+                continue
+            # Moved clip fully inside the peer → trim the peer's
+            # tail back to m_in - 1 (leaves a clean cut on the left).
+            if t_in < m_in and t_out > m_out:
+                t.out_frame = m_in - 1
+                continue
+            # Partial overlap from the left: peer's tail extends into
+            # moved range → trim peer's right edge back.
+            if t_in < m_in and t_out >= m_in:
+                t.out_frame = m_in - 1
+                continue
+            # Partial overlap from the right: peer's head sits inside
+            # moved range → trim peer's left edge forward.
+            if t_in <= m_out and t_out > m_out:
+                # Bump in_frame past the moved clip; advance trim
+                # so the audio anchor stays put.
+                shift_doc = (m_out + 1) - t_in
+                rate = t.decoded.sample_rate
+                fps = self._doc_fps(c4d.documents.GetActiveDocument())
+                shift_af = int(round(shift_doc * rate / float(max(1, fps))))
+                t.in_frame = m_out + 1
+                t.trim_start_audio_frames = min(
+                    max(0, t.trim_start_audio_frames + shift_af),
+                    max(0, t.decoded.n_frames - 1))
+        # Remove in reverse so indices stay valid.
+        for i in sorted(to_remove, reverse=True):
+            del self._audio_tracks[i]
+
+    def _drag_audio_slip(self, mx, my, track_idx=0):
+        """Slip-tool drag on the audio body: slide the source window
+        underneath the clip without moving the clip on the timeline.
+        `in_frame` / `out_frame` are preserved; `trim_start_audio_frames`
+        changes so a different portion of the source plays through the
+        same timeline range. Direction follows the Premiere convention —
+        drag right scrolls the waveform right, which means the source
+        moves backward (earlier audio plays under the same window).
+
+        Persists once at drag-end. Hard-clamps at both source ends so
+        the drag stalls rather than wrapping or losing samples."""
+        from sb_canvas import _KEY_MLEFT
+        track = self._audio_tracks[track_idx]
+        if track.decoded is None:
+            return
+        if self._track_is_locked("audio", int(track.track)):
+            print("[Shotblocks] audio slip blocked: track locked")
+            return
+        doc = c4d.documents.GetActiveDocument()
+        w = self.GetWidth()
+        fps = self._doc_fps(doc)
+        rate = track.decoded.sample_rate
+        n_audio_frames = track.decoded.n_frames
+        clip_doc_frames = max(1, track.out_frame - track.in_frame + 1)
+
+        orig_trim = track.trim_start_audio_frames
+        start_frame = self._x_to_frame(mx, w)
+
+        # Source-frame budget: trim must stay in [0, n_audio_frames -
+        # clip_audio_frames] so the [trim, trim + clip_audio_frames)
+        # window is fully inside the decoded buffer. If the source is
+        # shorter than the clip duration, the only legal trim is 0 —
+        # bail out before entering the drag loop.
+        clip_audio_frames = int(round(clip_doc_frames * rate / float(fps)))
+        max_trim = n_audio_frames - clip_audio_frames
+        if max_trim <= 0:
+            print("[Shotblocks] slip: source shorter than clip — nothing to slip")
+            return
+
+        def on_tick(adx, _ady, _qual):
+            cur_frame = self._x_to_frame(mx + adx, w)
+            doc_delta = cur_frame - start_frame
+            # Drag right -> source moves left -> trim increases -> we
+            # hear later audio. Inverted by the Premiere convention
+            # the user expects: drag right scrolls the WAVEFORM right
+            # under a fixed clip, which means earlier audio plays.
+            audio_delta = -int(round(doc_delta * rate / float(fps)))
+            new_trim = orig_trim + audio_delta
+            if new_trim < 0:
+                new_trim = 0
+            elif new_trim > max_trim:
+                new_trim = max_trim
+            if new_trim != track.trim_start_audio_frames:
+                track.trim_start_audio_frames = new_trim
+                self.Redraw()
+
+        self._drag_loop(_KEY_MLEFT, mx, my, on_tick)
+        self._persist_audio_tracks(doc)
+        self._refresh_audio_loaded_sig(doc)
+
+    def _drag_audio_resize(self, edge, mx, my, track_idx=0):
         """Edge-drag the audio block. `edge` is 'left' or 'right'."""
         from sb_canvas import _KEY_MLEFT
-        track = self._audio_track
+        track = self._audio_tracks[track_idx]
         if track.decoded is None:
+            return
+        if self._track_is_locked("audio", int(track.track)):
+            print("[Shotblocks] audio resize blocked: track locked")
             return
         doc = c4d.documents.GetActiveDocument()
         w = self.GetWidth()
@@ -1112,15 +1829,8 @@ class AudioCanvasMixin(object):
             self.Redraw()
 
         self._drag_loop(_KEY_MLEFT, mx, my, on_tick)
-        try:
-            doc.StartUndo()
-            _get_or_create_helper(doc)
-            track._persist_current(doc)
-            doc.EndUndo()
-        except Exception as e:
-            print("[Shotblocks] audio resize persist failed: {}".format(e))
+        self._persist_audio_tracks(doc)
         self._refresh_audio_loaded_sig(doc)
-        c4d.EventAdd()
 
     # ------------------------------------------------------------------
     # Delete (selection-aware; canvas dispatches here when the audio
@@ -1128,27 +1838,36 @@ class AudioCanvasMixin(object):
     # ------------------------------------------------------------------
 
     def _delete_selected_audio(self):
-        """Delete the selected audio track. Mirrors _delete_selected's
-        undo bracketing so Cmd+Z restores the import."""
+        """Delete the currently-selected audio clip. The selection
+        idx points into `_audio_tracks`; we remove that entry, persist
+        the new list, and ensure the list never goes empty (a single
+        placeholder remains)."""
         doc = c4d.documents.GetActiveDocument()
-        if self._audio_track.decoded is None:
+        sel_idx = self._audio_selected_idx
+        if not (0 <= sel_idx < len(self._audio_tracks)):
             self._audio_selected = False
             return
-        try:
-            doc.StartUndo()
-            self._audio_track.clear(doc)
-            doc.EndUndo()
-        except Exception as e:
-            print("[Shotblocks] audio delete failed: {}".format(e))
-            try:
-                doc.EndUndo()
-            except Exception:
-                pass
+        target = self._audio_tracks[sel_idx]
+        if target.decoded is None:
+            self._audio_selected = False
             return
-        # Stop any in-progress playback and drop the buffer reference.
-        self._audio_playback.set_audio(None)
+        if self._track_is_locked("audio", int(target.track)):
+            print("[Shotblocks] audio delete blocked: track locked")
+            return
+        # Stop playback before mutating the track list — the mix
+        # references decoded buffers that we're about to drop.
+        self._audio_playback.stop()
+        # Remove the entry. Keep at least one slot in the list so the
+        # legacy `_audio_track` property always returns an instance.
+        del self._audio_tracks[sel_idx]
+        if not self._audio_tracks:
+            placeholder = AudioTrack()
+            placeholder._persist_cb = self._persist_audio_tracks
+            self._audio_tracks.append(placeholder)
+        self._persist_audio_tracks(doc)
         self._refresh_audio_loaded_sig(doc)
         self._audio_selected = False
+        self._audio_selected_idx = 0
         c4d.EventAdd()
         self.Redraw()
         print("[Shotblocks] audio track deleted")

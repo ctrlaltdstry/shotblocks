@@ -21,6 +21,8 @@ BCKEY_SHOTS_JSON    = 1011   # str: the JSON-serialized shot list + counters
 BCKEY_RANGE_JSON    = 1012   # str: the JSON-serialized play range {in, out}
 BCKEY_AUDIO_JSON    = 1013   # str: the JSON-serialized audio track state
                               # (path, timeline placement, trim offsets)
+BCKEY_TRACKS_JSON   = 1014   # str: the JSON-serialized per-track state
+                              # (targeted/locked/visible/muted/solo by kind+idx)
 
 # Per-shot BaseLink to the camera. Key is BCKEY_CAM_LINK_BASE + shot_id.
 # BaseLinks survive save/load and follow the camera even if it's renamed —
@@ -286,35 +288,133 @@ def _write_range(doc, in_frame, out_frame, with_undo=True):
 # Absent / corrupt blob → returns None and the caller renders no
 # waveform. There is intentionally no default audio.
 
-def _read_audio(doc):
-    """Return the serialized audio-track dict, or None if absent."""
+def _read_audios(doc):
+    """Return a list of serialized audio-track dicts for the active
+    doc. Empty list if none persisted. Tolerates both the new
+    multi-track shape (`{"tracks": [dict, ...]}`) and the legacy
+    single-dict shape (one-element list returned).
+    """
     helper = _find_helper(doc)
     if helper is None:
-        return None
+        return []
     bc = helper.GetDataInstance()
     if bc is None:
-        return None
+        return []
     raw = bc.GetString(BCKEY_AUDIO_JSON)
     if not raw:
-        return None
+        return []
     try:
         d = json.loads(raw)
     except (ValueError, TypeError):
-        return None
-    if not isinstance(d, dict) or not d.get("path"):
-        return None
-    return d
+        return []
+    # New shape: {"tracks": [ ... ]}
+    if isinstance(d, dict) and isinstance(d.get("tracks"), list):
+        out = []
+        for entry in d["tracks"]:
+            if isinstance(entry, dict) and entry.get("path"):
+                out.append(entry)
+        return out
+    # Legacy shape: a single track dict at the top level.
+    if isinstance(d, dict) and d.get("path"):
+        return [d]
+    return []
 
 
-def _write_audio(doc, audio_dict, with_undo=True):
-    """Persist the audio-track dict to the helper null. Pass None to clear."""
+def _write_audios(doc, audio_dicts, with_undo=True):
+    """Persist the list of audio-track dicts to the helper null. Pass
+    an empty list (or None) to clear. New shape: {"tracks": [...]} so
+    future additions can sit at the top level without ambiguity."""
     helper = _get_or_create_helper(doc)
     bc = helper.GetDataInstance()
     if bc is None:
         return
     if with_undo:
         doc.AddUndo(c4d.UNDOTYPE_CHANGE_SMALL, helper)
-    if audio_dict is None:
+    if not audio_dicts:
         bc.SetString(BCKEY_AUDIO_JSON, "")
-    else:
-        bc.SetString(BCKEY_AUDIO_JSON, json.dumps(audio_dict))
+        return
+    bc.SetString(BCKEY_AUDIO_JSON,
+                 json.dumps({"tracks": list(audio_dicts)}))
+
+
+# Back-compat shims for callers still on the single-track API.
+# Reading: returns the first track dict (or None). Writing: replaces
+# the whole list with the given dict. Deprecated — new code should
+# use _read_audios / _write_audios directly.
+
+def _read_audio(doc):
+    out = _read_audios(doc)
+    return out[0] if out else None
+
+
+def _write_audio(doc, audio_dict, with_undo=True):
+    _write_audios(doc, [audio_dict] if audio_dict else [], with_undo=with_undo)
+
+
+# ---------------------------------------------------------------------------
+# Per-track state (target / lock / visible / mute / solo)
+# ---------------------------------------------------------------------------
+#
+# Serialized shape is a flat list of entries so the persisted blob stays
+# stable as new tracks come and go:
+#
+#   {"entries": [
+#       {"kind": "video", "idx": 0, "locked": true},
+#       {"kind": "audio", "idx": 0, "muted": true, "solo": false},
+#   ]}
+#
+# Attributes equal to the canvas-side _TRACK_DEFAULTS are omitted on
+# write — so a doc with no per-track customizations stores an empty
+# `entries` list (or the BC key is empty entirely).
+
+def _read_tracks(doc):
+    """Return a {(kind, idx): {attr: bool}} dict for the active doc.
+    Empty dict if no entries are persisted or the blob is corrupt."""
+    helper = _find_helper(doc)
+    if helper is None:
+        return {}
+    bc = helper.GetDataInstance()
+    if bc is None:
+        return {}
+    raw = bc.GetString(BCKEY_TRACKS_JSON)
+    if not raw:
+        return {}
+    try:
+        d = json.loads(raw)
+    except (ValueError, TypeError):
+        return {}
+    out = {}
+    for entry in d.get("entries", []):
+        try:
+            kind = str(entry.get("kind", ""))
+            idx  = int(entry.get("idx", 0))
+        except (TypeError, ValueError):
+            continue
+        if kind not in ("video", "audio"):
+            continue
+        attrs = {k: bool(v) for k, v in entry.items()
+                 if k in ("targeted", "locked", "visible", "muted", "solo")}
+        if attrs:
+            out[(kind, idx)] = attrs
+    return out
+
+
+def _write_tracks(doc, track_state, with_undo=True):
+    """Persist the per-track state dict to the helper null. Pass an
+    empty dict to clear. `track_state` shape matches `_read_tracks`."""
+    helper = _get_or_create_helper(doc)
+    bc = helper.GetDataInstance()
+    if bc is None:
+        return
+    if with_undo:
+        doc.AddUndo(c4d.UNDOTYPE_CHANGE_SMALL, helper)
+    if not track_state:
+        bc.SetString(BCKEY_TRACKS_JSON, "")
+        return
+    entries = []
+    for (kind, idx), attrs in sorted(track_state.items()):
+        e = {"kind": kind, "idx": int(idx)}
+        for k, v in attrs.items():
+            e[k] = bool(v)
+        entries.append(e)
+    bc.SetString(BCKEY_TRACKS_JSON, json.dumps({"entries": entries}))

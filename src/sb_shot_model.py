@@ -23,6 +23,51 @@ MIN_SHOT_FRAMES = 1    # smallest legal shot duration
 CLIP_GAP_FRAMES = 0
 
 
+def _split_shot(shots, shot_id, frame, new_id):
+    """Split the shot with id `shot_id` at doc-frame `frame`. Returns
+    a NEW shots list with the original shot replaced by two pieces:
+    the left half keeps the original id, runs [in_frame, frame-1];
+    the right half gets `new_id`, runs [frame, out_frame]. All other
+    fields (cam_name, track, rig_state) are copied to both halves.
+
+    Returns the unchanged shots list when:
+    - shot_id isn't in the list,
+    - frame is outside (in_frame, out_frame] (must produce two non-
+      empty halves),
+    - either half would be shorter than MIN_SHOT_FRAMES.
+    Pure function — no IO, no mutation of `shots`.
+    """
+    frame = int(frame)
+    for i, s in enumerate(shots):
+        if s["id"] != shot_id:
+            continue
+        in_f  = s["in_frame"]
+        out_f = s["out_frame"]
+        # The split frame becomes the right half's `in_frame`; the
+        # left half ends at `frame - 1`. Require both halves to be
+        # at least MIN_SHOT_FRAMES long.
+        if frame <= in_f or frame > out_f:
+            return shots
+        if (frame - in_f) < MIN_SHOT_FRAMES:
+            return shots
+        if (out_f - frame + 1) < MIN_SHOT_FRAMES:
+            return shots
+        left = dict(s)
+        left["out_frame"] = frame - 1
+        right = dict(s)
+        right["id"]       = new_id
+        right["in_frame"] = frame
+        # Carry rig_state into the right half by value, not by ref,
+        # so subsequent mutations on either half don't bleed across.
+        if "rig_state" in s:
+            right["rig_state"] = dict(s["rig_state"])
+        out = list(shots)
+        out[i] = left
+        out.insert(i + 1, right)
+        return out
+    return shots
+
+
 def _make_shot(shot_id, in_frame, out_frame, cam_name, track):
     return {
         "id":        shot_id,

@@ -28,7 +28,9 @@ from sb_audio_peaks   import build as build_peaks, should_rebuild
 from sb_audio_onsets  import analyse as analyse_audio, mixdown_to_mono
 from sb_audio_meter   import build_envelope, sample_at as sample_meter_envelope
 from sb_audio_filters import drum_band
-from sb_persistence   import _read_audio, _write_audio
+# Persistence moved up to the canvas: it owns the list of AudioTrack
+# instances and writes the whole list (or a single dict for back-compat
+# read) via sb_persistence's _read_audios / _write_audios.
 
 
 class AudioTrackError(Exception):
@@ -50,6 +52,20 @@ class AudioTrack(object):
         self._mono            = None  # array('h'), built lazily by `mono` property
         self._drum_band       = None  # array('h'), built lazily by `drum_band` property
         self._meter_envelope  = None  # StereoEnvelope, built lazily by `meter_envelope`
+
+        # Lane index — which audio row this clip sits on. 0 is the
+        # row directly below the video stack; positive integers stack
+        # downward. Mirrors the shot-model `track` field. Set on
+        # import_file or load_from_doc; persisted alongside the path.
+        self.track = 0
+
+        # Persistence callback — the canvas sets this when it owns
+        # the track. When set, AudioTrack mutations that historically
+        # called `_persist_current(doc)` now invoke the callback
+        # instead, so the canvas can write the whole multi-track
+        # list in one helper-null write. None = no-op (track is
+        # detached from a doc).
+        self._persist_cb = None
 
         # Timeline placement (doc/timeline frames, NOT audio frames).
         self.in_frame  = 0       # first timeline frame the clip plays on
@@ -85,6 +101,16 @@ class AudioTrack(object):
         # audio shows its waveform by default. Persisted alongside
         # `analysis_visible` so per-doc preference survives save/load.
         self.waveform_visible = True
+
+        # Level keyframes — list of dicts {"af": int, "gain": float,
+        # "interp": str}. `af` is the audio-frame index within the
+        # source file (so trim/move don't invalidate the curve),
+        # `gain` is a 0..1 linear multiplier (1.0 = unity), `interp`
+        # selects the segment-out curve to the next keyframe:
+        # "linear" | "hold" | "ease_in" | "ease_out" | "ease_in_out".
+        # Always kept sorted by `af`. Empty = no level automation
+        # (playback writes samples at unity).
+        self.level_keyframes = []
 
     # ------------------------------------------------------------------
     # Path resolution
@@ -135,7 +161,7 @@ class AudioTrack(object):
     # Lifecycle
     # ------------------------------------------------------------------
 
-    def import_file(self, abs_path, doc, drop_in_frame=0):
+    def import_file(self, abs_path, doc, drop_in_frame=0, drop_track=0):
         """User dragged an audio file (.wav or .mp3) onto the timeline.
         Decode via the format-agnostic dispatcher, build peaks, compute
         initial timeline range from the audio's duration, persist, and
@@ -178,18 +204,19 @@ class AudioTrack(object):
         self.beat_grid        = None
         self.analysis_visible = False
         self.waveform_visible = True
+        self.level_keyframes  = []
         self.trim_start_audio_frames = 0
 
         # Timeline placement: in_frame at drop point; out_frame
         # computed from audio duration in doc-frame units.
         fps = self._doc_fps(doc)
         duration_doc_frames = max(1, int(round(decoded.duration_s * fps)))
+        self.track     = max(0, int(drop_track))
         self.in_frame  = max(0, int(drop_in_frame))
         self.out_frame = self.in_frame + duration_doc_frames - 1
 
         stored, is_rel = self._to_persisted_path(abs_path, doc)
         self.path_is_relative = is_rel
-        self._persist(doc, stored, is_rel)
 
     def load_from_doc(self, doc):
         """Read the persisted audio dict from the helper null and
@@ -225,6 +252,7 @@ class AudioTrack(object):
         self._mono            = None
         self._drum_band       = None
         self._meter_envelope  = None
+        self.track     = max(0, int(d.get("track", 0)))
         self.in_frame  = int(d.get("in_frame",  0))
         self.out_frame = int(d.get("out_frame", self.in_frame +
                                                 int(decoded.duration_s * 24)))
@@ -255,6 +283,25 @@ class AudioTrack(object):
                 self.beat_grid = None
         else:
             self.beat_grid = None
+        # Level keyframes — list of {"af", "gain", "interp"} dicts.
+        # Tolerate per-entry corruption: drop malformed entries
+        # rather than rejecting the whole curve.
+        raw_kfs = d.get("level_keyframes") or []
+        kfs = []
+        for k in raw_kfs:
+            try:
+                af   = int(k["af"])
+                gain = float(k.get("gain", 1.0))
+                interp = str(k.get("interp", "linear"))
+            except (TypeError, ValueError, KeyError):
+                continue
+            if interp not in ("linear", "hold", "ease_in",
+                              "ease_out", "ease_in_out"):
+                interp = "linear"
+            kfs.append({"af": af, "gain": max(0.0, min(1.0, gain)),
+                        "interp": interp})
+        kfs.sort(key=lambda k: k["af"])
+        self.level_keyframes = kfs
         return True
 
     def clear(self, doc):
@@ -279,35 +326,60 @@ class AudioTrack(object):
             self._persist_current(doc)
 
     def resize_left_edge(self, new_in, doc, persist=True):
-        """Edge-drag the leading edge. Adjusts trim_start so audio frame
-        N within the source still plays at the same wall time. Out-frame
-        stays put (so the clip's tail doesn't move during a head trim).
-        Clamps to [0, out_frame] and to the audio's available frames.
+        """Edge-drag the leading edge. Adjusts trim_start so audio
+        content stays anchored in doc-time — the source frame currently
+        playing at doc-frame X keeps playing at doc-frame X, regardless
+        of where the left edge moves.
+
+        `new_in` is clamped from below by two constraints:
+        - Doc-frame 0 — the clip's left edge cannot precede the
+          timeline. Slip (`_drag_audio_slip`) is the gesture for
+          exposing earlier audio without moving the clip; resize is
+          strictly a clip-boundary operation.
+        - The audio "anchor" — the doc-frame where the source's first
+          sample plays, given the current trim. The left edge cannot
+          go past the anchor because the source has no earlier audio
+          to expose.
+
+        The clip's left edge stops at whichever limit it reaches first.
+        Drag past either limit stalls (subsequent left-drag is a no-op
+        until the user reverses direction).
         """
         if self.decoded is None:
             return
         new_in = int(new_in)
         if new_in > self.out_frame:
             new_in = self.out_frame
-        delta = new_in - self.in_frame
-        if delta == 0:
-            return
-        # Convert delta in doc-frames to delta in audio-frames.
+
+        # Anchor: the doc-frame where source frame 0 plays. With the
+        # current (in_frame, trim_start), source frame `trim_start`
+        # plays at doc-frame `in_frame`, so frame 0 plays at
+        # `in_frame - trim_doc_equivalent`. Negative anchors are
+        # allowed (audio extends off the left of the timeline) — the
+        # doc-frame-0 clamp above already keeps the clip's left edge
+        # from going there.
         fps = self._doc_fps(doc)
         rate = self.decoded.sample_rate
-        delta_audio = int(round(delta * (rate / max(1, fps))))
-        new_trim = self.trim_start_audio_frames + delta_audio
+        trim_doc = int(round(self.trim_start_audio_frames
+                             * (max(1, fps) / rate)))
+        anchor_doc = self.in_frame - trim_doc
+
+        # Take the tighter of doc-frame 0 and the anchor; that's the
+        # earliest doc-frame the left edge can land on.
+        min_in = max(0, anchor_doc)
+        if new_in < min_in:
+            new_in = min_in
+        if new_in == self.in_frame:
+            return
+
+        # Recompute trim so the audio anchor (and therefore all
+        # in-source content) stays at the same doc-frame.
+        new_trim = int(round((new_in - anchor_doc)
+                             * (rate / max(1, fps))))
         if new_trim < 0:
-            # User dragged the head further left than the audio's start
-            # — pin to 0 and adjust new_in correspondingly.
-            recovery = -new_trim
-            recovery_doc = int(round(recovery * (max(1, fps) / rate)))
-            new_in = self.in_frame + delta + recovery_doc
             new_trim = 0
         if new_trim >= self.decoded.n_frames:
-            # User dragged past end — leave a 1-frame minimum clip.
             new_trim = max(0, self.decoded.n_frames - 1)
-            new_in   = max(self.in_frame, self.out_frame - 1)
         self.in_frame = new_in
         self.trim_start_audio_frames = new_trim
         if persist:
@@ -391,6 +463,7 @@ class AudioTrack(object):
         self._mono            = None
         self._drum_band       = None
         self._meter_envelope  = None
+        self.track            = 0
         self.in_frame         = 0
         self.out_frame        = 0
         self.trim_start_audio_frames = 0
@@ -399,6 +472,7 @@ class AudioTrack(object):
         self.beat_grid        = None
         self.analysis_visible = False
         self.waveform_visible = True
+        self.level_keyframes  = []
 
     def _doc_fps(self, doc):
         try:
@@ -407,10 +481,21 @@ class AudioTrack(object):
             fps = 0
         return fps if fps > 0 else 24
 
-    def _persist(self, doc, stored_path, is_relative):
+    def to_persisted_dict(self, doc):
+        """Build the JSON-serializable dict for this track. Caller is
+        responsible for assembling them into the doc-level list and
+        writing via `_write_audios`. Path is project-relative when
+        possible (doc saved + audio under the doc folder); absolute
+        otherwise."""
+        stored, is_rel = self._to_persisted_path(self.path, doc)
+        self.path_is_relative = is_rel
+        return self._build_persist_dict(stored, is_rel)
+
+    def _build_persist_dict(self, stored_path, is_relative):
         d = {
             "path":             stored_path,
             "path_is_relative": bool(is_relative),
+            "track":            int(self.track),
             "in_frame":         int(self.in_frame),
             "out_frame":        int(self.out_frame),
             "trim_start_audio_frames": int(self.trim_start_audio_frames),
@@ -437,12 +522,31 @@ class AudioTrack(object):
         # always-visible behavior they had pre-toggle.
         if not self.waveform_visible:
             d["waveform_visible"] = False
-        _write_audio(doc, d)
+        # Level keyframes — only when populated, to keep the blob
+        # small for clips with no automation.
+        if self.level_keyframes:
+            d["level_keyframes"] = [
+                {"af": int(k["af"]),
+                 "gain": float(k.get("gain", 1.0)),
+                 "interp": str(k.get("interp", "linear"))}
+                for k in self.level_keyframes
+            ]
+        return d
 
     def _persist_current(self, doc):
-        stored, is_rel = self._to_persisted_path(self.path, doc)
-        self.path_is_relative = is_rel
-        self._persist(doc, stored, is_rel)
+        """Notify the canvas (via the callback it wired up) that this
+        track's state changed and the doc-level audio list needs a
+        rewrite. No-op when the track is detached (no callback).
+        Drag handlers pass `persist=False` and then drive persistence
+        manually at drag-end; this path catches the non-drag mutators
+        (analyse, set_in_frame from non-drag callers, etc.)."""
+        cb = self._persist_cb
+        if cb is None:
+            return
+        try:
+            cb(doc)
+        except Exception as e:
+            print("[Shotblocks] AudioTrack persist callback raised: {}".format(e))
 
     # ------------------------------------------------------------------
     # Mono mixdown + onset analysis (v9)
@@ -530,6 +634,163 @@ class AudioTrack(object):
     # ------------------------------------------------------------------
     # Zoom-aware peak rebuild — called by renderer when zoom changes
     # ------------------------------------------------------------------
+
+    def split_at(self, doc_frame, doc):
+        """Split this clip at `doc_frame`. Self becomes the LEFT half:
+        out_frame is moved to `doc_frame - 1`. Returns a new AudioTrack
+        representing the RIGHT half (in_frame = doc_frame, trim_start
+        advanced past the split point).
+
+        Returns None when the split frame is outside (in_frame,
+        out_frame] (must produce two non-empty halves), or when the
+        decoded buffer hasn't been loaded.
+
+        Both halves share the same source file and decoded reference
+        — `decoded` and `peaks` are pointers, not copies. Level
+        keyframes are partitioned by audio-frame: keyframes whose `af`
+        is before the split go to the left, the rest go to the right
+        (with `af` rebased onto the right's trim).
+        """
+        if self.decoded is None:
+            return None
+        frame = int(doc_frame)
+        if frame <= self.in_frame or frame > self.out_frame:
+            return None
+        fps_for_split = self._cached_fps_for_split(doc)
+        rate = self.decoded.sample_rate
+        af_at_split = self.doc_frame_to_audio_frame(frame, fps_for_split)
+        if af_at_split < 0:
+            return None
+
+        right = AudioTrack()
+        right._persist_cb = self._persist_cb
+        right.path             = self.path
+        right.path_is_relative = self.path_is_relative
+        right.decoded          = self.decoded   # shared
+        right.peaks            = self.peaks     # shared
+        right._mono            = self._mono
+        right._drum_band       = self._drum_band
+        right._meter_envelope  = self._meter_envelope
+        right.track     = self.track
+        right.in_frame  = frame
+        right.out_frame = self.out_frame
+        right.trim_start_audio_frames = af_at_split
+
+        # Partition level keyframes by audio-frame.
+        left_kfs  = []
+        right_kfs = []
+        for k in self.level_keyframes:
+            if k["af"] < af_at_split:
+                left_kfs.append(dict(k))
+            else:
+                right_kfs.append(dict(k))
+        # Onsets / peaks / beat grid are source-frame indexed and
+        # apply to the whole file — leave them on both halves so
+        # snap/analysis still works on either side of the cut.
+        right.onsets           = list(self.onsets)
+        right.prominent_peaks  = list(self.prominent_peaks)
+        right.beat_grid        = self.beat_grid
+        right.analysis_visible = self.analysis_visible
+        right.waveform_visible = self.waveform_visible
+        right.level_keyframes  = right_kfs
+
+        # Mutate self into the left half.
+        self.out_frame = frame - 1
+        self.level_keyframes = left_kfs
+        return right
+
+    def _cached_fps_for_split(self, doc):
+        """Wrapper around `_doc_fps` so the split path has a clearly-
+        named call site (it's the only place that needs fps without
+        a surrounding playback / drag context)."""
+        return self._doc_fps(doc)
+
+    # ------------------------------------------------------------------
+    # Level keyframes — mutation + evaluation
+    # ------------------------------------------------------------------
+
+    def add_level_keyframe(self, audio_frame, gain, interp="linear"):
+        """Insert a keyframe at `audio_frame` with the given gain.
+        Replaces any existing keyframe within `MERGE_AF_TOLERANCE`
+        (treats nearby clicks as moving the existing node). Returns
+        the index of the inserted/updated keyframe.
+
+        The audio-frame must be inside [0, decoded.n_frames]; callers
+        should clamp before calling. `gain` is clamped to [0, 1]."""
+        MERGE_AF_TOL = 8  # within ~8 audio frames = same node
+        gain = max(0.0, min(1.0, float(gain)))
+        if interp not in ("linear", "hold", "ease_in",
+                          "ease_out", "ease_in_out"):
+            interp = "linear"
+        af = int(audio_frame)
+        # Find an existing kf to merge with.
+        for i, k in enumerate(self.level_keyframes):
+            if abs(k["af"] - af) <= MERGE_AF_TOL:
+                k["af"]   = af
+                k["gain"] = gain
+                # Don't clobber an existing interp on a re-add at the
+                # same position — caller can pass interp= explicitly
+                # to change it.
+                return i
+        kf = {"af": af, "gain": gain, "interp": interp}
+        self.level_keyframes.append(kf)
+        self.level_keyframes.sort(key=lambda k: k["af"])
+        return self.level_keyframes.index(kf)
+
+    def remove_level_keyframe(self, index):
+        """Drop the keyframe at `index`. No-op on out-of-range."""
+        if 0 <= index < len(self.level_keyframes):
+            del self.level_keyframes[index]
+
+    def set_level_keyframe(self, index, *, audio_frame=None,
+                            gain=None, interp=None):
+        """Update one or more attributes on an existing keyframe.
+        Re-sorts when `audio_frame` changes."""
+        if not (0 <= index < len(self.level_keyframes)):
+            return
+        k = self.level_keyframes[index]
+        if audio_frame is not None:
+            k["af"] = int(audio_frame)
+        if gain is not None:
+            k["gain"] = max(0.0, min(1.0, float(gain)))
+        if interp is not None and interp in (
+                "linear", "hold", "ease_in", "ease_out", "ease_in_out"):
+            k["interp"] = interp
+        self.level_keyframes.sort(key=lambda k: k["af"])
+
+    def evaluate_level(self, audio_frame):
+        """Evaluate the level curve at the given audio-frame index.
+        Returns a linear gain in [0, 1]. No keyframes → unity (1.0).
+        Before the first keyframe and after the last, returns the
+        nearest keyframe's gain (curve flatlines at the edges)."""
+        kfs = self.level_keyframes
+        if not kfs:
+            return 1.0
+        af = int(audio_frame)
+        if af <= kfs[0]["af"]:
+            return kfs[0]["gain"]
+        if af >= kfs[-1]["af"]:
+            return kfs[-1]["gain"]
+        # Find the segment [kfs[i], kfs[i+1]] containing `af`.
+        # Linear scan — keyframe counts are small (dozens at most).
+        for i in range(len(kfs) - 1):
+            a, b = kfs[i], kfs[i + 1]
+            if a["af"] <= af < b["af"]:
+                interp = a.get("interp", "linear")
+                if interp == "hold":
+                    return a["gain"]
+                # Normalized position in the segment.
+                t = (af - a["af"]) / float(b["af"] - a["af"])
+                if interp == "ease_in":
+                    t = t * t
+                elif interp == "ease_out":
+                    t = 1.0 - (1.0 - t) * (1.0 - t)
+                elif interp == "ease_in_out":
+                    # Smoothstep: 3t^2 - 2t^3.
+                    t = t * t * (3.0 - 2.0 * t)
+                # "linear" — t stays as-is.
+                return a["gain"] + (b["gain"] - a["gain"]) * t
+        return kfs[-1]["gain"]
 
     def maybe_rebuild_peaks(self, samples_per_column):
         if self.decoded is None:
