@@ -10,4 +10,4 @@ core.framework
 C4D=true
 stylecheck.level=3
 
-ModuleId=com.shotblocks.host
+ModuleId=com.shotblocks.v2

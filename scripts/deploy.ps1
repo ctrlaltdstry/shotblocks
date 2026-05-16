@@ -38,21 +38,32 @@ if ($LASTEXITCODE -ge 8) {
 
 Write-Host "Deployed shotblocks -> $dest"
 
-# --- C++ host plugin -------------------------------------------------------
-# Copy shotblocks_host.xdl64 from the SDK build output into the C4D prefs
+# --- Shotblocks v2 (C++ plugin) --------------------------------------------
+# Copy shotblocks_v2.xdl64 from the SDK build output into the C4D prefs
 # plugins folder. Optional: only deploys if the build artifact exists.
-$hostBuildDir = "C:\Dev\c4d_sdk_2026\build-win64\bin\Release\plugins\shotblocks_host"
-$hostDest = Join-Path $c4dPrefs "plugins\shotblocks_host"
+$v2BuildDir = "C:\Dev\c4d_sdk_2026\build-win64\bin\Release\plugins\shotblocks_v2"
+$v2Dest = Join-Path $c4dPrefs "plugins\shotblocks_v2"
 
-if (Test-Path $hostBuildDir) {
-    New-Item -ItemType Directory -Path $hostDest -Force | Out-Null
-    robocopy $hostBuildDir $hostDest shotblocks_host.xdl64 /NFL /NDL /NJH /NJS /NP | Out-Null
+if (Test-Path $v2BuildDir) {
+    New-Item -ItemType Directory -Path $v2Dest -Force | Out-Null
+    robocopy $v2BuildDir $v2Dest shotblocks_v2.xdl64 /NFL /NDL /NJH /NJS /NP | Out-Null
     if ($LASTEXITCODE -ge 8) {
-        throw "robocopy (host) failed with exit code $LASTEXITCODE"
+        throw "robocopy (v2) failed with exit code $LASTEXITCODE"
     }
-    Write-Host "Deployed shotblocks_host -> $hostDest"
+    # Web assets (demo.html etc.) live next to the DLL so the C++ plugin
+    # can build a file:// URL relative to its own module location.
+    $v2WebSrc = Join-Path $repoRoot "host\shotblocks_v2\web"
+    if (Test-Path $v2WebSrc) {
+        $v2WebDest = Join-Path $v2Dest "web"
+        New-Item -ItemType Directory -Path $v2WebDest -Force | Out-Null
+        robocopy $v2WebSrc $v2WebDest /MIR /NFL /NDL /NJH /NJS /NP | Out-Null
+        if ($LASTEXITCODE -ge 8) {
+            throw "robocopy (v2 web) failed with exit code $LASTEXITCODE"
+        }
+    }
+    Write-Host "Deployed shotblocks_v2 -> $v2Dest"
 } else {
-    Write-Host "Skipping C++ host (no build at $hostBuildDir)"
+    Write-Host "Skipping shotblocks_v2 (no build at $v2BuildDir)"
 }
 
 exit 0
