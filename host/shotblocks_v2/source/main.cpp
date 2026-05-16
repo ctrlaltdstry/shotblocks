@@ -46,6 +46,13 @@ public:
 				ID_HOST_HTMLVIEW, ""_s, BFH_SCALEFIT | BFV_SCALEFIT,
 				400, 300, BaseContainer());
 		GroupEnd();
+		// CreateLayout fires on every Open() — including reopens, where
+		// the HTML viewer is rebuilt from scratch. Clear the cached
+		// pointer and per-instance flags so EnsureNavigated() re-resolves
+		// and re-navigates against the new widget.
+		_htmlView = nullptr;
+		_navigated = false;
+		_msgCallbackRegistered = false;
 		SetTimer(250);
 		return true;
 	}
@@ -59,9 +66,6 @@ public:
 	void Timer(const BaseContainer& /*msg*/) override
 	{
 		EnsureNavigated();
-		// Push tick periodically so the page reflects current state
-		// even when nothing is changing (e.g. user just sitting at a
-		// frame). The fast path is EVMSG_TIMECHANGED, below.
 		PostTick();
 	}
 
@@ -94,19 +98,8 @@ private:
 		if (!_htmlView)
 			return;
 
-		// Register the JS→C++ message callback. The HTML viewer holds
-		// a reference to our static callback by function pointer + a
-		// user-data pointer (this).
-		if (!_msgCallbackRegistered)
-		{
-			_htmlView->SetWebMessageCallback(&OnWebMessageStatic, ""_s, this);
-			_msgCallbackRegistered = true;
-		}
-
-		// Build a file:// URL pointing at web/demo.html sitting next
-		// to the plugin DLL. Use a Win32 path query because Filename ↔
-		// maxon::String conversion gives us backslashes; the file://
-		// scheme wants forward slashes.
+		// Build a file:// URL pointing at web/timeline.html sitting next
+		// to the plugin DLL.
 		HMODULE hMod = nullptr;
 		GetModuleHandleExW(
 			GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS |
@@ -115,12 +108,10 @@ private:
 			&hMod);
 		wchar_t dll[MAX_PATH] = {0};
 		GetModuleFileNameW(hMod, dll, MAX_PATH);
-		// Strip filename → keep "C:\...\shotblocks_v2\".
 		wchar_t* lastSlash = wcsrchr(dll, L'\\');
 		if (lastSlash) *(lastSlash + 1) = 0;
 		wchar_t urlBuf[MAX_PATH + 64];
-		swprintf_s(urlBuf, MAX_PATH + 64, L"file:///%sweb/demo.html", dll);
-		// Forward-slash everything except the "file:///" prefix.
+		swprintf_s(urlBuf, MAX_PATH + 64, L"file:///%sweb/timeline.html", dll);
 		for (wchar_t* p = urlBuf + 8; *p; ++p)
 			if (*p == L'\\') *p = L'/';
 		char utf8[MAX_PATH + 64] = {0};
@@ -129,6 +120,17 @@ private:
 		_htmlView->SetUrl(url, URL_ENCODING_UTF16);
 		_navigated = true;
 		GePrint("[Shotblocks/v2] navigated to "_s + url);
+
+		// NOTE: We register SetWebMessageCallback but JS→C++ messages
+		// via window.chrome.webview.postMessage() are silently dropped
+		// by C4D 2026's HtmlViewer wrapper. The callback never fires.
+		// Kept here in case a future SDK version fixes it. For real
+		// JS→C++ communication, use SetResourceRequestInterceptCallback.
+		if (!_msgCallbackRegistered)
+		{
+			_htmlView->SetWebMessageCallback(&OnWebMessageStatic, ""_s, this);
+			_msgCallbackRegistered = true;
+		}
 	}
 
 	void PostTick()
@@ -156,19 +158,34 @@ private:
 	void OnWebMessage(maxon::String message)
 	{
 		GePrint("[Shotblocks/v2] JS->C++ message: "_s + message);
-		// Minimal JSON parsing — the page only sends {"kind":"ping",...}.
-		// Looking for "ping" is enough for the demo.
 		Int pos = 0;
-		if (message.Find("\"kind\":\"ping\""_s, &pos))
+		if (message.Find("\"kind\":\"ready\""_s, &pos))
 		{
-			BaseDocument* doc = GetActiveDocument();
-			Int32 frame = doc ? doc->GetTime().GetFrame(doc->GetFps()) : -1;
-			char buf[128];
-			_snprintf_s(buf, sizeof(buf), _TRUNCATE,
-				"{\"kind\":\"pong\",\"frame\":%d}", (int)frame);
-			if (_htmlView)
-				_htmlView->PostWebMessage(maxon::String(buf));
+			PostDocInfo();
+			PostTick();
 		}
+	}
+
+	void PostDocInfo()
+	{
+		if (!_htmlView)
+			return;
+		BaseDocument* doc = GetActiveDocument();
+		if (!doc)
+			return;
+		Int32 fps = doc->GetFps();
+		BaseTime minT = doc->GetMinTime();
+		BaseTime maxT = doc->GetMaxTime();
+		BaseTime inT  = doc->GetLoopMinTime();
+		BaseTime outT = doc->GetLoopMaxTime();
+		Int32 docFrames = (Int32)(maxT.GetFrame(fps) - minT.GetFrame(fps));
+		Int32 inFrame   = (Int32)(inT.GetFrame(fps)  - minT.GetFrame(fps));
+		Int32 outFrame  = (Int32)(outT.GetFrame(fps) - minT.GetFrame(fps));
+		char buf[256];
+		_snprintf_s(buf, sizeof(buf), _TRUNCATE,
+			"{\"kind\":\"doc-info\",\"fps\":%d,\"docFrames\":%d,\"playRangeIn\":%d,\"playRangeOut\":%d}",
+			(int)fps, (int)docFrames, (int)inFrame, (int)outFrame);
+		_htmlView->PostWebMessage(maxon::String(buf));
 	}
 
 	static void OnWebMessageStatic(maxon::String message, void* user_data, Bool /*hasError*/)

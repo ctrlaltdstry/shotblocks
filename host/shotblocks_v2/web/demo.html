@@ -66,9 +66,13 @@
   };
 
   // C4D's HtmlViewerCustomGui posts messages via window.chrome.webview
-  // (standard WebView2 surface). PostWebMessage(maxon::String) on the
-  // C++ side delivers a 'message' event here; postMessage() here is
-  // delivered to the SetWebMessageCallback registered in C++.
+  // (standard WebView2 surface).
+  //   C++ -> JS: htmlView->PostWebMessage(...) reaches addEventListener('message').
+  //   JS  -> C++: window.chrome.webview.postMessage(...) is SILENTLY DROPPED by
+  //               C4D 2026's wrapper. The SetWebMessageCallback callback never
+  //               fires. So the "ping" button below visibly fires on the JS
+  //               side but no pong ever comes back. Use SetResourceRequestInterceptCallback
+  //               (C4D first-party) for real JS->C++ communication.
   const host = (window.chrome && window.chrome.webview) ? window.chrome.webview : null;
   if (!host) {
     log('window.chrome.webview unavailable — messages will not flow', 'warn');
