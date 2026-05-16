@@ -1,0 +1,25 @@
+/* Design tokens — generated from Figma variables.
+ * Source of truth is the Figma file. When variables change there, refresh
+ * this file via the MCP (mcp__figma-dev-mode__get_variable_defs).
+ */
+:root {
+  /* Grey ramp */
+  --color-grey-7:  #121212;
+  --color-grey-10: #1a1a1a;
+  --color-grey-12: #1f1f1f;
+  --color-grey-16: #292929;
+  --color-grey-24: #3d3d3d;
+  --color-grey-50: #7f7f7f;
+  --color-grey-white: #ffffff;
+
+  /* Timeline accents */
+  --color-timeline-primary-highlight:    #007aff;
+  --color-timeline-default-block:        #4da2ff;
+  --color-timeline-audio:                #5fe781;
+  --color-timeline-audio-selected:       #27dc56;
+  --color-timeline-icon-audio-default:   #9bf0b1;
+  --color-timeline-icon-waveform-on:     #ffffff;
+  --color-timeline-locked:               #383838;
+  --color-timeline-orphan-block:         #ff6259;
+  --color-timeline-hover:                #ffffff4d;
+}

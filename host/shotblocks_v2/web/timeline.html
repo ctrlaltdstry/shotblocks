@@ -1,0 +1,842 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<title>Shotblocks v2</title>
+<link rel="stylesheet" href="tokens.css" />
+<link rel="stylesheet" href="icons.css" />
+<style>
+  /* Bundled Inter — matches the Figma typography spec. The font files
+     live under web/fonts/ and ship with the plugin. */
+  @font-face {
+    font-family: 'Inter';
+    font-style: normal;
+    font-weight: 400;
+    font-display: block;
+    src: url('fonts/Inter-Regular.woff2') format('woff2');
+  }
+  @font-face {
+    font-family: 'Inter';
+    font-style: normal;
+    font-weight: 600;
+    font-display: block;
+    src: url('fonts/Inter-SemiBold.woff2') format('woff2');
+  }
+  @font-face {
+    font-family: 'Inter';
+    font-style: normal;
+    font-weight: 700;
+    font-display: block;
+    src: url('fonts/Inter-Bold.woff2') format('woff2');
+  }
+</style>
+<style>
+  :root {
+    color-scheme: dark;
+
+    --topbar-h:    26px;
+    --utilstrip-h: 39px;     /* Logo + Utilities strip above headers + ruler */
+    --rail-w:      50px;     /* Tool palette column */
+    --headers-w:   200px;    /* Track header column (Figma: 200) */
+    --ruler-h:     39px;
+    --track-h:     65px;     /* Track row height (Figma: 65) */
+    --va-divider-h: 4px;       /* visible gap; borders are NOT inside this */
+    /* Scrollbar gutter is 4px wider/taller than the visible pill, so the
+       pill has 4px breathing room from the dialog edge. */
+    --scrollbar-sz:      19px;    /* gutter width/height (pill + 4px pad) */
+    --scrollbar-pill-sz: 15px;    /* visible pill thickness */
+    --scrollbar-end-sz:  15px;    /* end-dot diameter */
+
+    font-family: Inter, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+  }
+
+  html, body {
+    margin: 0; padding: 0;
+    background: var(--color-grey-10);
+    color: var(--color-grey-white);
+    height: 100%; overflow: hidden;
+  }
+  * { box-sizing: border-box; }
+
+  /* ============================================================ layout
+   *
+   * .app          column flex, fills viewport
+   *   .topbar     full-width timecode bar
+   *   .body       row flex, grows to fill
+   *     .rail       tool palette (50)
+   *     .headers    track header column (150) [contains Utilities strip + headers]
+   *     .stage      main area: ruler + lanes + playhead + bottom h-scrollbar
+   *     .v-gutter   right column: video v-scrollbar (above divider), audio v-scrollbar (below)
+   */
+
+  .app {
+    display: flex; flex-direction: column;
+    height: 100vh; width: 100vw;
+  }
+
+  /* ---- top bar ---- */
+
+  .topbar {
+    flex: 0 0 var(--topbar-h);
+    background: var(--color-grey-10);
+    border-bottom: 1px solid var(--color-grey-16);
+    display: flex; align-items: center;
+    padding: 0 11px;
+  }
+  /* Figma: Inter Regular 14px, primary-highlight blue. No spacing/feature
+     overrides; relies on Inter's own digit widths. */
+  .topbar__timecode {
+    font-family: Inter, sans-serif;
+    font-size: 14px; font-weight: 400;
+    color: var(--color-timeline-primary-highlight);
+  }
+
+  /* ---- body ---- */
+
+  .body {
+    flex: 1 1 auto;
+    display: grid;
+    grid-template-columns: var(--rail-w) var(--headers-w) 1fr var(--scrollbar-sz);
+    grid-template-rows: var(--utilstrip-h) 1fr var(--scrollbar-sz);
+    min-height: 0;
+  }
+
+  /* row 1: logo            | utilities strip | ruler             | (empty)
+     row 2: tool palette    | track headers   | stage (lanes)     | v-gutter
+     row 3: (empty)         | (empty)         | h-scrollbar       | (empty)
+     Headers + stage share grid-row 2, so their available heights match
+     exactly. The h-scrollbar lives in its own row at the bottom of the
+     stage column only.
+   */
+
+  .logo {
+    grid-column: 1; grid-row: 1;
+    background: var(--color-grey-12);
+    border-right: 1px solid var(--color-grey-16);
+    border-bottom: 1px solid var(--color-grey-16);
+    display: flex; align-items: center; justify-content: center;
+  }
+  .logo__mark {
+    width: 22px; height: 11px;
+    display: block;
+  }
+
+  /* Utilities strip — Figma frame 150:1455 (200×39).
+     Four icons sit at x centers ≈ 27, 76, 124, 172 within the 200px strip,
+     i.e. ~48px between centers. Express that as 48px hit boxes flexed
+     from the left with a small ~3px left pad so the first center lands at ~27. */
+  .utilstrip {
+    grid-column: 2; grid-row: 1;
+    background: var(--color-grey-10);
+    border-bottom: 1px solid var(--color-grey-16);
+    display: flex; align-items: center;
+    padding: 0 0 0 3px;
+    color: var(--color-grey-50);
+    font-size: 11px;
+  }
+  .utilstrip__icon {
+    width: 48px; height: 30px;
+    display: flex; align-items: center; justify-content: center;
+    cursor: pointer;
+    flex: 0 0 auto;
+  }
+  /* Utility-strip icons default to grey-24 (darker than the rail/track-header
+     grey-50 default). Hover lifts to grey-50; active goes to primary highlight. */
+  .utilstrip__icon .icon { background-color: var(--color-grey-24); }
+  .utilstrip__icon:hover .icon { background-color: var(--color-grey-50); }
+  .utilstrip__icon.is-active .icon { background-color: var(--color-timeline-primary-highlight); }
+
+  .ruler-row {
+    grid-column: 3 / span 2; grid-row: 1;
+    background: var(--color-grey-16);
+    border-bottom: 1px solid var(--color-grey-16);
+    position: relative;
+    overflow: hidden;
+    z-index: 2;   /* above .headers-shadow so the shadow doesn't bleed up */
+  }
+  .ruler__numbers,
+  .ruler__ticks {
+    position: absolute; left: 0; right: 0;
+    pointer-events: none;
+  }
+  .ruler__numbers { top: 6px;    height: 14px; }
+  .ruler__ticks   { bottom: 0;   height: 18px; }
+  .ruler__number {
+    position: absolute;
+    font-size: 10px; line-height: 1;
+    color: var(--color-grey-50);
+    font-variant-numeric: tabular-nums;
+    transform: translateX(-50%);
+  }
+  /* Figma anchors every tick at the BOTTOM of the ruler's tick strip:
+     major ticks extend 18px up, minor ticks 10px up. All bottoms align. */
+  .ruler__tick {
+    position: absolute; bottom: 0; width: 1px;
+    background: var(--color-grey-50);
+  }
+  .ruler__tick.is-major { height: 18px; opacity: 0.9; }
+  .ruler__tick.is-minor { height: 10px; opacity: 0.5; }
+
+  /* ---- rail (tool palette) ---- */
+
+  /* Rail is split vertically into two halves:
+       - Top half: tool palette icons (Select / Razor / Pen / Range)
+       - Bottom half: dB meter
+     Both halves are 50/50, so resizing the dialog scales them together.
+     The rail spans grid-rows 2+3 so it extends to the very bottom of the
+     body (across the h-scrollbar row), instead of stopping at the bottom
+     of the lanes. */
+  .rail {
+    grid-column: 1; grid-row: 2 / span 2;
+    background: var(--color-grey-12);
+    border-right: 1px solid var(--color-grey-16);
+    display: flex; flex-direction: column;
+    overflow: hidden;
+    position: relative;
+  }
+  .rail__tools {
+    flex: 1 1 50%;
+    min-height: 0;
+    display: flex; flex-direction: column;
+    align-items: center;
+    padding-top: 16px;
+    gap: 26px;
+  }
+  /* The bars sit near (but slightly right of) the rail center axis to
+     keep the dB scale labels comfortably within the rail. */
+  .rail__meter-wrap {
+    flex: 1 1 50%;
+    min-height: 0;
+    position: relative;
+  }
+  .rail__meter-wrap .rail__meter {
+    position: absolute;
+    top: 0; bottom: 16px;            /* gap between L/R row and rail bottom */
+    left: calc(50% - 24px);          /* slight left shift to align with icons */
+    height: auto;                    /* override the .rail__meter height:100% */
+  }
+  .rail__tool {
+    width: 28px; height: 28px;
+    display: flex; align-items: center; justify-content: center;
+    cursor: pointer;
+    border-radius: 6px;
+    background: transparent;
+    transition: background-color 0.12s ease;
+  }
+  .rail__tool:hover { background: rgba(255, 255, 255, 0.07); }
+  .rail__tool.is-active { background: var(--color-timeline-primary-highlight); }
+  /* Icon shape comes from the SVG used as a mask; the actual color is
+     a CSS background. Per-icon: define a class .icon--<name> with the
+     mask-image URL (generated into icons.css). Per-state: change
+     background-color via CSS. */
+  .icon {
+    display: block;
+    width: var(--icon-w, 14px);
+    height: var(--icon-h, 14px);
+    background-color: var(--color-grey-50);
+    -webkit-mask-repeat: no-repeat;
+            mask-repeat: no-repeat;
+    -webkit-mask-position: center;
+            mask-position: center;
+    -webkit-mask-size: contain;
+            mask-size: contain;
+    transform: rotate(var(--icon-rot, 0deg));
+  }
+
+  /* Tool-palette rail icon states:
+     default → grey-50 icon (no box)
+     hover   → near-white icon, subtle grey rounded box
+     active  → white icon, primary-blue rounded box */
+  .rail__tool:hover .icon { background-color: var(--color-grey-white); }
+  .rail__tool.is-active .icon { background-color: var(--color-grey-white); }
+
+  /* Per-icon mask-image rules live in icons.css (generated; inlines each
+     SVG as a data: URL to dodge file:// mask-image quirks in WebView2). */
+
+  /* dB meter — Figma node 154:1270 (Decibel Meter). Two side-by-side
+     halves: scale labels + tick column | L/R bars + L/R label row.
+     Anchored to the bottom of the wrap and stretches to fill height. */
+  .rail__meter {
+    width: 39px;
+    height: 100%;
+    display: flex;
+    align-items: stretch;
+    color: var(--color-grey-50);
+    font-family: Inter, sans-serif;
+  }
+
+  /* Left half — scale labels + ticks */
+  .rail__meter-scale {
+    display: flex;
+    align-items: stretch;
+    /* Match the bar column height so labels and bars align top-to-bottom.
+       The L/R letters row underneath the bars adds ~6px; reserve that. */
+    padding-bottom: 9px;
+  }
+  .rail__meter-scale__labels {
+    flex: 1 1 auto;
+    display: flex; flex-direction: column;
+    align-items: flex-end;
+    justify-content: space-between;
+    width: 17.45px;
+    padding-right: 3px;
+    font-size: 6px;
+    font-weight: 400;
+    line-height: 1;
+    box-sizing: border-box;
+  }
+  .rail__meter-scale__ticks {
+    width: 1px;
+    /* Hide for now — the small tick column was clipped/wrong at small
+       sizes. Re-enable once the meter has a fixed-enough height. */
+    display: none;
+  }
+
+  /* Right half — L/R bars + L/R labels */
+  .rail__meter-bars {
+    width: 18.63px;
+    height: 100%;
+    display: flex; flex-direction: column;
+    align-items: center;
+    gap: 3px;
+  }
+  .rail__meter-bars__pair {
+    flex: 1 1 0;
+    display: flex; align-items: center;
+    gap: 3px;
+    width: 100%;
+  }
+  .rail__meter-bar {
+    width: 7.815px;
+    height: 100%;
+    background: var(--color-grey-7);
+  }
+  .rail__meter-bars__lr {
+    display: flex; align-items: center; gap: 10px;
+    width: 100%;
+    font-size: 8px;
+    line-height: 1;
+  }
+  .rail__meter-bars__lr span {
+    display: block;
+  }
+
+  /* ---- track headers column ---- */
+
+  .headers {
+    grid-column: 2; grid-row: 2;
+    background: var(--color-grey-10);
+    display: flex; flex-direction: column;
+    overflow: hidden;
+    position: relative;
+    z-index: 2;   /* sits above .headers-shadow so the shadow tucks under it */
+  }
+
+  /* Soft shadow that bleeds from the headers' right edge into the lanes
+     area. Lives INSIDE .stage so its bleed is clipped to the lanes row
+     by the stage's `overflow: hidden`. Implemented as a CSS gradient
+     rather than box-shadow — gradients give a true smooth falloff with
+     no hard mid-tone band. */
+  .stage__edge-shadow {
+    position: absolute;
+    top: 0; bottom: 0; left: 0;
+    width: 60px;
+    pointer-events: none;
+    background: linear-gradient(to right,
+      rgba(0,0,0,0.35) 0%,
+      rgba(0,0,0,0.18) 35%,
+      rgba(0,0,0,0.06) 70%,
+      rgba(0,0,0,0)    100%);
+    z-index: 1;
+  }
+
+  /* Centred stack pattern: video tracks above the divider grow upward,
+     audio tracks below grow downward. Mirror in the stage's .lanes-area. */
+  .stack {
+    flex: 1 1 auto;
+    display: flex; flex-direction: column;
+    justify-content: center;
+    min-height: 0;
+  }
+  .stack__videos,
+  .stack__audios {
+    display: flex; flex-direction: column;
+  }
+  .stack__divider {
+    /* 4px visible gap + 1px border-bottom (the only stroke at the V/A
+       seam). border-bottom only — track-headers above contribute their
+       own border-bottom, lanes below have border-top. This gives 1px
+       strokes everywhere instead of doubling at the divider edges. */
+    flex: 0 0 var(--va-divider-h);
+    background: var(--color-grey-7);
+    box-sizing: content-box;     /* keep the 4px visible regardless of border */
+    border-bottom: 1px solid var(--color-grey-16);
+  }
+
+  /* Track header — Figma nodes 152:1188 (Video) / 152:1208 (Audio).
+       200×65 frame, flex justify-between items-center px-[8px].
+       Children (in order, each shrink-0):
+         twirl  → lock-wrap  → chip-wrap (h-full px-10)  → right-wrap (pl-6 pr-24)
+       Chip lives in flow (not absolutely positioned) inside chip-wrap.
+   */
+  .track-header {
+    flex: 0 0 var(--track-h);
+    background: var(--color-grey-12);
+    border-bottom: 1px solid var(--color-grey-16);
+    display: flex; align-items: center; justify-content: space-between;
+    padding: 0 8px;
+    position: relative;
+  }
+  .stack__videos .track-header:first-child {
+    border-top: 1px solid var(--color-grey-16);
+  }
+
+  .track-header__twirl {
+    flex: 0 0 auto;
+    width: 8px; height: 10px;
+    color: var(--color-grey-50);
+    display: flex; align-items: center; justify-content: center;
+    font-size: 7px;
+    user-select: none; cursor: pointer;
+  }
+
+  .track-header__lock-wrap {
+    flex: 0 0 auto;
+    display: flex; align-items: center;
+  }
+
+  /* Chip wrapper — full track height, px-10. The chip sits inside,
+     full-height and 30px wide. */
+  .track-header__chip-wrap {
+    flex: 0 0 auto;
+    align-self: stretch;
+    display: flex; align-items: center;
+    padding: 0 10px;
+  }
+  .track-header__chip {
+    width: 30px;
+    align-self: stretch;
+    border-radius: 4px;
+    color: #fff;
+    font-family: Inter, sans-serif;
+    font-size: 11px; font-weight: 600;
+    display: flex; align-items: center; justify-content: center;
+  }
+  .track-header.is-video .track-header__chip { background: var(--color-timeline-primary-highlight); }
+  .track-header.is-audio .track-header__chip { background: var(--color-grey-24); }
+
+  /* Right-side group: pl-6 pr-24, justify-end. Inside is a 28×30 column
+     with the eye (or M/S row) on top and the label underneath. */
+  .track-header__right {
+    flex: 0 0 auto;
+    display: flex; align-items: center; justify-content: flex-end;
+    padding: 0 24px 0 6px;
+  }
+  .track-header__right-col {
+    width: 28px;
+    display: flex; flex-direction: column;
+    align-items: center; justify-content: center;
+    gap: 6px;
+  }
+  .track-header.is-audio .track-header__right-col {
+    padding: 3px 0;
+  }
+  .track-header__icons-row {
+    display: flex; align-items: center; justify-content: space-between;
+    width: 30px;
+    color: var(--color-grey-50);
+    font-family: Inter, sans-serif;
+    font-size: 10px; font-weight: 700;
+  }
+  .track-header__icons-row .s { color: var(--color-timeline-primary-highlight); }
+  .track-header__label-wrap {
+    flex: 0 0 auto;
+    width: 53px;
+    display: flex; align-items: center; justify-content: center;
+  }
+  .track-header__label {
+    font-family: Inter, sans-serif;
+    font-size: 10px; font-weight: 400;
+    color: var(--color-grey-50);
+    line-height: 1; white-space: nowrap;
+  }
+
+  /* ---- stage (lanes + playhead + bottom scrollbar) ---- */
+
+  .stage {
+    grid-column: 3; grid-row: 2;
+    background: var(--color-grey-10);
+    position: relative;
+    /* overflow:visible so the playhead triangle can float up into the
+       ruler row. The edge-shadow clips itself via background gradient
+       width, and the lanes-area has its own bg+inset so nothing else
+       escapes visibly. */
+    overflow: visible;
+  }
+
+  /* The lanes-area fills the whole stage so its centered stack lines up
+     with the headers column's centered stack (both occupy grid-row 2).
+     A small right inset matches the Figma's gap between the lanes and
+     the v-scrollbar gutter, so the grey-12 lane bg doesn't butt directly
+     against the v-gutter's grey-10 (which would show as a vertical seam). */
+  .lanes-area {
+    position: absolute; inset: 0 4px 0 0;
+    display: flex; flex-direction: column;
+    min-height: 0;
+  }
+
+  .lane {
+    flex: 0 0 var(--track-h);
+    background: var(--color-grey-12);
+    border-bottom: 1px solid var(--color-grey-16);
+  }
+  .stack__videos .lane:first-child {
+    border-top: 1px solid var(--color-grey-16);
+  }
+
+  /* Bottom horizontal scrollbar — sits in its own grid row under .stage */
+  .h-scroll {
+    grid-column: 3; grid-row: 3;
+    background: var(--color-grey-10);
+    border-top: 1px solid var(--color-grey-16);
+    position: relative;
+    z-index: 2;   /* above .headers-shadow so the shadow doesn't bleed down */
+  }
+  /* Scrollbar — pill track grey-16, with a dot at each end placed via
+     `justify-content: space-between`. Each dot is grey-12 fill with a
+     2px grey-24 stroke. Pill is --scrollbar-pill-sz tall and pinned to
+     the TOP of the gutter, so the 4px gap sits between the pill and
+     the dialog's bottom edge. */
+  .scrollbar-track {
+    position: absolute;
+    left: 0; right: 0;
+    top: 0;
+    height: var(--scrollbar-pill-sz);
+    background: var(--color-grey-16);
+    border-radius: calc(var(--scrollbar-pill-sz) / 2);
+    display: flex; align-items: center; justify-content: space-between;
+  }
+  .scrollbar-end {
+    box-sizing: border-box;
+    width: var(--scrollbar-end-sz);
+    height: var(--scrollbar-end-sz);
+    border-radius: 50%;
+    background: var(--color-grey-12);
+    border: 2px solid var(--color-grey-24);
+    cursor: ew-resize;
+    flex: 0 0 auto;
+    transition: border-color 0.12s ease;
+  }
+  .scrollbar-end:hover {
+    border-color: var(--color-timeline-primary-highlight);
+  }
+
+  /* Playhead spans the full lanes-area; absolute-positioned, ignores layout */
+  /* Playhead: red vertical line through the lanes, with the Figma blue
+     triangle handle (playhead-handle.svg) at the top. The handle floats
+     up into the ruler via negative top so its apex meets the ruler/lanes
+     boundary. Line color is Figma's #C94B4B (muted red). */
+  .playhead {
+    position: absolute;
+    top: 0; bottom: 0;
+    left: 50%;                /* placeholder — JS will set this from --playhead-frame later */
+    width: 1px;
+    background: #c94b4b;
+    pointer-events: none;
+    z-index: 5;
+    overflow: visible;
+  }
+  .playhead__handle {
+    position: absolute;
+    top: -16px;               /* handle's bottom apex sits at lanes-area top */
+    left: -9px;               /* half of handle width (18) */
+    width: 18.58px;
+    height: 16px;
+    display: block;
+    pointer-events: none;
+  }
+
+  /* ---- right gutter (vertical scrollbars, split by V/A divider position) ---- */
+
+  .v-gutter {
+    grid-column: 4; grid-row: 2;
+    background: var(--color-grey-10);
+    display: flex; flex-direction: column;
+    min-height: 0;
+  }
+  /* Vertical scrollbar — same component as horizontal, rotated 90°.
+     10px-wide pill that fills the height of its v-scroll cell, with
+     10×10 dots at top + bottom. */
+  .v-scroll {
+    flex: 1 1 auto;
+    position: relative;
+    display: flex; justify-content: flex-start;
+  }
+  .v-scroll__track {
+    width: var(--scrollbar-pill-sz);
+    height: 100%;
+    background: var(--color-grey-16);
+    border-radius: calc(var(--scrollbar-pill-sz) / 2);
+    display: flex; flex-direction: column; align-items: center; justify-content: space-between;
+  }
+  .v-scroll__end {
+    box-sizing: border-box;
+    width: var(--scrollbar-end-sz);
+    height: var(--scrollbar-end-sz);
+    border-radius: 50%;
+    background: var(--color-grey-12);
+    border: 2px solid var(--color-grey-24);
+    cursor: ns-resize;
+    flex: 0 0 auto;
+    transition: border-color 0.12s ease;
+  }
+  .v-scroll__end:hover {
+    border-color: var(--color-timeline-primary-highlight);
+  }
+
+  /* The v-gutter splits at the V/A divider line. Two scrollbars stacked,
+     with a small inset matching --va-divider-h between them. */
+  .v-gutter__divider {
+    flex: 0 0 var(--va-divider-h);
+    background: var(--color-grey-7);
+    box-sizing: content-box;
+    border-bottom: 1px solid var(--color-grey-16);
+  }
+</style>
+</head>
+<body>
+
+<div class="app">
+
+  <!-- top bar -->
+  <div class="topbar">
+    <div class="topbar__timecode" id="timecode">00:00:00:00</div>
+  </div>
+
+  <!-- body grid -->
+  <div class="body">
+
+    <!-- row 1 -->
+    <div class="logo">
+      <img class="logo__mark" src="icons/logo.svg" alt="Shotblocks" />
+    </div>
+
+    <div class="utilstrip">
+      <div class="utilstrip__icon" title="Snap">
+        <span class="icon icon--snap" style="--icon-w:14px;--icon-h:14px"></span>
+      </div>
+      <div class="utilstrip__icon" title="Beat Detection">
+        <span class="icon icon--beat-detection" style="--icon-w:13px;--icon-h:13px"></span>
+      </div>
+      <div class="utilstrip__icon" title="Markers">
+        <span class="icon icon--markers" style="--icon-w:10px;--icon-h:13px"></span>
+      </div>
+      <div class="utilstrip__icon" title="Settings">
+        <span class="icon icon--settings" style="--icon-w:15px;--icon-h:15px"></span>
+      </div>
+    </div>
+
+    <div class="ruler-row" id="ruler-row">
+      <div class="ruler__numbers" id="ruler-numbers"></div>
+      <div class="ruler__ticks"   id="ruler-ticks"></div>
+    </div>
+
+    <!-- row 2 -->
+    <div class="rail">
+      <div class="rail__tools">
+        <div class="rail__tool is-active" title="Select" style="--icon-w:14px;--icon-h:14px">
+          <span class="icon icon--select" aria-label="Select"></span>
+        </div>
+        <div class="rail__tool" title="Razor" style="--icon-w:16px;--icon-h:16px;--icon-rot:45deg">
+          <span class="icon icon--razor" aria-label="Razor"></span>
+        </div>
+        <div class="rail__tool" title="Pen" style="--icon-w:14px;--icon-h:14px">
+          <span class="icon icon--pen" aria-label="Pen"></span>
+        </div>
+        <div class="rail__tool" title="Range" style="--icon-w:15px;--icon-h:12px">
+          <span class="icon icon--range" aria-label="Range"></span>
+        </div>
+      </div>
+      <div class="rail__meter-wrap">
+        <div class="rail__meter" title="dB meter">
+        <div class="rail__meter-scale">
+          <div class="rail__meter-scale__labels">
+            <span>6</span><span>0</span><span>-6</span><span>-12</span>
+            <span>-20</span><span>-30</span><span>-40</span><span>-50</span><span>-∞</span>
+          </div>
+          <div class="rail__meter-scale__ticks"></div>
+        </div>
+        <div class="rail__meter-bars">
+          <div class="rail__meter-bars__pair">
+            <div class="rail__meter-bar"></div>
+            <div class="rail__meter-bar"></div>
+          </div>
+          <div class="rail__meter-bars__lr">
+            <span>L</span><span>R</span>
+          </div>
+        </div>
+      </div>
+      </div>
+    </div>
+
+    <div class="headers">
+      <div class="stack">
+        <div class="stack__videos" id="headers-videos">
+          <div class="track-header is-video">
+            <div class="track-header__twirl"><span class="icon icon--triangle" style="--icon-w:8px;--icon-h:10px;--icon-rot:90deg"></span></div>
+            <div class="track-header__lock-wrap">
+              <span class="icon icon--lock" style="--icon-w:12px;--icon-h:12px"></span>
+            </div>
+            <div class="track-header__chip-wrap">
+              <div class="track-header__chip">V1</div>
+            </div>
+            <div class="track-header__right">
+              <div class="track-header__right-col">
+                <span class="icon icon--eye" style="--icon-w:18px;--icon-h:18px;background-color:var(--color-timeline-primary-highlight)"></span>
+                <div class="track-header__label-wrap">
+                  <div class="track-header__label">Video 1</div>
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+        <div class="stack__divider"></div>
+        <div class="stack__audios" id="headers-audios">
+          <div class="track-header is-audio">
+            <div class="track-header__twirl"><span class="icon icon--triangle" style="--icon-w:8px;--icon-h:10px;--icon-rot:90deg"></span></div>
+            <div class="track-header__lock-wrap">
+              <span class="icon icon--lock-locked" style="--icon-w:12px;--icon-h:12px"></span>
+            </div>
+            <div class="track-header__chip-wrap">
+              <div class="track-header__chip">A1</div>
+            </div>
+            <div class="track-header__right">
+              <div class="track-header__right-col">
+                <div class="track-header__icons-row"><span>M</span><span class="s">S</span></div>
+                <div class="track-header__label-wrap">
+                  <div class="track-header__label">Audio 1</div>
+                </div>
+              </div>
+            </div>
+          </div>
+
+        </div>
+      </div>
+    </div>
+
+    <div class="stage">
+      <div class="stage__edge-shadow"></div>
+      <div class="lanes-area">
+        <div class="stack">
+          <div class="stack__videos" id="lanes-videos">
+            <div class="lane"></div>
+          </div>
+          <div class="stack__divider"></div>
+          <div class="stack__audios" id="lanes-audios">
+            <div class="lane"></div>
+          </div>
+        </div>
+        <div class="playhead">
+          <img class="playhead__handle" src="icons/playhead-handle.svg" alt="" />
+        </div>
+      </div>
+    </div>
+
+    <div class="h-scroll">
+      <div class="scrollbar-track">
+        <div class="scrollbar-end" title="Zoom from left"></div>
+        <div class="scrollbar-end" title="Zoom from right"></div>
+      </div>
+    </div>
+
+    <div class="v-gutter">
+      <div class="v-scroll" title="Video tracks scroll/zoom">
+        <div class="v-scroll__track">
+          <div class="v-scroll__end is-top"></div>
+          <div class="v-scroll__end is-bottom"></div>
+        </div>
+      </div>
+      <div class="v-gutter__divider"></div>
+      <div class="v-scroll" title="Audio tracks scroll/zoom">
+        <div class="v-scroll__track">
+          <div class="v-scroll__end is-top"></div>
+          <div class="v-scroll__end is-bottom"></div>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<script>
+(function () {
+  // Minimal JS: just render the ruler ticks/numbers + keep the bridge alive.
+  // NOTE: JS→C++ via window.chrome.webview.postMessage() doesn't work in
+  // C4D 2026's HtmlViewerCustomGui (silently dropped). The C++→JS direction
+  // works fine. When we need JS→C++ we'll use a fetch() channel intercepted
+  // on the C++ side via SetResourceRequestInterceptCallback.
+  const $ = (id) => document.getElementById(id);
+
+  function renderRuler() {
+    const ticks = $('ruler-ticks');
+    const nums  = $('ruler-numbers');
+    if (!ticks || !nums) return;
+    ticks.innerHTML = '';
+    nums.innerHTML  = '';
+
+    // Ruler width = (stage area width). With auto-fit, we lay out 0..150
+    // frames across the available width; minor every 2 frames, major every 8,
+    // labels every 8.
+    const rect = $('ruler-row').getBoundingClientRect();
+    const docFrames = 150;
+    const pxPerFrame = rect.width / docFrames;
+
+    for (let f = 0; f <= docFrames; f += 2) {
+      const tick = document.createElement('div');
+      tick.className = 'ruler__tick ' + (f % 8 === 0 ? 'is-major' : 'is-minor');
+      tick.style.left = (f * pxPerFrame) + 'px';
+      ticks.appendChild(tick);
+    }
+    for (let f = 2; f <= docFrames; f += 8) {
+      const n = document.createElement('div');
+      n.className = 'ruler__number';
+      n.textContent = f;
+      n.style.left = (f * pxPerFrame) + 'px';
+      nums.appendChild(n);
+    }
+  }
+
+  renderRuler();
+  window.addEventListener('resize', renderRuler);
+
+  // Suppress browser-level page zoom. Inside a docked DAW panel, Ctrl+wheel
+  // and Ctrl+/Ctrl-/Ctrl0 should not scale the whole UI. The wheel handler
+  // is registered passive:false so preventDefault() takes effect.
+  window.addEventListener('wheel', (e) => {
+    if (e.ctrlKey) e.preventDefault();
+  }, { passive: false });
+  window.addEventListener('keydown', (e) => {
+    if (!e.ctrlKey) return;
+    // '=' is the unshifted '+'. NumpadAdd/NumpadSubtract via e.key '+'/'-'.
+    if (e.key === '+' || e.key === '-' || e.key === '=' || e.key === '0') {
+      e.preventDefault();
+    }
+  });
+
+  // WebView2 persists page zoom per origin, so a Ctrl+wheel before we
+  // wired the suppressor above can leave the page scaled even after
+  // redeploy. Snap any non-1 zoom back to 1 on every load.
+  if (document.body && document.body.style) document.body.style.zoom = '1';
+
+  // Inbound listener for C++→JS messages (frame ticks, doc info, etc.).
+  // Not consumed yet in this static pass; we'll wire it in next.
+  if (window.chrome && window.chrome.webview && window.chrome.webview.addEventListener) {
+    window.chrome.webview.addEventListener('message', (ev) => {
+      // Placeholder: parse and dispatch later.
+      void ev;
+    });
+  }
+})();
+</script>
+
+</body>
+</html>
