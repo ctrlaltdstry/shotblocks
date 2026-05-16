@@ -1,5 +1,6 @@
-# Mirrors src/ into the C4D plugins folder.
-# Run before each Cinema 4D restart during the deploy-and-test loop.
+# Mirrors src/ into the C4D plugins folder, and copies the C++ host
+# plugin DLL if a build exists. Run before each Cinema 4D restart
+# during the deploy-and-test loop.
 
 $ErrorActionPreference = "Stop"
 
@@ -36,4 +37,22 @@ if ($LASTEXITCODE -ge 8) {
 }
 
 Write-Host "Deployed shotblocks -> $dest"
+
+# --- C++ host plugin -------------------------------------------------------
+# Copy shotblocks_host.xdl64 from the SDK build output into the C4D prefs
+# plugins folder. Optional: only deploys if the build artifact exists.
+$hostBuildDir = "C:\Dev\c4d_sdk_2026\build-win64\bin\Release\plugins\shotblocks_host"
+$hostDest = Join-Path $c4dPrefs "plugins\shotblocks_host"
+
+if (Test-Path $hostBuildDir) {
+    New-Item -ItemType Directory -Path $hostDest -Force | Out-Null
+    robocopy $hostBuildDir $hostDest shotblocks_host.xdl64 /NFL /NDL /NJH /NJS /NP | Out-Null
+    if ($LASTEXITCODE -ge 8) {
+        throw "robocopy (host) failed with exit code $LASTEXITCODE"
+    }
+    Write-Host "Deployed shotblocks_host -> $hostDest"
+} else {
+    Write-Host "Skipping C++ host (no build at $hostBuildDir)"
+}
+
 exit 0
