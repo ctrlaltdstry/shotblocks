@@ -62,10 +62,7 @@ export function useOmDrop(): void {
       if (msg.kind === 'om-drop') {
         const resolved = resolveDrop(msg.viewportX, msg.viewportY, msg.items);
         useStore.getState().setDragPreview(null);
-        if (!resolved) {
-          console.log('[sb] om-drop landed somewhere we ignore');
-          return;
-        }
+        if (!resolved) return;
         const item = msg.items[0];
         useStore.getState().addClip(resolved.trackId, {
           inFrame: resolved.inFrame,

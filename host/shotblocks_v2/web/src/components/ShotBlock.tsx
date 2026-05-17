@@ -1,5 +1,5 @@
 import type { CSSProperties } from 'react';
-import type { Clip } from '../store';
+import { useStore, type Clip } from '../store';
 
 /** Shot block (a clip rendered inside a Lane). Visual matrix per
  *  Figma node 173:1827: state × type × height.
@@ -12,8 +12,10 @@ import type { Clip } from '../store';
  *    .is-thin                     — flips layout (icon to the right,
  *                                   label fills row) for lanes <32px tall
  *
- *  `left` / `width` come from caller (computed against the horizontal
- *  visible window). */
+ *  Edge highlights (yellow brackets) are computed by the parent Lane
+ *  and stored in `state.edgeHover` as a Set of `${clipId}:left|right`
+ *  keys. Lane lookup happens at the lane level so when two clips
+ *  share a seam BOTH light up — single source of truth. */
 export function ShotBlock({
   clip,
   side,
@@ -25,6 +27,10 @@ export function ShotBlock({
   thin: boolean;
   style?: CSSProperties;
 }) {
+  const edgeHover = useStore((s) => s.edgeHover);
+  const hoverLeft  = edgeHover.has(clip.id + ':left');
+  const hoverRight = edgeHover.has(clip.id + ':right');
+
   const cls = [
     'shot-block',
     side === 'video' ? 'is-video' : 'is-audio',
@@ -33,6 +39,8 @@ export function ShotBlock({
     clip.state === 'orphaned-selected' && 'is-orphaned is-selected',
     (clip.state === 'locked' || clip.locked) && 'is-locked',
     thin && 'is-thin',
+    hoverLeft  && 'is-edge-left',
+    hoverRight && 'is-edge-right',
   ].filter(Boolean).join(' ');
 
   // Icon class follows state + side:
@@ -46,7 +54,12 @@ export function ShotBlock({
   }
 
   return (
-    <div className={cls} style={style} title={clip.sourceName} data-clip={clip.id}>
+    <div
+      className={cls}
+      style={style}
+      title={clip.sourceName}
+      data-clip={clip.id}
+    >
       <div className="shot-block__label">{clip.sourceName}</div>
       <div className="shot-block__icon-wrap">
         <span className={iconClass} />

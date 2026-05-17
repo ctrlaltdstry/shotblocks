@@ -14,6 +14,7 @@ import { TrackHeader } from './components/TrackHeader';
 import { Lane } from './components/Lane';
 import { ToolPalette } from './components/ToolPalette';
 import { DropGhost } from './components/DropGhost';
+import { DebugOverlay } from './DebugOverlay';
 import { useElementSize } from './useElementSize';
 
 // Round 1 of the React port: layout grid + static chrome only.
@@ -367,6 +368,7 @@ function App() {
           <VScroll which="audio" />
         </div>
       </div>
+      <DebugOverlay />
     </div>
   );
 }

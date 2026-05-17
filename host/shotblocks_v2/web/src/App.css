@@ -437,25 +437,52 @@ body.va-splitter-hover .stack__divider.is-grabbable,
   font-weight: 400;
   color: var(--color-grey-white);
   background: var(--color-timeline-default-block);
+  /* 1px darker stroke around the block (Figma node 173:3156). When
+     adjacent clips touch this gives the visible "two clips with a
+     1px line between them, both rounded" look. */
+  border: 1px solid #3671b2;
   display: flex; flex-direction: column;
   justify-content: space-between;
-  padding: 6px 15px 5px;
+  padding: 5px 14px 4px;        /* compensated for the 1px border */
   /* Inset box-shadow gives a 1px white border that sits INSIDE the
-     block's box — required because the parent lane has overflow:hidden
-     (an outline outside the geometry gets clipped at the lane edges).
-     No layout shift on selection because inset shadow doesn't take
-     space. */
+     block's box (the lane has overflow:hidden so a real outline gets
+     clipped). No layout shift on selection because inset shadow
+     doesn't take space. */
   box-shadow: inset 0 0 0 0 transparent;
-  transition: box-shadow 0.08s ease;
+  transition: box-shadow 0.08s ease, border-color 0.08s ease;
 }
 .shot-block.is-selected { box-shadow: inset 0 0 0 1px var(--color-grey-white); }
-.shot-block.is-video    { background: var(--color-timeline-default-block); }
-.shot-block.is-video.is-selected   { background: var(--color-timeline-primary-highlight); }
-.shot-block.is-audio    { background: var(--color-timeline-audio); }
-.shot-block.is-audio.is-selected   { background: var(--color-timeline-audio-selected); }
-.shot-block.is-orphaned { background: var(--color-timeline-orphan-block); }
-.shot-block.is-orphaned.is-selected { background: var(--color-timeline-red, #ff3b30); }
-.shot-block.is-locked   { background: var(--color-timeline-locked); }
+/* Each border is the clip's own background dimmed by 30% black.
+   color-mix avoids hand-derived hex constants and stays correct if
+   the timeline color tokens ever change. */
+.shot-block.is-video    {
+  background: var(--color-timeline-default-block);
+  border-color: color-mix(in srgb, var(--color-timeline-default-block) 70%, black);
+}
+.shot-block.is-video.is-selected {
+  background: var(--color-timeline-primary-highlight);
+  border-color: color-mix(in srgb, var(--color-timeline-primary-highlight) 70%, black);
+}
+.shot-block.is-audio    {
+  background: var(--color-timeline-audio);
+  border-color: color-mix(in srgb, var(--color-timeline-audio) 70%, black);
+}
+.shot-block.is-audio.is-selected {
+  background: var(--color-timeline-audio-selected);
+  border-color: color-mix(in srgb, var(--color-timeline-audio-selected) 70%, black);
+}
+.shot-block.is-orphaned {
+  background: var(--color-timeline-orphan-block);
+  border-color: color-mix(in srgb, var(--color-timeline-orphan-block) 70%, black);
+}
+.shot-block.is-orphaned.is-selected {
+  background: var(--color-timeline-red, #ff3b30);
+  border-color: color-mix(in srgb, var(--color-timeline-red, #ff3b30) 70%, black);
+}
+.shot-block.is-locked   {
+  background: var(--color-timeline-locked);
+  border-color: color-mix(in srgb, var(--color-timeline-locked) 70%, black);
+}
 
 .shot-block__label {
   flex: 0 0 auto;
@@ -499,6 +526,34 @@ body.va-splitter-hover .stack__divider.is-grabbable,
 .shot-block.is-thin .shot-block__label {
   flex: 1 1 0; min-width: 0;
 }
+
+/* Edge-hover brackets — yellow `[` on left, mirrored `]` on right.
+   Pseudo-elements positioned ABSOLUTELY over the block's own edges.
+   Bracket SVG (9×65, fill #FFD452) is inlined as a data URL so it
+   resolves under file://. preserveAspectRatio="none" lets the bracket
+   stretch vertically with the lane.
+   Bracket sits INSIDE the block geometry (left:0 / right:0) so it
+   gets clipped by overflow:hidden — matches Figma's "hugs the border"
+   intent. Width 9px. */
+.shot-block::before,
+.shot-block::after {
+  content: '';
+  position: absolute;
+  top: 0; bottom: 0;
+  width: 9px;
+  background-color: #FFD452;
+  -webkit-mask-image: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' preserveAspectRatio='none' viewBox='0 0 9 65' fill='none'><path d='M9 1C9 1.55228 8.55228 2 8 2H4C2.89543 2 2 2.89543 2 4V61C2 62.1046 2.89543 63 4 63H8C8.55228 63 9 63.4477 9 64C9 64.5523 8.55228 65 8 65H4C1.79086 65 0 63.2091 0 61V4C0 1.79086 1.79086 0 4 0H8C8.55228 0 9 0.447715 9 1Z' fill='%23FFD452'/></svg>");
+          mask-image: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' preserveAspectRatio='none' viewBox='0 0 9 65' fill='none'><path d='M9 1C9 1.55228 8.55228 2 8 2H4C2.89543 2 2 2.89543 2 4V61C2 62.1046 2.89543 63 4 63H8C8.55228 63 9 63.4477 9 64C9 64.5523 8.55228 65 8 65H4C1.79086 65 0 63.2091 0 61V4C0 1.79086 1.79086 0 4 0H8C8.55228 0 9 0.447715 9 1Z' fill='%23FFD452'/></svg>");
+  -webkit-mask-repeat: no-repeat; mask-repeat: no-repeat;
+  -webkit-mask-size: 100% 100%; mask-size: 100% 100%;
+  opacity: 0;
+  pointer-events: none;
+  z-index: 3;
+}
+.shot-block::before { left: 0; }
+.shot-block::after  { right: 0; transform: scaleX(-1); }
+.shot-block.is-edge-left::before  { opacity: 1; }
+.shot-block.is-edge-right::after  { opacity: 1; }
 .stack__videos .lane:first-child {
   border-top: 1px solid var(--color-grey-16);
 }

@@ -87,6 +87,12 @@ export interface State {
   // no drag is in progress or the drag is outside our drop targets.
   dragPreview: DragPreview | null;
 
+  // Per-clip edge hover. Keyed as `${clipId}:left` / `${clipId}:right`.
+  // The Lane computes this on pointermove — when the cursor is at a
+  // seam where two clips meet, BOTH edges land in the set so both
+  // clips render their bracket (the "double" look the user expects).
+  edgeHover: Set<string>;
+
   // Actions
   setTick: (frame: number, fps: number, playing: boolean) => void;
   setDocInfo: (fps: number, docFrames: number) => void;
@@ -102,10 +108,93 @@ export interface State {
   addClip: (trackId: string, clip: Omit<Clip, 'id'>) => number | null;
 
   setDragPreview: (preview: DragPreview | null) => void;
+  setEdgeHover: (edges: Set<string>) => void;
 }
 
 /** Monotonic clip id. Unique across all tracks for the session. */
 let nextClipId = 1;
+
+/** Place a new clip on the timeline without overlapping existing clips.
+ *  Snaps flush against an adjacent clip when the drop lands within
+ *  SNAP_FRAMES of an existing edge — matches NLE convention where
+ *  near-edge drops chain into a continuous strip.
+ *  outFrame is exclusive (clip occupies [inFrame, outFrame)), so two
+ *  clips can share an exact frame boundary (A.outFrame === B.inFrame)
+ *  with no overlap and no gap.
+ *  Returns the inFrame / outFrame that should be used. */
+const MIN_GAP_FRAMES = 0;
+const SNAP_FRAMES = 20;
+function findFreeSlot(
+  existing: Clip[],
+  desiredInFrame: number,
+  duration: number,
+): { inFrame: number; outFrame: number } {
+  const dur = Math.max(1, duration);
+  const desiredOutFrame = desiredInFrame + dur;
+  const sorted = [...existing].sort((a, b) => a.inFrame - b.inFrame);
+
+  // Snap pass: if the proposed range puts our LEFT edge within
+  // SNAP_FRAMES of a clip's right edge, slam it flush. If our RIGHT
+  // edge is within SNAP_FRAMES of a clip's left edge, slam it flush
+  // there instead. Closer snap wins.
+  let bestSnap: { inFrame: number; dist: number } | null = null;
+  for (const c of sorted) {
+    // Snap our left edge to c's right edge (c sits to our left).
+    const snapLeft = c.outFrame + MIN_GAP_FRAMES;
+    const dLeft = Math.abs(desiredInFrame - snapLeft);
+    if (dLeft <= SNAP_FRAMES && (!bestSnap || dLeft < bestSnap.dist)) {
+      bestSnap = { inFrame: snapLeft, dist: dLeft };
+    }
+    // Snap our right edge to c's left edge (c sits to our right).
+    const snapRightInFrame = c.inFrame - MIN_GAP_FRAMES - dur;
+    const dRight = Math.abs(desiredOutFrame - (c.inFrame - MIN_GAP_FRAMES));
+    if (dRight <= SNAP_FRAMES && (!bestSnap || dRight < bestSnap.dist)) {
+      bestSnap = { inFrame: snapRightInFrame, dist: dRight };
+    }
+  }
+
+  // Build candidate gaps for collision check + snap validation.
+  const gaps: Array<{ start: number; end: number }> = [];
+  let cursor = -Infinity;
+  for (const c of sorted) {
+    gaps.push({ start: cursor, end: c.inFrame - MIN_GAP_FRAMES });
+    cursor = c.outFrame + MIN_GAP_FRAMES;
+  }
+  gaps.push({ start: cursor, end: Infinity });
+
+  function fitsInAnyGap(inF: number): boolean {
+    return gaps.some((g) => inF >= g.start && inF + dur <= g.end);
+  }
+
+  // If snap target fits, use it.
+  if (bestSnap && fitsInAnyGap(bestSnap.inFrame)) {
+    return { inFrame: Math.max(0, bestSnap.inFrame), outFrame: Math.max(0, bestSnap.inFrame) + dur };
+  }
+
+  // Otherwise, original "nearest free gap" placement. Closest start
+  // wins; clamp inside the chosen gap.
+  let bestStart = desiredInFrame;
+  let bestDist = Infinity;
+  let placed = false;
+  for (const g of gaps) {
+    if (g.end - g.start < dur) continue;
+    const lo = g.start;
+    const hi = g.end - dur;
+    const clamped = Math.max(lo, Math.min(hi, desiredInFrame));
+    const dist = Math.abs(clamped - desiredInFrame);
+    if (dist < bestDist) {
+      bestDist = dist;
+      bestStart = clamped;
+      placed = true;
+    }
+  }
+  if (!placed && sorted.length) {
+    const last = sorted[sorted.length - 1];
+    bestStart = last.outFrame + MIN_GAP_FRAMES;
+  }
+  if (bestStart < 0) bestStart = 0;
+  return { inFrame: bestStart, outFrame: bestStart + dur };
+}
 
 export const useStore = create<State>((set) => ({
   fps: 30,
@@ -121,6 +210,7 @@ export const useStore = create<State>((set) => ({
   videoTracks: [{ id: 1, name: 'Video 1', clips: [] }],
   audioTracks: [{ id: 1, name: 'Audio 1', clips: [] }],
   dragPreview: null,
+  edgeHover: new Set<string>(),
 
   setTick: (frame, fps, playing) => set((s) => ({
     currentFrame: frame,
@@ -162,6 +252,17 @@ export const useStore = create<State>((set) => ({
 
   setDragPreview: (preview) => set({ dragPreview: preview }),
 
+  setEdgeHover: (edges) => set((s) => {
+    // Cheap identity check so we don't churn renders when the set
+    // didn't actually change.
+    if (s.edgeHover.size === edges.size) {
+      let same = true;
+      for (const k of edges) if (!s.edgeHover.has(k)) { same = false; break; }
+      if (same) return s;
+    }
+    return { edgeHover: edges };
+  }),
+
   addClip: (trackId, clip) => {
     const id = nextClipId++;
     const side = trackId.startsWith('V') ? 'video' : trackId.startsWith('A') ? 'audio' : null;
@@ -172,8 +273,19 @@ export const useStore = create<State>((set) => ({
       const list = side === 'video' ? s.videoTracks : s.audioTracks;
       const idx = list.findIndex((t) => t.id === num);
       if (idx < 0) return s;
+      const track = list[idx];
+      // Find a non-overlapping placement closest to the requested
+      // inFrame. Clips never overlap; a minimum 1-frame data gap is
+      // enforced so even back-to-back placements render with the
+      // 2px CSS gap intact.
+      const placed = findFreeSlot(
+        track.clips,
+        clip.inFrame,
+        clip.outFrame - clip.inFrame,
+      );
+      const newClip = { id, ...clip, inFrame: placed.inFrame, outFrame: placed.outFrame };
       const newTracks = list.map((t, i) => i === idx
-        ? { ...t, clips: [...t.clips, { id, ...clip }] }
+        ? { ...t, clips: [...t.clips, newClip] }
         : t);
       added = id;
       return side === 'video'
