@@ -50,15 +50,34 @@ if (Test-Path $v2BuildDir) {
     if ($LASTEXITCODE -ge 8) {
         throw "robocopy (v2) failed with exit code $LASTEXITCODE"
     }
-    # Web assets (demo.html etc.) live next to the DLL so the C++ plugin
-    # can build a file:// URL relative to its own module location.
+    # Web app: React + TypeScript + Vite. We build via `npm run build`
+    # (output in web/dist) and copy dist/ into the plugin's web/ folder.
+    # The C++ side loads web/index.html.
     $v2WebSrc = Join-Path $repoRoot "host\shotblocks_v2\web"
-    if (Test-Path $v2WebSrc) {
+    if (Test-Path (Join-Path $v2WebSrc "package.json")) {
+        Write-Host "Building shotblocks_v2 web (npm run build)..."
+        Push-Location $v2WebSrc
+        try {
+            # Vite writes progress to stderr. PowerShell would flag that
+            # as a failure; capture and re-emit so we only fail on real
+            # non-zero exits.
+            cmd /c "npm run build 2>&1" | Out-Host
+            if ($LASTEXITCODE -ne 0) {
+                throw "npm run build failed with exit code $LASTEXITCODE"
+            }
+        }
+        finally {
+            Pop-Location
+        }
+        $v2DistSrc = Join-Path $v2WebSrc "dist"
+        if (-not (Test-Path $v2DistSrc)) {
+            throw "Vite build produced no dist/ at $v2DistSrc"
+        }
         $v2WebDest = Join-Path $v2Dest "web"
         New-Item -ItemType Directory -Path $v2WebDest -Force | Out-Null
-        robocopy $v2WebSrc $v2WebDest /MIR /NFL /NDL /NJH /NJS /NP | Out-Null
+        robocopy $v2DistSrc $v2WebDest /MIR /NFL /NDL /NJH /NJS /NP | Out-Null
         if ($LASTEXITCODE -ge 8) {
-            throw "robocopy (v2 web) failed with exit code $LASTEXITCODE"
+            throw "robocopy (v2 web dist) failed with exit code $LASTEXITCODE"
         }
     }
     Write-Host "Deployed shotblocks_v2 -> $v2Dest"

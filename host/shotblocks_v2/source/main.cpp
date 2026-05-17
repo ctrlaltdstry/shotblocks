@@ -485,7 +485,7 @@ private:
 		// this dialog instance. Server is per-dialog, not per-document.
 		StartServerIfNeeded();
 
-		// Build a file:// URL pointing at web/timeline.html sitting next
+		// Build a file:// URL pointing at web/index.html sitting next
 		// to the plugin DLL.
 		HMODULE hMod = nullptr;
 		GetModuleHandleExW(
@@ -499,7 +499,7 @@ private:
 		if (lastSlash)
 			*(lastSlash + 1) = 0;
 		wchar_t urlBuf[MAX_PATH + 64];
-		swprintf_s(urlBuf, MAX_PATH + 64, L"file:///%sweb/timeline.html", dll);
+		swprintf_s(urlBuf, MAX_PATH + 64, L"file:///%sweb/index.html", dll);
 		for (wchar_t* p = urlBuf + 8; *p; ++p)
 			if (*p == L'\\')
 				*p = L'/';

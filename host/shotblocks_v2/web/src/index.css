@@ -1,0 +1,12 @@
+/* Global reset. Real theme tokens land when we port the timeline UI
+   (the legacy timeline.html and tokens.css have everything we need). */
+html, body {
+  margin: 0;
+  padding: 0;
+  background: #0d0d0d;
+  color: #e5e5e5;
+  height: 100%;
+  overflow: hidden;
+}
+* { box-sizing: border-box; }
+#root { height: 100vh; }
