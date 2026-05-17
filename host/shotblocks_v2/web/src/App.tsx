@@ -1,13 +1,19 @@
 import { useEffect, useRef } from 'react';
 import './icons.css';
+import './icons-block.css';
 import './App.css';
 import logoUrl from './icons/logo.svg';
 import { useHost } from './useHost';
+import { useOmDrop } from './useOmDrop';
 import { useStore } from './store';
 import { Ruler } from './components/Ruler';
 import { Playhead } from './components/Playhead';
 import { Scrollbar } from './components/Scrollbar';
 import { VaSplitter } from './components/VaSplitter';
+import { TrackHeader } from './components/TrackHeader';
+import { Lane } from './components/Lane';
+import { ToolPalette } from './components/ToolPalette';
+import { DropGhost } from './components/DropGhost';
 import { useElementSize } from './useElementSize';
 
 // Round 1 of the React port: layout grid + static chrome only.
@@ -128,8 +134,131 @@ function useVerticalZoomVars(
   }, [vAudio.vMin, vAudio.vMax, vAudio.min, vAudio.max, aSize.height]);
 }
 
+/** Headers column — video on top (rendered reversed: Vn..V1), audio
+ *  below, V/A splitter between. Driven entirely by store. */
+function HeadersColumn({
+  stackRef,
+  videosRef,
+}: {
+  stackRef: React.RefObject<HTMLDivElement | null>;
+  videosRef: React.RefObject<HTMLDivElement | null>;
+}) {
+  const videoTracks = useStore((s) => s.videoTracks);
+  const audioTracks = useStore((s) => s.audioTracks);
+  const videosOrdered = [...videoTracks].reverse();
+  return (
+    <div className="headers">
+      <div className="stack" ref={stackRef}>
+        <div className="stack__videos" id="headers-videos" ref={videosRef}>
+          {videosOrdered.map((t) => (
+            <TrackHeader key={t.id} track={t} side="video" />
+          ))}
+        </div>
+        <VaSplitter stackRef={stackRef} videosRef={videosRef} />
+        <div className="stack__audios" id="headers-audios">
+          {audioTracks.map((t) => (
+            <TrackHeader key={t.id} track={t} side="audio" />
+          ))}
+        </div>
+      </div>
+    </div>
+  );
+}
+
+/** Lanes stack — same structure as the headers, but renders lanes
+ *  with their clips. */
+function LanesStack({
+  stackRef,
+  videosRef,
+  audiosRef,
+}: {
+  stackRef: React.RefObject<HTMLDivElement | null>;
+  videosRef: React.RefObject<HTMLDivElement | null>;
+  audiosRef: React.RefObject<HTMLDivElement | null>;
+}) {
+  const videoTracks = useStore((s) => s.videoTracks);
+  const audioTracks = useStore((s) => s.audioTracks);
+  const videosOrdered = [...videoTracks].reverse();
+  return (
+    <div className="stack" ref={stackRef}>
+      <div className="stack__videos" id="lanes-videos" ref={videosRef}>
+        {videosOrdered.map((t) => (
+          <Lane key={t.id} track={t} side="video" />
+        ))}
+      </div>
+      <VaSplitter stackRef={stackRef} videosRef={videosRef} />
+      <div className="stack__audios" id="lanes-audios" ref={audiosRef}>
+        {audioTracks.map((t) => (
+          <Lane key={t.id} track={t} side="audio" />
+        ))}
+      </div>
+    </div>
+  );
+}
+
+/** Keeps the vertical scrollbar ranges in sync with track counts. When
+ *  a track is added, the side's `max` grows; existing scroll/zoom is
+ *  preserved unless the view was fully zoomed-out, in which case we
+ *  expand to cover the new range. */
+function useTrackCountSync() {
+  const videoTracks = useStore((s) => s.videoTracks);
+  const audioTracks = useStore((s) => s.audioTracks);
+
+  useEffect(() => {
+    const max = Math.max(1, videoTracks.length);
+    const s = useStore.getState();
+    const wasFull = s.vVideo.vMin === s.vVideo.min && s.vVideo.vMax === s.vVideo.max;
+    if (s.vVideo.max === max) return;
+    if (wasFull) {
+      useStore.setState({ vVideo: { min: 0, max, vMin: 0, vMax: max } });
+    } else {
+      useStore.setState({ vVideo: { ...s.vVideo, max } });
+    }
+  }, [videoTracks.length]);
+
+  useEffect(() => {
+    const max = Math.max(1, audioTracks.length);
+    const s = useStore.getState();
+    const wasFull = s.vAudio.vMin === s.vAudio.min && s.vAudio.vMax === s.vAudio.max;
+    if (s.vAudio.max === max) return;
+    if (wasFull) {
+      useStore.setState({ vAudio: { min: 0, max, vMin: 0, vMax: max } });
+    } else {
+      useStore.setState({ vAudio: { ...s.vAudio, max } });
+    }
+  }, [audioTracks.length]);
+}
+
+/** Suppress browser-level page zoom. Inside a docked DAW panel, Ctrl+
+ *  wheel and Ctrl++/Ctrl+-/Ctrl+0 should never scale the whole UI.
+ *  WebView2 also persists per-origin zoom between sessions, so we snap
+ *  any non-1 body zoom back to 1 on mount as a self-heal. */
+function usePageZoomSuppress() {
+  useEffect(() => {
+    function onWheel(ev: WheelEvent) {
+      if (ev.ctrlKey) ev.preventDefault();
+    }
+    function onKey(ev: KeyboardEvent) {
+      if (!ev.ctrlKey) return;
+      if (ev.key === '+' || ev.key === '-' || ev.key === '=' || ev.key === '0') {
+        ev.preventDefault();
+      }
+    }
+    window.addEventListener('wheel', onWheel, { passive: false });
+    window.addEventListener('keydown', onKey);
+    if (document.body) document.body.style.zoom = '1';
+    return () => {
+      window.removeEventListener('wheel', onWheel);
+      window.removeEventListener('keydown', onKey);
+    };
+  }, []);
+}
+
 function App() {
   useHost();
+  useOmDrop();
+  useTrackCountSync();
+  usePageZoomSuppress();
   const lanesAreaRef = useRef<HTMLDivElement | null>(null);
   const headersStackRef = useRef<HTMLDivElement | null>(null);
   const headersVideosRef = useRef<HTMLDivElement | null>(null);
@@ -185,20 +314,7 @@ function App() {
 
         {/* row 2, col 1 — tool palette + dB meter */}
         <div className="rail">
-          <div className="rail__tools" id="rail-tools">
-            <div className="rail__tool is-active" title="Select" data-tool="select" style={{ '--icon-w': '14px', '--icon-h': '14px' } as React.CSSProperties}>
-              <span className="icon icon--select" />
-            </div>
-            <div className="rail__tool" title="Razor" data-tool="razor" style={{ '--icon-w': '14px', '--icon-h': '14px', '--icon-rot': '45deg' } as React.CSSProperties}>
-              <span className="icon icon--razor" />
-            </div>
-            <div className="rail__tool" title="Pen" data-tool="pen" style={{ '--icon-w': '14px', '--icon-h': '14px' } as React.CSSProperties}>
-              <span className="icon icon--pen" />
-            </div>
-            <div className="rail__tool" title="Range" data-tool="range" style={{ '--icon-w': '15px', '--icon-h': '12px' } as React.CSSProperties}>
-              <span className="icon icon--range" />
-            </div>
-          </div>
+          <ToolPalette />
           <div className="rail__meter-wrap">
             <div className="rail__meter" title="dB meter">
               <div className="rail__meter-scale">
@@ -220,71 +336,22 @@ function App() {
           </div>
         </div>
 
-        {/* row 2, col 2 — track headers */}
-        <div className="headers">
-          <div className="stack" ref={headersStackRef}>
-            <div className="stack__videos" id="headers-videos" ref={headersVideosRef}>
-              <div className="track-header is-video" data-track="V1">
-                <div className="track-header__twirl">
-                  <span className="icon icon--triangle" style={{ '--icon-w': '8px', '--icon-h': '10px', '--icon-rot': '90deg' } as React.CSSProperties} />
-                </div>
-                <div className="track-header__lock-wrap">
-                  <span className="icon icon--lock" style={{ '--icon-w': '12px', '--icon-h': '12px' } as React.CSSProperties} />
-                </div>
-                <div className="track-header__chip-wrap">
-                  <div className="track-header__chip">V1</div>
-                </div>
-                <div className="track-header__right">
-                  <div className="track-header__right-col">
-                    <span className="icon icon--eye" style={{
-                      '--icon-w': '18px', '--icon-h': '18px',
-                      backgroundColor: 'var(--color-timeline-primary-highlight)',
-                    } as React.CSSProperties} />
-                    <div className="track-header__label-wrap">
-                      <div className="track-header__label">Video 1</div>
-                    </div>
-                  </div>
-                </div>
-              </div>
-            </div>
-            <VaSplitter stackRef={headersStackRef} videosRef={headersVideosRef} />
-            <div className="stack__audios" id="headers-audios">
-              <div className="track-header is-audio" data-track="A1">
-                <div className="track-header__twirl">
-                  <span className="icon icon--triangle" style={{ '--icon-w': '8px', '--icon-h': '10px', '--icon-rot': '90deg' } as React.CSSProperties} />
-                </div>
-                <div className="track-header__lock-wrap">
-                  <span className="icon icon--lock-locked" style={{ '--icon-w': '12px', '--icon-h': '12px' } as React.CSSProperties} />
-                </div>
-                <div className="track-header__chip-wrap">
-                  <div className="track-header__chip">A1</div>
-                </div>
-                <div className="track-header__right">
-                  <div className="track-header__right-col">
-                    <div className="track-header__icons-row"><span>M</span><span className="s">S</span></div>
-                    <div className="track-header__label-wrap">
-                      <div className="track-header__label">Audio 1</div>
-                    </div>
-                  </div>
-                </div>
-              </div>
-            </div>
-          </div>
-        </div>
+        {/* row 2, col 2 — track headers (rendered from store) */}
+        <HeadersColumn
+          stackRef={headersStackRef}
+          videosRef={headersVideosRef}
+        />
 
-        {/* row 2, col 3 — stage (lanes) */}
+        {/* row 2, col 3 — stage (lanes, rendered from store) */}
         <div className="stage">
           <div className="stage__edge-shadow" />
           <div className="lanes-area" id="lanes-area" ref={lanesAreaRef}>
-            <div className="stack" ref={lanesStackRef}>
-              <div className="stack__videos" id="lanes-videos" ref={lanesVideosRef}>
-                <div className="lane" data-track="V1" data-side="video" />
-              </div>
-              <VaSplitter stackRef={lanesStackRef} videosRef={lanesVideosRef} />
-              <div className="stack__audios" id="lanes-audios" ref={lanesAudiosRef}>
-                <div className="lane" data-track="A1" data-side="audio" />
-              </div>
-            </div>
+            <LanesStack
+              stackRef={lanesStackRef}
+              videosRef={lanesVideosRef}
+              audiosRef={lanesAudiosRef}
+            />
+            <DropGhost lanesAreaRef={lanesAreaRef} />
             <Playhead lanesAreaRef={lanesAreaRef} />
           </div>
         </div>

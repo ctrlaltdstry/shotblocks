@@ -1,0 +1,17 @@
+/* Shot-block icon masks. Vite resolves the SVG `url(...)` paths
+   into the bundle and the singleFile plugin inlines them as data URLs.
+   Keep these rules in a separate CSS module so they don't get tangled
+   with the bigger icons.css (which still serves the chrome icons). */
+
+.icon--block-camera {
+  -webkit-mask-image: url('./icons/block-camera.svg');
+          mask-image: url('./icons/block-camera.svg');
+}
+.icon--block-camera-off {
+  -webkit-mask-image: url('./icons/block-camera-off.svg');
+          mask-image: url('./icons/block-camera-off.svg');
+}
+.icon--block-waveform {
+  -webkit-mask-image: url('./icons/block-waveform.svg');
+          mask-image: url('./icons/block-waveform.svg');
+}

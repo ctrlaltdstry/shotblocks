@@ -75,6 +75,75 @@ static const Int32 ID_HOST_HTMLVIEW = 2001;
 
 
 // -----------------------------------------------------------------------------
+// Compute the inclusive [first, last] keyframe range of a BaseObject.
+// Walks the flat CTrack list (vector params like position/rotation are
+// already split into per-component CTracks in this list, no recursion
+// needed for the camera case). Also walks tags so the v1 shotblocks
+// rig — which animates via expression tags — surfaces its keys.
+//
+// Returns true and fills `outFirst` / `outLast` (in frames) if any
+// animation was found, false otherwise.
+// -----------------------------------------------------------------------------
+static Bool GetAnimatedFrameRange(BaseObject* op, Int32 fps,
+                                  Int32* outFirst, Int32* outLast)
+{
+	if (!op)
+		return false;
+	BaseTime first = BaseTime(1.0e30);
+	BaseTime last  = BaseTime(-1.0e30);
+	Bool found = false;
+
+	auto visitTracks = [&](CTrack* head) {
+		for (CTrack* t = head; t; t = t->GetNext())
+		{
+			CCurve* c = t->GetCurve(CCURVE::CURVE, false);
+			if (!c || c->GetKeyCount() == 0)
+				continue;
+			BaseTime s = c->GetStartTime();
+			BaseTime e = c->GetEndTime();
+			if (s < first)
+				first = s;
+			if (e > last)
+				last = e;
+			found = true;
+		}
+	};
+	// Animation contributing to a camera can live in three places:
+	//   1) The camera itself — object tracks + tag tracks (an Align to
+	//      Spline tag drives position via tag tracks, not object tracks).
+	//   2) Child objects under the camera — v1 rig has constraint nulls
+	//      below the camera whose tracks drive its pose.
+	//   3) Parent objects above the camera — a camera parented under
+	//      an animated null inherits the null's transform. Walk the
+	//      parent chain up to the document root; each parent's own
+	//      tracks AND tag tracks count.
+	auto visitObject = [&](BaseObject* o) {
+		visitTracks(o->GetFirstCTrack());
+		for (BaseTag* tag = o->GetFirstTag(); tag; tag = tag->GetNext())
+			visitTracks(tag->GetFirstCTrack());
+	};
+	visitObject(op);
+	// Descend into children (recursive — a v1 rig may have nested nulls).
+	auto visitTree = [&](BaseObject* o, auto& self) -> void {
+		visitObject(o);
+		for (BaseObject* ch = o->GetDown(); ch; ch = ch->GetNext())
+			self(ch, self);
+	};
+	for (BaseObject* ch = op->GetDown(); ch; ch = ch->GetNext())
+		visitTree(ch, visitTree);
+	// Ascend the parent chain.
+	for (BaseObject* p = op->GetUp(); p; p = p->GetUp())
+		visitObject(p);
+
+	if (!found)
+		return false;
+	*outFirst = first.GetFrame(fps);
+	*outLast  = last.GetFrame(fps);
+	return true;
+}
+
+
+// -----------------------------------------------------------------------------
 // Per-request work item handed from the HTTP worker thread to the main thread.
 // -----------------------------------------------------------------------------
 struct HttpRequest
@@ -313,6 +382,7 @@ public:
 		, _navigated(false)
 		, _serverStarted(false)
 		, _jsHandshakeDone(false)
+		, _hoverActive(false)
 		, _lastTimeChangedTickMs(0)
 		, _httpPort(0)
 	{}
@@ -357,101 +427,129 @@ public:
 		PostTick();
 	}
 
-	// Object Manager → timeline drag handler. We accept any dropped
-	// BaseList2D (cameras and the v1 shotblocks rig today; filter
-	// tightens later). On every BFM_DRAGRECEIVE while the cursor is
-	// over the HtmlViewer, show the accept cursor. On BFM_DRAG_FINISHED,
-	// forward the drop to JS as {kind:"om-drop", ...} so the UI can
-	// place a shot block on the right lane at the right frame.
+	// Object Manager → timeline drag handler.
 	//
-	// Coords: BFM_DRAG_SCREENX/Y are absolute screen pixels. JS gets
-	// raw screen coords plus the dialog's screen origin so it can
-	// translate to viewport-local space without guessing HiDPI scaling.
+	// Lifecycle: BFM_DRAGRECEIVE fires repeatedly during hover, then
+	// once more with BFM_DRAG_FINISHED on drop or BFM_DRAG_LOST on
+	// cancel/out-of-area.
+	//
+	// Outbound to JS:
+	//   om-hover  — every hover tick while over our area; carries the
+	//               cursor's viewport coords + items + each item's
+	//               animated frame range (so the JS ghost can match
+	//               the true source duration).
+	//   om-drop   — on FINISHED; same payload shape as om-hover.
+	//   om-cancel — when hover state transitions from "over us" to
+	//               "not over us" (drag continues elsewhere), so the
+	//               ghost can disappear.
+	//
+	// Coord conversion (Screen2Local + GetItemDim → viewport pixels)
+	// happens once and is reused for hover + drop. See memory
+	// webview2-screen-coords for the rationale.
 	Int32 Message(const BaseContainer& msg, BaseContainer& result) override
 	{
-		if (msg.GetId() == BFM_DRAGRECEIVE)
+		if (msg.GetId() != BFM_DRAGRECEIVE)
+			return GeDialog::Message(msg, result);
+
+		const Bool lost     = msg.GetBool(BFM_DRAG_LOST);
+		const Bool finished = msg.GetBool(BFM_DRAG_FINISHED);
+
+		const Bool overUs = !lost && CheckDropArea(ID_HOST_HTMLVIEW, msg, true, true);
+		if (!overUs)
 		{
-			const Bool lost     = msg.GetBool(BFM_DRAG_LOST);
-			const Bool finished = msg.GetBool(BFM_DRAG_FINISHED);
-
-			// Reject drags that aren't over our HtmlViewer area.
-			if (lost || !CheckDropArea(ID_HOST_HTMLVIEW, msg, true, true))
-				return 0;
-
-			// Pull the dragged item(s). Only proceed if it's an AtomArray
-			// holding at least one accepted type. Reject everything else
-			// up front so the cursor reflects "can't drop here."
-			Int32 type = 0;
-			void* obj  = nullptr;
-			GetDragObject(msg, &type, &obj);
-			if (type != DRAGTYPE_ATOMARRAY || !obj)
-				return 0;
-
-			AtomArray* arr = static_cast<AtomArray*>(obj);
-			if (arr->GetCount() == 0)
-				return 0;
-
-			// During hover (not finished), just paint the accept cursor.
-			if (!finished)
-				return SetDragDestination(MOUSE_POINT_HAND);
-
-			// FINISHED — actually deliver to JS.
-			// Convert absolute screen coords to coords inside the
-			// HtmlViewer viewport:
-			//   1) Screen2Local: screen → dialog-local (the dialog's
-			//      user-area origin). NOTE: Global2Local is screen →
-			//      C4D APP WINDOW local, which is NOT what we want.
-			//   2) Subtract the HtmlViewer's position within the dialog
-			//      via GetItemDim, leaving coords inside the viewport.
-			Int32 sx = msg.GetInt32(BFM_DRAG_SCREENX);
-			Int32 sy = msg.GetInt32(BFM_DRAG_SCREENY);
-			Screen2Local(&sx, &sy);
-			Int32 hvX = 0, hvY = 0, hvW = 0, hvH = 0;
-			if (GetItemDim(ID_HOST_HTMLVIEW, &hvX, &hvY, &hvW, &hvH))
-			{
-				sx -= hvX;
-				sy -= hvY;
-			}
-
-			// Build a JSON payload: {kind:"om-drop", screenX, screenY,
-			//                        items:[{name, type}, ...]}.
-			// (Object identity by name for now; switch to a stable ID
-			// like a BaseLink GUID when the model needs persistence.)
-			maxon::String items("["_s);
-			for (Int32 i = 0; i < arr->GetCount(); ++i)
-			{
-				C4DAtom* atom = arr->GetIndex(i);
-				BaseList2D* b2 = static_cast<BaseList2D*>(atom);
-				if (!b2)
-					continue;
-				if (i > 0)
-					items += ","_s;
-				char hdr[64];
-				_snprintf_s(hdr, sizeof(hdr), _TRUNCATE,
-					"{\"type\":%d,\"name\":\"", (int)b2->GetType());
-				items += maxon::String(hdr);
-				// Naive escape: names with " or \ will break this. Real
-				// JSON encoder when we add a JSON dependency. For now,
-				// C4D object names rarely contain those characters.
-				items += b2->GetName();
-				items += "\"}"_s;
-			}
-			items += "]"_s;
-
-			// viewportX/Y are coords inside the HtmlViewer's web viewport.
-			// JS can pass them straight to document.elementsFromPoint().
-			char head[256];
-			_snprintf_s(head, sizeof(head), _TRUNCATE,
-				"{\"kind\":\"om-drop\",\"viewportX\":%d,\"viewportY\":%d,\"items\":",
-				(int)sx, (int)sy);
-			maxon::String payload = maxon::String(head) + items + "}"_s;
-
-			if (_htmlView)
-				_htmlView->PostWebMessage(payload);
-			GePrint("[Shotblocks/v2] om-drop posted: "_s + payload);
-			return SetDragDestination(MOUSE_POINT_HAND);
+			// Drag left our area. If we were showing a ghost, tell JS
+			// to clear it.
+			if (_hoverActive && _htmlView)
+				_htmlView->PostWebMessage("{\"kind\":\"om-cancel\"}"_s);
+			_hoverActive = false;
+			return 0;
 		}
-		return GeDialog::Message(msg, result);
+
+		Int32 type = 0;
+		void* obj  = nullptr;
+		GetDragObject(msg, &type, &obj);
+		if (type != DRAGTYPE_ATOMARRAY || !obj)
+			return 0;
+		AtomArray* arr = static_cast<AtomArray*>(obj);
+		if (arr->GetCount() == 0)
+			return 0;
+
+		// Coord conversion: screen → dialog-local → HtmlViewer-viewport.
+		Int32 sx = msg.GetInt32(BFM_DRAG_SCREENX);
+		Int32 sy = msg.GetInt32(BFM_DRAG_SCREENY);
+		Screen2Local(&sx, &sy);
+		Int32 hvX = 0, hvY = 0, hvW = 0, hvH = 0;
+		if (GetItemDim(ID_HOST_HTMLVIEW, &hvX, &hvY, &hvW, &hvH))
+		{
+			sx -= hvX;
+			sy -= hvY;
+		}
+
+		// Build the items array. Per-item: type, name, and either
+		// inFrame/outFrame (animated range) or hasAnim:false.
+		BaseDocument* doc = GetActiveDocument();
+		const Int32 fps = doc ? doc->GetFps() : 30;
+		maxon::String items("["_s);
+		for (Int32 i = 0; i < arr->GetCount(); ++i)
+		{
+			C4DAtom* atom = arr->GetIndex(i);
+			BaseList2D* b2 = static_cast<BaseList2D*>(atom);
+			if (!b2)
+				continue;
+			if (i > 0)
+				items += ","_s;
+			char hdr[96];
+			_snprintf_s(hdr, sizeof(hdr), _TRUNCATE,
+				"{\"type\":%d,\"name\":\"", (int)b2->GetType());
+			items += maxon::String(hdr);
+			items += b2->GetName();
+			// Animated range if present. Only BaseObjects (3D objects)
+			// have keyframes worth walking; other BaseList2Ds skip.
+			Int32 firstFrame = 0, lastFrame = 0;
+			Bool hasAnim = false;
+			// IsInstanceOf(Obase) is C4D's "is this a 3D BaseObject"
+			// check (Cinema's base classes aren't polymorphic so
+			// dynamic_cast doesn't work). Tags, materials, etc. fall
+			// through to hasAnim = false.
+			if (b2->IsInstanceOf(Obase))
+			{
+				BaseObject* op = static_cast<BaseObject*>(b2);
+				hasAnim = GetAnimatedFrameRange(op, fps, &firstFrame, &lastFrame);
+			}
+			char tail[128];
+			if (hasAnim)
+			{
+				_snprintf_s(tail, sizeof(tail), _TRUNCATE,
+					"\",\"hasAnim\":true,\"inFrame\":%d,\"outFrame\":%d}",
+					(int)firstFrame, (int)lastFrame);
+			}
+			else
+			{
+				_snprintf_s(tail, sizeof(tail), _TRUNCATE, "\",\"hasAnim\":false}");
+			}
+			items += maxon::String(tail);
+		}
+		items += "]"_s;
+
+		const char* kind = finished ? "om-drop" : "om-hover";
+		char head[256];
+		_snprintf_s(head, sizeof(head), _TRUNCATE,
+			"{\"kind\":\"%s\",\"viewportX\":%d,\"viewportY\":%d,\"items\":",
+			kind, (int)sx, (int)sy);
+		maxon::String payload = maxon::String(head) + items + "}"_s;
+		if (_htmlView)
+			_htmlView->PostWebMessage(payload);
+
+		if (finished)
+		{
+			_hoverActive = false;
+			GePrint("[Shotblocks/v2] om-drop posted: "_s + payload);
+		}
+		else
+		{
+			_hoverActive = true;
+		}
+		return SetDragDestination(MOUSE_POINT_HAND);
 	}
 
 	Bool CoreMessage(Int32 id, const BaseContainer& msg) override
@@ -716,6 +814,7 @@ private:
 	bool                 _navigated;
 	bool                 _serverStarted;
 	bool                 _jsHandshakeDone;
+	bool                 _hoverActive;
 	Float                _lastTimeChangedTickMs;
 
 	LocalHttpServer      _server;

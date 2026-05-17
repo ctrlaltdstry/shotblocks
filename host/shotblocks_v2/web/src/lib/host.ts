@@ -11,11 +11,21 @@
 // channel — Maxon's SetWebMessageCallback and
 // SetResourceRequestInterceptCallback are both broken in C4D 2026.
 
+export interface OmItem {
+  type: number;
+  name: string;
+  hasAnim: boolean;
+  inFrame?: number;
+  outFrame?: number;
+}
+
 export type HostInbound =
   | { kind: 'hello'; port: number }
   | { kind: 'tick'; frame: number; fps: number; playing: boolean }
   | { kind: 'doc-info'; fps: number; docFrames: number; playRangeIn: number; playRangeOut: number }
-  | { kind: 'om-drop'; viewportX: number; viewportY: number; items: Array<{ type: number; name: string }> };
+  | { kind: 'om-hover';  viewportX: number; viewportY: number; items: OmItem[] }
+  | { kind: 'om-drop';   viewportX: number; viewportY: number; items: OmItem[] }
+  | { kind: 'om-cancel' };
 
 export type HostOutbound =
   | { kind: 'ping'; t: number }

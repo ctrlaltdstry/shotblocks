@@ -399,6 +399,106 @@ body.va-splitter-hover .stack__divider.is-grabbable,
   position: relative;
   overflow: hidden;
 }
+
+/* Drop ghost — Figma node 184:1320 "Ghosted" variant. Dark blue-black
+   fill, 1px primary-highlight blue border, and a layered blue glow
+   that fades softly outward. Centered shadows (offset 0,0) at six
+   blur+spread combinations build the diffuse outer halo. Cleared on
+   om-drop / om-cancel. */
+.drop-ghost {
+  position: absolute;
+  top: 0; bottom: 0;
+  background: #0c1621;
+  border: 1px solid var(--color-timeline-primary-highlight);
+  border-radius: 4px;
+  pointer-events: none;
+  z-index: 4;
+  box-shadow:
+    0 0 16.5px -10px var(--color-timeline-primary-highlight),
+    0 0 13.9px -5px  var(--color-timeline-primary-highlight),
+    0 0 52.7px -10px var(--color-timeline-primary-highlight),
+    0 0 93.8px -40px var(--color-timeline-primary-highlight),
+    0 0 160.8px -22px var(--color-timeline-primary-highlight),
+    0 0 250px -29px var(--color-timeline-primary-highlight);
+}
+
+/* Shot block — Figma node 173:1827 spec. State × type × height matrix
+   composed via class modifiers. Tall (>=32px lane): label top-left,
+   icon bottom-left. Thin (<32px lane): label fills row, icon right. */
+.shot-block {
+  position: absolute;
+  top: 0; bottom: 0;            /* fills full lane height; no inset */
+  border-radius: 4px;
+  overflow: hidden;
+  cursor: grab;
+  user-select: none;
+  font-family: Inter, sans-serif;
+  font-size: 10px;
+  font-weight: 400;
+  color: var(--color-grey-white);
+  background: var(--color-timeline-default-block);
+  display: flex; flex-direction: column;
+  justify-content: space-between;
+  padding: 6px 15px 5px;
+  /* Inset box-shadow gives a 1px white border that sits INSIDE the
+     block's box — required because the parent lane has overflow:hidden
+     (an outline outside the geometry gets clipped at the lane edges).
+     No layout shift on selection because inset shadow doesn't take
+     space. */
+  box-shadow: inset 0 0 0 0 transparent;
+  transition: box-shadow 0.08s ease;
+}
+.shot-block.is-selected { box-shadow: inset 0 0 0 1px var(--color-grey-white); }
+.shot-block.is-video    { background: var(--color-timeline-default-block); }
+.shot-block.is-video.is-selected   { background: var(--color-timeline-primary-highlight); }
+.shot-block.is-audio    { background: var(--color-timeline-audio); }
+.shot-block.is-audio.is-selected   { background: var(--color-timeline-audio-selected); }
+.shot-block.is-orphaned { background: var(--color-timeline-orphan-block); }
+.shot-block.is-orphaned.is-selected { background: var(--color-timeline-red, #ff3b30); }
+.shot-block.is-locked   { background: var(--color-timeline-locked); }
+
+.shot-block__label {
+  flex: 0 0 auto;
+  line-height: 1;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+  overflow: hidden;
+}
+.shot-block__icon-wrap {
+  flex: 0 0 auto;
+  display: flex; align-items: center;
+}
+
+/* Icons inside a shot block. Unselected = 30% white; selected = full
+   white. Audio uses a thicker stroke set already in the SVG. */
+.shot-block .icon {
+  background-color: rgba(255, 255, 255, 0.3);
+}
+.shot-block.is-selected .icon,
+.shot-block.is-orphaned .icon,
+.shot-block.is-orphaned.is-selected .icon {
+  background-color: var(--color-grey-white);
+}
+/* Each icon sized per Figma. */
+.shot-block .icon--block-camera     { width: 17px; height: 11px; }
+.shot-block .icon--block-camera-off { width: 17px; height: 14px; }
+.shot-block .icon--block-waveform   { width: 17px; height: 17px; }
+
+/* Tall layout: label top, icon bottom-left. */
+.shot-block:not(.is-thin) .shot-block__icon-wrap {
+  align-self: flex-start;
+}
+
+/* Thin layout: switch to a single row, icon at right. */
+.shot-block.is-thin {
+  flex-direction: row;
+  align-items: center;
+  padding: 4px 25px 4px 15px;
+  justify-content: space-between;
+}
+.shot-block.is-thin .shot-block__label {
+  flex: 1 1 0; min-width: 0;
+}
 .stack__videos .lane:first-child {
   border-top: 1px solid var(--color-grey-16);
 }
