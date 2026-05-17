@@ -39,13 +39,17 @@
     --rail-w:      50px;     /* Tool palette column */
     --headers-w:   200px;    /* Track header column (Figma: 200) */
     --ruler-h:     39px;
-    --track-h:     65px;     /* Track row height (Figma: 65) */
+    --track-h:     65px;     /* Track row height (Figma: 65) — base height */
+    --video-track-h: 65px;   /* Per-side height, driven by vertical zoom */
+    --audio-track-h: 65px;
     --va-divider-h: 4px;       /* visible gap; borders are NOT inside this */
     /* Scrollbar gutter is 4px wider/taller than the visible pill, so the
        pill has 4px breathing room from the dialog edge. */
     --scrollbar-sz:      19px;    /* gutter width/height (pill + 4px pad) */
     --scrollbar-pill-sz: 15px;    /* visible pill thickness */
     --scrollbar-end-sz:  15px;    /* end-dot diameter */
+    --scrollbar-end-inset: 0px;   /* extra inset past dot-radius. 0 = dot
+                                     outer edge flush with pill end. */
 
     font-family: Inter, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
   }
@@ -146,13 +150,29 @@
   .utilstrip__icon:hover .icon { background-color: var(--color-grey-50); }
   .utilstrip__icon.is-active .icon { background-color: var(--color-timeline-primary-highlight); }
 
+  /* Ruler lives in the stage column; an inner band matches the 4px right
+     inset of .lanes-area so ruler ticks and the playhead derive from the
+     exact same pixel width (lanes-area width). The outer .ruler-row keeps
+     the grey-16 background extended across the full stage column so the
+     ruler reads as one continuous bar. */
   .ruler-row {
-    grid-column: 3 / span 2; grid-row: 1;
+    grid-column: 3; grid-row: 1;
     background: var(--color-grey-16);
     border-bottom: 1px solid var(--color-grey-16);
     position: relative;
     overflow: hidden;
     z-index: 2;   /* above .headers-shadow so the shadow doesn't bleed up */
+  }
+  .ruler-row__inner {
+    position: absolute;
+    inset: 0;             /* match .lanes-area — no inset; both span the
+                             full stage column so the V/A seam is
+                             continuous across into the v-gutter. */
+  }
+  .ruler-row__gutter-cap {
+    grid-column: 4; grid-row: 1;
+    background: var(--color-grey-10);
+    border-bottom: 1px solid var(--color-grey-16);
   }
   .ruler__numbers,
   .ruler__ticks {
@@ -217,6 +237,12 @@
   }
   .rail__tool {
     width: 28px; height: 28px;
+    min-width: 28px; min-height: 28px;
+    max-width: 28px; max-height: 28px;
+    flex: 0 0 28px;
+    box-sizing: border-box;
+    padding: 0;
+    border: 0;
     display: flex; align-items: center; justify-content: center;
     cursor: pointer;
     border-radius: 6px;
@@ -350,17 +376,34 @@
     z-index: 1;
   }
 
-  /* Centred stack pattern: video tracks above the divider grow upward,
-     audio tracks below grow downward. Mirror in the stage's .lanes-area. */
+  /* Centred stack pattern: video tracks above the divider grow upward
+     (pinned to its top edge), audio tracks below grow downward (pinned
+     to its top edge). Mirror in the stage's .lanes-area.
+     The divider is draggable — see attachVaSplitter() in the script.
+     `--va-video-share` and `--va-audio-share` are flex-grow ratios on
+     the slack regions; default 1/1 = centered. JS rewrites them as the
+     user drags. Both .headers and .lanes-area read the same vars, so
+     the headers + lanes stay vertically locked through every drag. */
   .stack {
     flex: 1 1 auto;
     display: flex; flex-direction: column;
-    justify-content: center;
     min-height: 0;
   }
-  .stack__videos,
-  .stack__audios {
+  .stack__videos {
+    flex: 1 1 0;
+    min-height: 0;
+    flex-grow: var(--va-video-share, 1);
     display: flex; flex-direction: column;
+    justify-content: flex-end;
+    overflow: hidden;
+  }
+  .stack__audios {
+    flex: 1 1 0;
+    min-height: 0;
+    flex-grow: var(--va-audio-share, 1);
+    display: flex; flex-direction: column;
+    justify-content: flex-start;
+    overflow: hidden;
   }
   .stack__divider {
     /* 4px visible gap + 1px border-bottom (the only stroke at the V/A
@@ -371,6 +414,41 @@
     background: var(--color-grey-7);
     box-sizing: content-box;     /* keep the 4px visible regardless of border */
     border-bottom: 1px solid var(--color-grey-16);
+  }
+  /* Both the headers-column divider and the lanes-area divider are
+     draggable splitter handles. They write the same :root vars, so the
+     two columns stay locked through every drag.
+     Hover/drag affordance: full 4px painted with blue dashes on grey-7,
+     reading as a "grabbable handle." The divider's own geometry stays
+     a clean 4px (no layout shift on hover) and the surrounding lane
+     borders sit on top — the lane above contributes its own
+     border-bottom (drawn by the lane element, which is a flex sibling
+     above us in the document), and the divider's own border-bottom is
+     OUTSIDE the 4px background box thanks to box-sizing:content-box. */
+  .stack__divider.is-grabbable {
+    cursor: ns-resize;
+  }
+  /* Hover/drag state: full 4px solid primary-highlight blue with a
+     diagonal hatch overlay and a 1px darker-blue outline (Figma node
+     168:1332). The hatch is a tiled SVG (white lines at 30% opacity,
+     ~4.6px pitch, `\` direction). The outline is a 1px #01438B inset
+     box-shadow so it doesn't shift the divider's geometry.
+     .is-hover is applied to BOTH dividers (headers + lanes) by JS, so
+     hovering either span lights up the whole horizontal V/A seam. */
+  .stack__divider.is-grabbable.is-dragging,
+  .stack__divider.is-grabbable.is-hover {
+    background-color: var(--color-timeline-primary-highlight);
+    background-image: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='5' height='5' viewBox='0 0 5 5'><line x1='5' y1='0' x2='0' y2='5' stroke='%23ffffff' stroke-opacity='0.3' stroke-width='1'/></svg>");
+    background-size: 5px 5px;
+    background-repeat: repeat;
+    box-shadow: inset 0 0 0 1px #01438B;
+    /* Keep the border-bottom slot in layout (so hovering doesn't shift
+       the lanes by 1px) but make it transparent AND clip the hatched
+       background to the padding box so the hatch doesn't paint into
+       that 1px border slot. Otherwise the hatch shows through below
+       the dark-blue shadow's bottom edge and reads as a doubled stroke. */
+    border-bottom-color: transparent;
+    background-clip: padding-box;
   }
 
   /* Track header — Figma nodes 152:1188 (Video) / 152:1208 (Audio).
@@ -476,11 +554,11 @@
 
   /* The lanes-area fills the whole stage so its centered stack lines up
      with the headers column's centered stack (both occupy grid-row 2).
-     A small right inset matches the Figma's gap between the lanes and
-     the v-scrollbar gutter, so the grey-12 lane bg doesn't butt directly
-     against the v-gutter's grey-10 (which would show as a vertical seam). */
+     No right inset — the lanes butt directly against the v-gutter so
+     the V/A divider seam is continuous across into the gutter without
+     a visible grey-10 gap interrupting it. */
   .lanes-area {
-    position: absolute; inset: 0 4px 0 0;
+    position: absolute; inset: 0;
     display: flex; flex-direction: column;
     min-height: 0;
   }
@@ -493,12 +571,17 @@
   .stack__videos .lane:first-child {
     border-top: 1px solid var(--color-grey-16);
   }
+  /* Per-side track height — driven by the vertical scrollbar zoom for
+     each side. Video and audio sides resize independently. */
+  .stack__videos .lane,
+  .track-header.is-video { flex-basis: var(--video-track-h); }
+  .stack__audios .lane,
+  .track-header.is-audio { flex-basis: var(--audio-track-h); }
 
   /* Bottom horizontal scrollbar — sits in its own grid row under .stage */
   .h-scroll {
     grid-column: 3; grid-row: 3;
     background: var(--color-grey-10);
-    border-top: 1px solid var(--color-grey-16);
     position: relative;
     z-index: 2;   /* above .headers-shadow so the shadow doesn't bleed down */
   }
@@ -512,11 +595,27 @@
     left: 0; right: 0;
     top: 0;
     height: var(--scrollbar-pill-sz);
+    background: var(--color-grey-10);
+  }
+  /* The visible "thumb" — middle drag handle. JS sets `left` and
+     `right` from the scrollbar's visible-window state. */
+  .scrollbar-thumb {
+    position: absolute;
+    top: 0; bottom: 0;
+    left: 0; right: 0;
     background: var(--color-grey-16);
     border-radius: calc(var(--scrollbar-pill-sz) / 2);
-    display: flex; align-items: center; justify-content: space-between;
+    cursor: grab;
   }
+  .scrollbar-thumb.is-dragging { cursor: grabbing; }
+  .scrollbar-thumb:hover { background: rgba(255, 255, 255, 0.1); }
+  /* End-handle dots sit at the thumb's two edges (not the track's). JS
+     positions them with the thumb so they ARE the visible window edges
+     — dragging one resizes the window from that side (zoom anchored
+     to the opposite side). */
   .scrollbar-end {
+    position: absolute;
+    top: 50%; transform: translate(-50%, -50%);
     box-sizing: border-box;
     width: var(--scrollbar-end-sz);
     height: var(--scrollbar-end-sz);
@@ -524,36 +623,44 @@
     background: var(--color-grey-12);
     border: 2px solid var(--color-grey-24);
     cursor: ew-resize;
-    flex: 0 0 auto;
     transition: border-color 0.12s ease;
+    z-index: 2;
   }
-  .scrollbar-end:hover {
+  .scrollbar-end:hover,
+  .scrollbar-end.is-dragging {
     border-color: var(--color-timeline-primary-highlight);
   }
 
-  /* Playhead spans the full lanes-area; absolute-positioned, ignores layout */
-  /* Playhead: red vertical line through the lanes, with the Figma blue
-     triangle handle (playhead-handle.svg) at the top. The handle floats
-     up into the ruler via negative top so its apex meets the ruler/lanes
-     boundary. Line color is Figma's #C94B4B (muted red). */
-  .playhead {
+  /* Playhead is split across two parents so each piece gets clipped to
+     its own column:
+       - .playhead-line lives inside .lanes-area; its left:0..lanesWidth
+         range is already perfectly clamped, so no overflow concerns.
+       - .ruler__handle lives inside .ruler-row-inner; the ruler's
+         overflow:hidden clips the triangle when it sits near the left
+         edge (so it never overlaps the track-headers / utilities column).
+     Both elements are positioned by JS using the same px-per-frame.
+     Line color is Figma's #C94B4B (muted red); the SVG handle is
+     primary-highlight blue. pointer-events:none so they don't intercept
+     ruler-scrub drags. */
+  .playhead-line {
     position: absolute;
     top: 0; bottom: 0;
-    left: 50%;                /* placeholder — JS will set this from --playhead-frame later */
+    left: 0;
     width: 1px;
     background: #c94b4b;
     pointer-events: none;
     z-index: 5;
-    overflow: visible;
   }
-  .playhead__handle {
+  .ruler__handle {
     position: absolute;
-    top: -16px;               /* handle's bottom apex sits at lanes-area top */
-    left: -9px;               /* half of handle width (18) */
+    bottom: 0;                /* sit on the ruler/lanes boundary */
+    left: 0;                  /* JS sets translateX(-50%) via transform */
     width: 18.58px;
     height: 16px;
     display: block;
     pointer-events: none;
+    transform: translateX(-50%);
+    z-index: 6;
   }
 
   /* ---- right gutter (vertical scrollbars, split by V/A divider position) ---- */
@@ -562,6 +669,20 @@
     grid-column: 4; grid-row: 2;
     background: var(--color-grey-10);
     display: flex; flex-direction: column;
+    min-height: 0;
+  }
+  /* The v-gutter's two scrollbars use the same flex-share rule as the
+     lane stacks so they follow the V/A splitter — drag the divider and
+     the video/audio scrollbar regions resize in lockstep with the
+     lanes they serve. */
+  .v-gutter > .v-scroll:first-of-type {
+    flex: 1 1 0;
+    flex-grow: var(--va-video-share, 1);
+    min-height: 0;
+  }
+  .v-gutter > .v-scroll:last-of-type {
+    flex: 1 1 0;
+    flex-grow: var(--va-audio-share, 1);
     min-height: 0;
   }
   /* Vertical scrollbar — same component as horizontal, rotated 90°.
@@ -573,13 +694,24 @@
     display: flex; justify-content: flex-start;
   }
   .v-scroll__track {
+    position: relative;
     width: var(--scrollbar-pill-sz);
     height: 100%;
+    background: var(--color-grey-10);
+  }
+  .v-scroll__thumb {
+    position: absolute;
+    left: 0; right: 0;
+    top: 0; bottom: 0;
     background: var(--color-grey-16);
     border-radius: calc(var(--scrollbar-pill-sz) / 2);
-    display: flex; flex-direction: column; align-items: center; justify-content: space-between;
+    cursor: grab;
   }
+  .v-scroll__thumb.is-dragging { cursor: grabbing; }
+  .v-scroll__thumb:hover { background: rgba(255, 255, 255, 0.1); }
   .v-scroll__end {
+    position: absolute;
+    left: 50%; transform: translate(-50%, -50%);
     box-sizing: border-box;
     width: var(--scrollbar-end-sz);
     height: var(--scrollbar-end-sz);
@@ -587,10 +719,11 @@
     background: var(--color-grey-12);
     border: 2px solid var(--color-grey-24);
     cursor: ns-resize;
-    flex: 0 0 auto;
     transition: border-color 0.12s ease;
+    z-index: 2;
   }
-  .v-scroll__end:hover {
+  .v-scroll__end:hover,
+  .v-scroll__end.is-dragging {
     border-color: var(--color-timeline-primary-highlight);
   }
 
@@ -637,23 +770,27 @@
     </div>
 
     <div class="ruler-row" id="ruler-row">
-      <div class="ruler__numbers" id="ruler-numbers"></div>
-      <div class="ruler__ticks"   id="ruler-ticks"></div>
+      <div class="ruler-row__inner" id="ruler-row-inner">
+        <div class="ruler__numbers" id="ruler-numbers"></div>
+        <div class="ruler__ticks"   id="ruler-ticks"></div>
+        <img class="ruler__handle" id="playhead-handle" src="icons/playhead-handle.svg" alt="" />
+      </div>
     </div>
+    <div class="ruler-row__gutter-cap"></div>
 
     <!-- row 2 -->
     <div class="rail">
-      <div class="rail__tools">
-        <div class="rail__tool is-active" title="Select" style="--icon-w:14px;--icon-h:14px">
+      <div class="rail__tools" id="rail-tools">
+        <div class="rail__tool is-active" title="Select" data-tool="select" style="--icon-w:14px;--icon-h:14px">
           <span class="icon icon--select" aria-label="Select"></span>
         </div>
-        <div class="rail__tool" title="Razor" style="--icon-w:16px;--icon-h:16px;--icon-rot:45deg">
+        <div class="rail__tool" title="Razor" data-tool="razor" style="--icon-w:14px;--icon-h:14px;--icon-rot:45deg">
           <span class="icon icon--razor" aria-label="Razor"></span>
         </div>
-        <div class="rail__tool" title="Pen" style="--icon-w:14px;--icon-h:14px">
+        <div class="rail__tool" title="Pen" data-tool="pen" style="--icon-w:14px;--icon-h:14px">
           <span class="icon icon--pen" aria-label="Pen"></span>
         </div>
-        <div class="rail__tool" title="Range" style="--icon-w:15px;--icon-h:12px">
+        <div class="rail__tool" title="Range" data-tool="range" style="--icon-w:15px;--icon-h:12px">
           <span class="icon icon--range" aria-label="Range"></span>
         </div>
       </div>
@@ -681,86 +818,46 @@
 
     <div class="headers">
       <div class="stack">
-        <div class="stack__videos" id="headers-videos">
-          <div class="track-header is-video">
-            <div class="track-header__twirl"><span class="icon icon--triangle" style="--icon-w:8px;--icon-h:10px;--icon-rot:90deg"></span></div>
-            <div class="track-header__lock-wrap">
-              <span class="icon icon--lock" style="--icon-w:12px;--icon-h:12px"></span>
-            </div>
-            <div class="track-header__chip-wrap">
-              <div class="track-header__chip">V1</div>
-            </div>
-            <div class="track-header__right">
-              <div class="track-header__right-col">
-                <span class="icon icon--eye" style="--icon-w:18px;--icon-h:18px;background-color:var(--color-timeline-primary-highlight)"></span>
-                <div class="track-header__label-wrap">
-                  <div class="track-header__label">Video 1</div>
-                </div>
-              </div>
-            </div>
-          </div>
-        </div>
-        <div class="stack__divider"></div>
-        <div class="stack__audios" id="headers-audios">
-          <div class="track-header is-audio">
-            <div class="track-header__twirl"><span class="icon icon--triangle" style="--icon-w:8px;--icon-h:10px;--icon-rot:90deg"></span></div>
-            <div class="track-header__lock-wrap">
-              <span class="icon icon--lock-locked" style="--icon-w:12px;--icon-h:12px"></span>
-            </div>
-            <div class="track-header__chip-wrap">
-              <div class="track-header__chip">A1</div>
-            </div>
-            <div class="track-header__right">
-              <div class="track-header__right-col">
-                <div class="track-header__icons-row"><span>M</span><span class="s">S</span></div>
-                <div class="track-header__label-wrap">
-                  <div class="track-header__label">Audio 1</div>
-                </div>
-              </div>
-            </div>
-          </div>
-
-        </div>
+        <div class="stack__videos" id="headers-videos"></div>
+        <div class="stack__divider" id="headers-divider"></div>
+        <div class="stack__audios" id="headers-audios"></div>
       </div>
     </div>
 
     <div class="stage">
       <div class="stage__edge-shadow"></div>
-      <div class="lanes-area">
+      <div class="lanes-area" id="lanes-area">
         <div class="stack">
-          <div class="stack__videos" id="lanes-videos">
-            <div class="lane"></div>
-          </div>
-          <div class="stack__divider"></div>
-          <div class="stack__audios" id="lanes-audios">
-            <div class="lane"></div>
-          </div>
+          <div class="stack__videos" id="lanes-videos"></div>
+          <div class="stack__divider" id="lanes-divider"></div>
+          <div class="stack__audios" id="lanes-audios"></div>
         </div>
-        <div class="playhead">
-          <img class="playhead__handle" src="icons/playhead-handle.svg" alt="" />
-        </div>
+        <div class="playhead-line" id="playhead-line"></div>
       </div>
     </div>
 
     <div class="h-scroll">
-      <div class="scrollbar-track">
-        <div class="scrollbar-end" title="Zoom from left"></div>
-        <div class="scrollbar-end" title="Zoom from right"></div>
+      <div class="scrollbar-track" id="h-scroll-track">
+        <div class="scrollbar-thumb" id="h-scroll-thumb"></div>
+        <div class="scrollbar-end" id="h-scroll-end-left" title="Zoom from left"></div>
+        <div class="scrollbar-end" id="h-scroll-end-right" title="Zoom from right"></div>
       </div>
     </div>
 
     <div class="v-gutter">
       <div class="v-scroll" title="Video tracks scroll/zoom">
-        <div class="v-scroll__track">
-          <div class="v-scroll__end is-top"></div>
-          <div class="v-scroll__end is-bottom"></div>
+        <div class="v-scroll__track" id="v-video-track">
+          <div class="v-scroll__thumb" id="v-video-thumb"></div>
+          <div class="v-scroll__end" id="v-video-end-top"></div>
+          <div class="v-scroll__end" id="v-video-end-bottom"></div>
         </div>
       </div>
-      <div class="v-gutter__divider"></div>
+      <div class="stack__divider v-gutter__divider" id="vgutter-divider"></div>
       <div class="v-scroll" title="Audio tracks scroll/zoom">
-        <div class="v-scroll__track">
-          <div class="v-scroll__end is-top"></div>
-          <div class="v-scroll__end is-bottom"></div>
+        <div class="v-scroll__track" id="v-audio-track">
+          <div class="v-scroll__thumb" id="v-audio-thumb"></div>
+          <div class="v-scroll__end" id="v-audio-end-top"></div>
+          <div class="v-scroll__end" id="v-audio-end-bottom"></div>
         </div>
       </div>
     </div>
@@ -769,44 +866,584 @@
 
 <script>
 (function () {
-  // Minimal JS: just render the ruler ticks/numbers + keep the bridge alive.
-  // NOTE: JS→C++ via window.chrome.webview.postMessage() doesn't work in
-  // C4D 2026's HtmlViewerCustomGui (silently dropped). The C++→JS direction
-  // works fine. When we need JS→C++ we'll use a fetch() channel intercepted
-  // on the C++ side via SetResourceRequestInterceptCallback.
   const $ = (id) => document.getElementById(id);
 
-  function renderRuler() {
-    const ticks = $('ruler-ticks');
-    const nums  = $('ruler-numbers');
-    if (!ticks || !nums) return;
+  // Authoritative state pushed from C++ via PostWebMessage. Visible
+  // window is driven by the horizontal scrollbar (state.h.vMin..vMax in
+  // frames); pan/zoom of the lanes vertically is driven by the v-video
+  // and v-audio scrollbars (units are "track slots").
+  const state = {
+    fps: 30,
+    docFrames: 150,
+    currentFrame: 0,
+    playing: false,
+    // Scrollbar state: vMin..vMax is the visible window over min..max.
+    h:      { min: 0, max: 150, vMin: 0, vMax: 150 },
+    vVideo: { min: 0, max: 1,   vMin: 0, vMax: 1   },
+    vAudio: { min: 0, max: 1,   vMin: 0, vMax: 1   },
+    // Track lists. Index 0 = closest to the V/A divider (lowest number
+    // for video, lowest number for audio). New tracks are added at the
+    // outer ends (top of video stack, bottom of audio stack).
+    videoTracks: [{ id: 1, name: 'Video 1' }],
+    audioTracks: [{ id: 1, name: 'Audio 1' }],
+  };
+
+  function pad2(n) { return (n < 10 ? '0' : '') + n; }
+
+  function formatTimecode(frame, fps) {
+    if (!fps || fps <= 0) return '00:00:00:00';
+    const f  = Math.max(0, frame | 0);
+    const ff = f % fps;
+    const ts = Math.floor(f / fps);
+    const ss = ts % 60;
+    const mm = Math.floor(ts / 60) % 60;
+    const hh = Math.floor(ts / 3600);
+    return pad2(hh) + ':' + pad2(mm) + ':' + pad2(ss) + ':' + pad2(ff);
+  }
+
+  // Pick a label step that keeps numbers readable at the current density.
+  // Minor ticks land at every step/4, majors at every step, labels at every step.
+  function pickFrameStep(pxPerFrame) {
+    const candidates = [1, 2, 4, 8, 16, 32, 64, 128, 256, 512, 1024];
+    const minLabelPx = 36;
+    for (const s of candidates) {
+      if (s * pxPerFrame >= minLabelPx) return s;
+    }
+    return candidates[candidates.length - 1];
+  }
+
+  function layout() {
+    const rulerRow = $('ruler-row');
+    const ticks    = $('ruler-ticks');
+    const nums     = $('ruler-numbers');
+    if (!rulerRow || !ticks || !nums) return;
+
+    const inner = $('ruler-row-inner');
+    const width = (inner || rulerRow).getBoundingClientRect().width;
+    const vMin = state.h.vMin;
+    const vMax = state.h.vMax;
+    const visibleSpan = Math.max(1, vMax - vMin);
+    const pxPerFrame = width / visibleSpan;
+
+    const step = pickFrameStep(pxPerFrame);
+    const minorStep = Math.max(1, step / 4) | 0;
+
+    // Snap visible-start to the nearest minor step so ticks land on
+    // round frame numbers regardless of pan/zoom offset.
+    const firstTick = Math.ceil(vMin / minorStep) * minorStep;
+    const lastTick  = Math.floor(vMax / minorStep) * minorStep;
+
     ticks.innerHTML = '';
     nums.innerHTML  = '';
-
-    // Ruler width = (stage area width). With auto-fit, we lay out 0..150
-    // frames across the available width; minor every 2 frames, major every 8,
-    // labels every 8.
-    const rect = $('ruler-row').getBoundingClientRect();
-    const docFrames = 150;
-    const pxPerFrame = rect.width / docFrames;
-
-    for (let f = 0; f <= docFrames; f += 2) {
+    for (let f = firstTick; f <= lastTick; f += minorStep) {
       const tick = document.createElement('div');
-      tick.className = 'ruler__tick ' + (f % 8 === 0 ? 'is-major' : 'is-minor');
-      tick.style.left = (f * pxPerFrame) + 'px';
+      tick.className = 'ruler__tick ' + (f % step === 0 ? 'is-major' : 'is-minor');
+      tick.style.left = ((f - vMin) * pxPerFrame) + 'px';
       ticks.appendChild(tick);
     }
-    for (let f = 2; f <= docFrames; f += 8) {
+    const firstLabel = Math.ceil(vMin / step) * step;
+    const lastLabel  = Math.floor(vMax / step) * step;
+    const labelFrames = new Set();
+    labelFrames.add(Math.max(0, Math.ceil(vMin)));
+    for (let f = firstLabel; f <= lastLabel; f += step) labelFrames.add(f);
+    labelFrames.add(Math.floor(vMax));
+    const sorted = [...labelFrames].sort((a, b) => a - b);
+    for (const f of sorted) {
       const n = document.createElement('div');
       n.className = 'ruler__number';
       n.textContent = f;
-      n.style.left = (f * pxPerFrame) + 'px';
+      const x = (f - vMin) * pxPerFrame;
+      // Anchor the first and last label to the ruler's left/right edge
+      // so they don't get clipped by overflow:hidden.
+      if (f === sorted[0]) {
+        n.style.left = '0px';
+        n.style.transform = 'none';
+      } else if (f === sorted[sorted.length - 1]) {
+        n.style.left = (width - 1) + 'px';
+        n.style.transform = 'translateX(-100%)';
+      } else {
+        n.style.left = x + 'px';
+      }
       nums.appendChild(n);
+    }
+
+    positionPlayhead(pxPerFrame);
+  }
+
+  function positionPlayhead(pxPerFrameMaybe) {
+    const line = $('playhead-line');
+    const handle = $('playhead-handle');
+    const lanes = document.querySelector('.lanes-area');
+    if (!line || !handle || !lanes) return;
+    const vMin = state.h.vMin;
+    const vMax = state.h.vMax;
+    const visibleSpan = Math.max(1, vMax - vMin);
+    const pxPerFrame = pxPerFrameMaybe != null
+      ? pxPerFrameMaybe
+      : (lanes.getBoundingClientRect().width / visibleSpan);
+    const f = state.currentFrame;
+    const x = (f - vMin) * pxPerFrame;
+    // Hide the playhead when it's outside the visible window so it
+    // doesn't smear against the left/right edges.
+    const visible = f >= vMin && f <= vMax;
+    line.style.display = visible ? '' : 'none';
+    handle.style.display = visible ? '' : 'none';
+    line.style.left = x + 'px';
+    handle.style.left = x + 'px';
+  }
+
+  function updateTimecode() {
+    const tc = $('timecode');
+    if (tc) tc.textContent = formatTimecode(state.currentFrame, state.fps);
+  }
+
+  // Ruler scrubbing: pointer down + drag anywhere on the ruler band sets
+  // the playhead and seeks the C4D document. Optimistically updates the
+  // local playhead so the UI feels instant; the C++-side EVMSG_TIMECHANGED
+  // round-trip arrives a frame or two later and overwrites with the
+  // authoritative frame (which should match).
+  function attachScrub() {
+    const inner = $('ruler-row-inner');
+    if (!inner) return;
+    inner.style.cursor = 'ew-resize';
+
+    let dragging = false;
+    let lastSentFrame = -1;
+
+    function frameFromEvent(ev) {
+      const rect = inner.getBoundingClientRect();
+      const x = Math.max(0, Math.min(rect.width, ev.clientX - rect.left));
+      const docFrames = Math.max(1, state.docFrames);
+      const f = Math.round((x / rect.width) * docFrames);
+      return Math.max(0, Math.min(docFrames, f));
+    }
+
+    function seek(f) {
+      if (f === lastSentFrame) return;
+      lastSentFrame = f;
+      state.currentFrame = f;
+      positionPlayhead();
+      updateTimecode();
+      sendToHost({ kind: 'seek', frame: f }).catch(err => {
+        console.warn('[sb] seek failed:', err && err.message);
+      });
+    }
+
+    inner.addEventListener('pointerdown', (ev) => {
+      if (ev.button !== 0) return;
+      dragging = true;
+      try { inner.setPointerCapture(ev.pointerId); } catch (e) {}
+      seek(frameFromEvent(ev));
+      ev.preventDefault();
+    });
+    inner.addEventListener('pointermove', (ev) => {
+      if (!dragging) return;
+      seek(frameFromEvent(ev));
+    });
+    function endDrag(ev) {
+      if (!dragging) return;
+      dragging = false;
+      try { inner.releasePointerCapture(ev.pointerId); } catch (e) {}
+    }
+    inner.addEventListener('pointerup', endDrag);
+    inner.addEventListener('pointercancel', endDrag);
+  }
+
+  // Tool palette: exactly one tool active at a time. Click sets local
+  // `is-active` immediately and tells C++ which tool the user picked.
+  // C++ has no behavior wired to the tool yet — it just acknowledges.
+  function attachToolPalette() {
+    const tools = $('rail-tools');
+    if (!tools) return;
+    tools.addEventListener('click', (ev) => {
+      const target = ev.target.closest('.rail__tool');
+      if (!target || !tools.contains(target)) return;
+      const id = target.getAttribute('data-tool');
+      if (!id) return;
+      for (const el of tools.querySelectorAll('.rail__tool')) {
+        el.classList.toggle('is-active', el === target);
+      }
+      sendToHost({ kind: 'tool', id }).catch(err => {
+        console.warn('[sb] tool send failed:', err && err.message);
+      });
+    });
+  }
+
+  // V/A splitter: the divider lives in two places — the headers column
+  // and the lanes area — and EITHER is grabbable. Both write the same
+  // :root vars (--va-video-share / --va-audio-share), which the
+  // flex-grow rules read for both stacks, so they stay vertically
+  // locked through the drag. Snaps to dead-center within 6px.
+  function attachVaSplitter() {
+    const SNAP_PX = 6;
+
+    function setShare(videoShare01) {
+      const v = Math.max(0, Math.min(1, videoShare01));
+      document.documentElement.style.setProperty('--va-video-share', String(v));
+      document.documentElement.style.setProperty('--va-audio-share', String(1 - v));
+      // V/A drag changes the v-scrollbar track lengths even though
+      // scrollbar state didn't change — reposition thumbs + end-dots.
+      if (typeof updateScrollbars === 'function') updateScrollbars();
+    }
+
+    function bind(divider, videosEl) {
+      if (!divider || !videosEl) return;
+      divider.classList.add('is-grabbable');
+
+      let dragging = false;
+      let startY = 0;
+      let startVideoPx = 0;     // video region height at drag start
+      let regionPx = 0;         // (stack height - divider height) at drag start
+
+      divider.addEventListener('pointerdown', (ev) => {
+        if (ev.button !== 0) return;
+        const dividerRect = divider.getBoundingClientRect();
+        // The "region" is the available stack height excluding the
+        // divider itself. videosEl's parent is the .stack we live in,
+        // so its height matches the stack height.
+        const stack = divider.parentElement;
+        const stackRect = stack.getBoundingClientRect();
+        startY = ev.clientY;
+        startVideoPx = videosEl.getBoundingClientRect().height;
+        regionPx = Math.max(1, stackRect.height - dividerRect.height);
+        dragging = true;
+        divider.classList.add('is-dragging');
+        try { divider.setPointerCapture(ev.pointerId); } catch (e) {}
+        ev.preventDefault();
+      });
+      divider.addEventListener('pointermove', (ev) => {
+        if (!dragging) return;
+        let videoPx = startVideoPx + (ev.clientY - startY);
+        videoPx = Math.max(0, Math.min(regionPx, videoPx));
+        const centerPx = regionPx / 2;
+        if (Math.abs(videoPx - centerPx) <= SNAP_PX) videoPx = centerPx;
+        setShare(videoPx / regionPx);
+      });
+      function endDrag(ev) {
+        if (!dragging) return;
+        dragging = false;
+        divider.classList.remove('is-dragging');
+        try { divider.releasePointerCapture(ev.pointerId); } catch (e) {}
+      }
+      divider.addEventListener('pointerup', endDrag);
+      divider.addEventListener('pointercancel', endDrag);
+    }
+
+    bind($('lanes-divider'),   $('lanes-videos'));
+    bind($('headers-divider'), $('headers-videos'));
+    // The v-gutter splitter uses the gutter's own first .v-scroll as
+    // its "videos region" reference. Same flex-share var write means
+    // the lanes follow regardless of which divider the user grabs.
+    const vgutter = document.querySelector('.v-gutter');
+    const vgutterVideos = vgutter ? vgutter.querySelector('.v-scroll') : null;
+    bind($('vgutter-divider'), vgutterVideos);
+
+    // Link all three dividers' hover state so hovering any span lights
+    // up the whole V/A seam — :hover alone only matches the one element
+    // the cursor is over.
+    const all = [$('lanes-divider'), $('headers-divider'), $('vgutter-divider')].filter(Boolean);
+    function setHover(on) {
+      for (const el of all) el.classList.toggle('is-hover', on);
+    }
+    for (const el of all) {
+      el.addEventListener('pointerenter', () => setHover(true));
+      el.addEventListener('pointerleave', () => setHover(false));
     }
   }
 
-  renderRuler();
-  window.addEventListener('resize', renderRuler);
+  // -----------------------------------------------------------------
+  // Track rendering. Replaces the hand-written V1/A1 markup with a
+  // JS-driven render of state.videoTracks + state.audioTracks. Each
+  // side keeps its outermost track furthest from the V/A divider:
+  // video stack runs visually top→bottom as [Vn, V(n-1), ..., V1];
+  // audio stack runs as [A1, A2, ..., An]. Track id is what shows on
+  // the chip; name is the readable label below the eye/M/S icons.
+  // -----------------------------------------------------------------
+
+  function videoHeaderHTML(t) {
+    return `
+      <div class="track-header is-video" data-track="V${t.id}">
+        <div class="track-header__twirl"><span class="icon icon--triangle" style="--icon-w:8px;--icon-h:10px;--icon-rot:90deg"></span></div>
+        <div class="track-header__lock-wrap">
+          <span class="icon icon--lock" style="--icon-w:12px;--icon-h:12px"></span>
+        </div>
+        <div class="track-header__chip-wrap">
+          <div class="track-header__chip">V${t.id}</div>
+        </div>
+        <div class="track-header__right">
+          <div class="track-header__right-col">
+            <span class="icon icon--eye" style="--icon-w:18px;--icon-h:18px;background-color:var(--color-timeline-primary-highlight)"></span>
+            <div class="track-header__label-wrap">
+              <div class="track-header__label">${t.name}</div>
+            </div>
+          </div>
+        </div>
+      </div>`;
+  }
+
+  function audioHeaderHTML(t) {
+    return `
+      <div class="track-header is-audio" data-track="A${t.id}">
+        <div class="track-header__twirl"><span class="icon icon--triangle" style="--icon-w:8px;--icon-h:10px;--icon-rot:90deg"></span></div>
+        <div class="track-header__lock-wrap">
+          <span class="icon icon--lock-locked" style="--icon-w:12px;--icon-h:12px"></span>
+        </div>
+        <div class="track-header__chip-wrap">
+          <div class="track-header__chip">A${t.id}</div>
+        </div>
+        <div class="track-header__right">
+          <div class="track-header__right-col">
+            <div class="track-header__icons-row"><span>M</span><span class="s">S</span></div>
+            <div class="track-header__label-wrap">
+              <div class="track-header__label">${t.name}</div>
+            </div>
+          </div>
+        </div>
+      </div>`;
+  }
+
+  function renderTracks() {
+    const hVideos = $('headers-videos');
+    const hAudios = $('headers-audios');
+    const lVideos = $('lanes-videos');
+    const lAudios = $('lanes-audios');
+    if (!hVideos || !hAudios || !lVideos || !lAudios) return;
+
+    // Video stack: top → bottom is [Vn, V(n-1), ..., V1]. So we render
+    // state.videoTracks reversed.
+    const videosOrdered = state.videoTracks.slice().reverse();
+    const audiosOrdered = state.audioTracks;
+
+    hVideos.innerHTML = videosOrdered.map(videoHeaderHTML).join('');
+    hAudios.innerHTML = audiosOrdered.map(audioHeaderHTML).join('');
+    lVideos.innerHTML = videosOrdered.map(t => `<div class="lane" data-track="V${t.id}"></div>`).join('');
+    lAudios.innerHTML = audiosOrdered.map(t => `<div class="lane" data-track="A${t.id}"></div>`).join('');
+
+    // Track count drives the v-scrollbar range. Default: all visible.
+    const wasFullVideo = state.vVideo.vMin === state.vVideo.min && state.vVideo.vMax === state.vVideo.max;
+    const wasFullAudio = state.vAudio.vMin === state.vAudio.min && state.vAudio.vMax === state.vAudio.max;
+    state.vVideo.max = state.videoTracks.length;
+    state.vAudio.max = state.audioTracks.length;
+    if (wasFullVideo) { state.vVideo.vMin = 0; state.vVideo.vMax = state.vVideo.max; }
+    if (wasFullAudio) { state.vAudio.vMin = 0; state.vAudio.vMax = state.vAudio.max; }
+    updateScrollbars();
+    applyVerticalZoom('video');
+    applyVerticalZoom('audio');
+  }
+
+
+  // -----------------------------------------------------------------
+  // Scrollbar engine: shared between horizontal + both verticals. Each
+  // scrollbar has a track, a draggable thumb, and two end-handle dots.
+  //
+  // - Drag the thumb to pan (both vMin and vMax shift by the same delta).
+  // - Drag an end-handle to zoom (only the corresponding edge moves,
+  //   anchored to the opposite edge).
+  //
+  // Position is computed from state in `updateScrollbars()`; user input
+  // mutates state then re-runs the scrollbar's onChange callback.
+  // -----------------------------------------------------------------
+
+  // Per-axis minimum visible window. Horizontal is in frames (can't
+  // zoom in past 4-frame range). Vertical is in track slots and allows
+  // fractional values down to 0.1 (= one track at 10x normal height).
+  const MIN_SPAN = { h: 4, vVideo: 0.1, vAudio: 0.1 };
+
+  function clampWindow(s, minSpan) {
+    if (s.vMax - s.vMin < minSpan) {
+      const c = (s.vMin + s.vMax) / 2;
+      s.vMin = c - minSpan / 2;
+      s.vMax = c + minSpan / 2;
+    }
+    if (s.vMin < s.min) {
+      const shift = s.min - s.vMin;
+      s.vMin += shift; s.vMax += shift;
+    }
+    if (s.vMax > s.max) {
+      const shift = s.vMax - s.max;
+      s.vMin -= shift; s.vMax -= shift;
+    }
+    if (s.vMin < s.min) s.vMin = s.min;
+    if (s.vMax > s.max) s.vMax = s.max;
+  }
+
+  function updateScrollbars() {
+    layoutScrollbar('h',      $('h-scroll-track'),  $('h-scroll-thumb'),  $('h-scroll-end-left'),  $('h-scroll-end-right'),  'x');
+    layoutScrollbar('vVideo', $('v-video-track'),   $('v-video-thumb'),   $('v-video-end-top'),    $('v-video-end-bottom'),  'y');
+    layoutScrollbar('vAudio', $('v-audio-track'),   $('v-audio-thumb'),   $('v-audio-end-top'),    $('v-audio-end-bottom'),  'y');
+  }
+
+  function endDotRadius() {
+    const sz = parseFloat(getComputedStyle(document.documentElement)
+      .getPropertyValue('--scrollbar-end-sz')) || 15;
+    return sz / 2;
+  }
+  function endDotInset() {
+    // Dot center at exactly one radius from the track edge so the dot
+    // outer edge is flush with the (flat) track edge.
+    return endDotRadius();
+  }
+
+  function layoutScrollbar(key, track, thumb, endStart, endEnd, axis) {
+    if (!track || !thumb || !endStart || !endEnd) return;
+    const s = state[key];
+    const range = Math.max(1, s.max - s.min);
+    const rect = track.getBoundingClientRect();
+    const length = axis === 'x' ? rect.width : rect.height;
+    // Two different positions in play:
+    //   - Dot centers sit on the pill cap apex (`dotCenter`), so the
+    //     dot's outer edge is flush with the pill's outer edge.
+    //   - Thumb extends from the OUTER side of the start dot all the
+    //     way to the OUTER side of the end dot. This makes the thumb
+    //     pass UNDER each dot to the pill's end, so there's no notch
+    //     of grey-16 pill background visible between the dot and the
+    //     thumb — the pill reads as one continuous shape.
+    const dotRadius = endDotRadius();
+    const dotCenterInset = endDotInset();
+    const usable = Math.max(1, length - dotCenterInset * 2);
+    const startFrac = (s.vMin - s.min) / range;
+    const endFrac   = (s.vMax - s.min) / range;
+    const dotStart = dotCenterInset + startFrac * usable;
+    const dotEnd   = dotCenterInset + endFrac   * usable;
+    const thumbStart = Math.max(0,      dotStart - dotRadius);
+    const thumbEnd   = Math.min(length, dotEnd   + dotRadius);
+
+    if (axis === 'x') {
+      thumb.style.left  = thumbStart + 'px';
+      thumb.style.right = (length - thumbEnd) + 'px';
+      endStart.style.left = dotStart + 'px';
+      endEnd.style.left   = dotEnd   + 'px';
+    } else {
+      thumb.style.top    = thumbStart + 'px';
+      thumb.style.bottom = (length - thumbEnd) + 'px';
+      endStart.style.top = dotStart + 'px';
+      endEnd.style.top   = dotEnd   + 'px';
+    }
+  }
+
+  function attachScrollbar(key, track, thumb, endStart, endEnd, axis, onChange) {
+    if (!track || !thumb || !endStart || !endEnd) return;
+    const s = () => state[key];
+    const minSpan = MIN_SPAN[key];
+    const getCoord = (ev) => axis === 'x' ? ev.clientX : ev.clientY;
+
+    function pxPerUnit() {
+      const r = track.getBoundingClientRect();
+      const length = axis === 'x' ? r.width : r.height;
+      // Inset matches layoutScrollbar() — end-dot radius.
+      const usable = Math.max(1, length - endDotInset() * 2);
+      const range = Math.max(1, s().max - s().min);
+      return usable / range;
+    }
+
+    function drag(el, getStartState, onMove) {
+      let active = false;
+      let startCoord = 0;
+      let startState = null;
+      el.addEventListener('pointerdown', (ev) => {
+        if (ev.button !== 0) return;
+        active = true;
+        startCoord = getCoord(ev);
+        startState = getStartState();
+        el.classList.add('is-dragging');
+        try { el.setPointerCapture(ev.pointerId); } catch (e) {}
+        ev.preventDefault();
+        ev.stopPropagation();
+      });
+      el.addEventListener('pointermove', (ev) => {
+        if (!active) return;
+        const deltaPx = getCoord(ev) - startCoord;
+        const deltaUnits = deltaPx / pxPerUnit();
+        onMove(startState, deltaUnits);
+        clampWindow(s(), minSpan);
+        onChange && onChange();
+        updateScrollbars();
+      });
+      const end = (ev) => {
+        if (!active) return;
+        active = false;
+        el.classList.remove('is-dragging');
+        try { el.releasePointerCapture(ev.pointerId); } catch (e) {}
+      };
+      el.addEventListener('pointerup', end);
+      el.addEventListener('pointercancel', end);
+    }
+
+    // Thumb drag: pan (shift both edges).
+    drag(thumb,
+      () => ({ vMin: s().vMin, vMax: s().vMax }),
+      (start, delta) => {
+        s().vMin = start.vMin + delta;
+        s().vMax = start.vMax + delta;
+      });
+    // Start-edge drag: zoom anchored to end.
+    drag(endStart,
+      () => ({ vMin: s().vMin }),
+      (start, delta) => {
+        s().vMin = start.vMin + delta;
+        if (s().vMin > s().vMax - minSpan) {
+          s().vMin = s().vMax - minSpan;
+        }
+        if (s().vMin < s().min) s().vMin = s().min;
+      });
+    // End-edge drag: zoom anchored to start.
+    drag(endEnd,
+      () => ({ vMax: s().vMax }),
+      (start, delta) => {
+        s().vMax = start.vMax + delta;
+        if (s().vMax < s().vMin + minSpan) {
+          s().vMax = s().vMin + minSpan;
+        }
+        if (s().vMax > s().max) s().vMax = s().max;
+      });
+  }
+
+  function attachAllScrollbars() {
+    attachScrollbar('h',
+      $('h-scroll-track'),  $('h-scroll-thumb'),
+      $('h-scroll-end-left'), $('h-scroll-end-right'),
+      'x',
+      () => { layout(); /* re-renders ruler + playhead */ });
+    attachScrollbar('vVideo',
+      $('v-video-track'),  $('v-video-thumb'),
+      $('v-video-end-top'), $('v-video-end-bottom'),
+      'y',
+      () => applyVerticalZoom('video'));
+    attachScrollbar('vAudio',
+      $('v-audio-track'),  $('v-audio-thumb'),
+      $('v-audio-end-top'), $('v-audio-end-bottom'),
+      'y',
+      () => applyVerticalZoom('audio'));
+  }
+
+  // Vertical zoom: track height = (visible region height) / (visible
+  // track count). The track count is real once add/remove lands; until
+  // then this is a no-op so we don't pretend zoom works on a single
+  // track. Pan is handled by translateY when multiple tracks exist.
+  function applyVerticalZoom(which) {
+    const s = which === 'video' ? state.vVideo : state.vAudio;
+    const visibleTracks = Math.max(0.01, s.vMax - s.vMin);
+    const totalTracks = Math.max(1, s.max - s.min);
+    if (totalTracks <= 1) return;     // single track: zoom is a no-op
+    const sideEl = which === 'video'
+      ? document.querySelector('.lanes-area .stack__videos')
+      : document.querySelector('.lanes-area .stack__audios');
+    if (!sideEl) return;
+    const regionPx = sideEl.getBoundingClientRect().height;
+    const trackPx = regionPx / visibleTracks;
+    const cssVar = which === 'video' ? '--video-track-h' : '--audio-track-h';
+    document.documentElement.style.setProperty(cssVar, trackPx + 'px');
+  }
+
+  renderTracks();
+  layout();
+  updateTimecode();
+  updateScrollbars();
+  attachScrub();
+  attachToolPalette();
+  attachVaSplitter();
+  attachAllScrollbars();
+  window.addEventListener('resize', () => { layout(); updateScrollbars(); });
 
   // Suppress browser-level page zoom. Inside a docked DAW panel, Ctrl+wheel
   // and Ctrl+/Ctrl-/Ctrl0 should not scale the whole UI. The wheel handler
@@ -873,11 +1510,39 @@
         hostPort = msg.port | 0;
         console.log('[sb] host hello, port=' + hostPort);
         flushPending();
-        // Round-trip a ping so we can see the channel work end-to-end
-        // in the C4D console + DevTools.
+        // The ping prompts C++ to reply with a doc-info + tick so the UI
+        // has authoritative state immediately rather than waiting for the
+        // next Timer or EVMSG_TIMECHANGED.
         sendToHost({ kind: 'ping', t: Date.now() })
           .then(ack => console.log('[sb] ping ack:', ack))
           .catch(err => console.warn('[sb] ping failed:', err.message));
+        return;
+      }
+      if (msg.kind === 'doc-info') {
+        if (typeof msg.fps === 'number' && msg.fps > 0) state.fps = msg.fps;
+        if (typeof msg.docFrames === 'number' && msg.docFrames > 0) {
+          const wasFullView = state.h.vMin === state.h.min && state.h.vMax === state.h.max;
+          state.docFrames = msg.docFrames;
+          state.h.max = msg.docFrames;
+          // Auto-fit the visible window to the new doc range only if the
+          // user hadn't already zoomed/panned. Preserves their view if they
+          // had one.
+          if (wasFullView) {
+            state.h.vMin = 0;
+            state.h.vMax = msg.docFrames;
+          }
+        }
+        layout();
+        updateTimecode();
+        updateScrollbars();
+        return;
+      }
+      if (msg.kind === 'tick') {
+        if (typeof msg.fps === 'number' && msg.fps > 0) state.fps = msg.fps;
+        if (typeof msg.frame === 'number') state.currentFrame = msg.frame;
+        state.playing = !!msg.playing;
+        positionPlayhead();
+        updateTimecode();
         return;
       }
       console.log('[sb] host->', msg);

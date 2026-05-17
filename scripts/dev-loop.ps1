@@ -6,10 +6,9 @@ $ErrorActionPreference = "Stop"
 $here = Split-Path -Parent $MyInvocation.MyCommand.Path
 $repoRoot = Split-Path -Parent $here
 
-# 1. Deploy
-& "$here\deploy.ps1"
-
-# 2. Force-close any running C4D
+# 1. Force-close any running C4D first. The running process locks the
+#    v2 plugin DLL, so deploy must happen AFTER the kill or robocopy
+#    silently fails to overwrite the .xdl64.
 $proc = Get-Process -Name "Cinema 4D" -ErrorAction SilentlyContinue
 if ($proc) {
     Write-Host "Stopping Cinema 4D (PID $($proc.Id))..."
@@ -18,6 +17,9 @@ if ($proc) {
         Start-Sleep -Milliseconds 200
     }
 }
+
+# 2. Deploy
+& "$here\deploy.ps1"
 
 # 3. Relaunch with dev-test scene
 $exe = "C:\Program Files\Maxon Cinema 4D 2026\Cinema 4D.exe"

@@ -44,36 +44,31 @@ adapts.
 
 - **Nothing is interactive.** No click handlers, no JS state, no shot
   blocks, no audio waveforms, no scroll/zoom drag.
-- **Playhead doesn't move.** C++ pushes `tick` messages on
-  `EVMSG_TIMECHANGED` (see `main.cpp::PostTick`) but JS doesn't consume
-  them yet — the placeholder `playhead { left: 50% }` is static.
 - **No V/A splitter drag yet.** Memorized as a separate task — see
   the `shotblocks-v2-va-splitter` memory.
 - **No scrollbar drag/zoom yet.** Memorized as
   `shotblocks-v2-scrollbar-zoom`.
 - **Track add/remove not wired.** Tracks are hardcoded V1 + A1 in the
   markup.
-- **The "JS → C++" channel needs replacing** before any interactivity
-  can ship. See "Hard finding" below.
 
-## Hard finding (READ THIS BEFORE WIRING JS INTERACTIONS)
+## JS ↔ C++ bridge (live)
 
-**`window.chrome.webview.postMessage()` silently drops every message in
-C4D 2026's HtmlViewerCustomGui.** The C++ side
-(`SetWebMessageCallback`) is registered but the callback never fires.
-We confirmed this with a smoke-test probe in this session.
+Both Maxon-blessed JS→C++ paths are dead in C4D 2026's HtmlViewer:
+`SetWebMessageCallback` is a known no-op, and
+`SetResourceRequestInterceptCallback` registers cleanly but its
+callback never fires for any URL (verified this session).
 
-C++ → JS still works fine (`htmlView->PostWebMessage(...)` → JS's
-`addEventListener('message')`).
+The working channel is a **loopback HTTP server inside the plugin
+DLL**. `main.cpp` runs Winsock on `127.0.0.1:<OS-picked-port>` in a
+worker thread, queues each request, wakes the main thread via
+`SpecialEventAdd`, and fulfills a `std::promise` with the response.
+The port is pushed to JS via `PostWebMessage({kind:"hello",port:N})`
+on first navigate; JS calls
+`fetch('http://127.0.0.1:PORT/cmd', {method:'POST', body:JSON.stringify(...)})`.
+See memory `v2-js-to-cpp-via-loopback-http`.
 
-For JS → C++ (button clicks, drags, etc.) use
-`SetResourceRequestInterceptCallback`. The pattern:
-- JS does `fetch('shotblocks://cmd?json=...')`
-- C++ intercepts the request, parses the URL, runs the command,
-  responds (or just acknowledges).
-
-See the memory `c4d-htmlviewer-postmessage-oneway.md` for the full
-diagnosis.
+C++ → JS still uses `htmlView->PostWebMessage(...)` →
+`window.chrome.webview.addEventListener('message')` directly.
 
 ## Asset / typography pipeline
 
@@ -139,17 +134,14 @@ from Extensions menu.
 
 ## Next planned steps (in rough order)
 
-1. **Wire `SetResourceRequestInterceptCallback`** as the JS → C++
-   channel. This unblocks all interactivity.
-2. **Live playhead** — JS consumes `tick` messages from C++, sets
-   `--playhead-frame`, CSS positions the playhead accordingly.
-3. **Tool palette click-to-select** — JS state, send `{cmd: tool,
-   id: razor}` to C++ via the new channel.
-4. **Draggable V/A splitter** (memory: `shotblocks-v2-va-splitter`).
-5. **Scrollbar pan + end-handle zoom** (memory:
+1. **Live playhead** — JS consumes `tick` messages from C++ and
+   positions the playhead based on `frame / docFrames` across the
+   lanes-area width. `{kind:"doc-info"}` carries the frame range.
+2. **Tool palette click-to-select** — JS state, send
+   `{kind:"tool", id:"razor"}` via `sendToHost`.
+3. **Draggable V/A splitter** (memory: `shotblocks-v2-va-splitter`).
+4. **Scrollbar pan + end-handle zoom** (memory:
    `shotblocks-v2-scrollbar-zoom`).
-6. **Track add / remove** — start from JS-rendered tracks (vs the
+5. **Track add / remove** — start from JS-rendered tracks (vs the
    current hardcoded markup).
-7. **Real shot blocks** — clip rects rendered in the lanes.
-
-All of these depend on (1).
+6. **Real shot blocks** — clip rects rendered in the lanes.

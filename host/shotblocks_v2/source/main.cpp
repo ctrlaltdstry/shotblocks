@@ -357,6 +357,58 @@ public:
 		PostTick();
 	}
 
+	// Probe for OM-drag-into-dialog. Logs everything we see so we can
+	// verify whether the HtmlViewer/WebView2 child swallows the drag at
+	// the OS level before C4D delivers it to us, or whether the drag
+	// bubbles up to the dialog as expected.
+	Int32 Message(const BaseContainer& msg, BaseContainer& result) override
+	{
+		if (msg.GetId() == BFM_DRAGRECEIVE)
+		{
+			const Bool finished = msg.GetBool(BFM_DRAG_FINISHED);
+			const Bool lost     = msg.GetBool(BFM_DRAG_LOST);
+			const Int32 sx      = msg.GetInt32(BFM_DRAG_SCREENX);
+			const Int32 sy      = msg.GetInt32(BFM_DRAG_SCREENY);
+
+			Int32 type = 0;
+			void* obj  = nullptr;
+			GetDragObject(msg, &type, &obj);
+
+			Int32 count = 0;
+			Int32 firstObjType = 0;
+			maxon::String firstName("?");
+			if (type == DRAGTYPE_ATOMARRAY && obj)
+			{
+				AtomArray* arr = static_cast<AtomArray*>(obj);
+				count = arr->GetCount();
+				if (count > 0)
+				{
+					C4DAtom* atom = arr->GetIndex(0);
+					BaseList2D* b2 = static_cast<BaseList2D*>(atom);
+					if (b2)
+					{
+						firstObjType = b2->GetType();
+						firstName = b2->GetName();
+					}
+				}
+			}
+
+			char buf[160];
+			_snprintf_s(buf, sizeof(buf), _TRUNCATE,
+				"[Shotblocks/v2] DRAG type=%d count=%d firstType=%d xy=%d,%d %s%s name=",
+				(int)type, (int)count, (int)firstObjType,
+				(int)sx, (int)sy,
+				finished ? "FINISHED " : "",
+				lost     ? "LOST"      : "");
+			GePrint(maxon::String(buf) + firstName);
+
+			// Accept drops over the HtmlViewer rect; show the "hand" cursor.
+			if (!lost && CheckDropArea(ID_HOST_HTMLVIEW, msg, true, true))
+				return SetDragDestination(MOUSE_POINT_HAND);
+		}
+		return GeDialog::Message(msg, result);
+	}
+
 	Bool CoreMessage(Int32 id, const BaseContainer& msg) override
 	{
 		if (id == EVMSG_TIMECHANGED)
@@ -497,6 +549,72 @@ private:
 			PostTick();
 			return "{\"ok\":true,\"kind\":\"pong\"}";
 		}
+		if (body.find("\"kind\":\"tool\"") != std::string::npos)
+		{
+			// Tool palette selection. Body: {"kind":"tool","id":"<name>"}.
+			// We just record + log for now — no behavior is wired to the
+			// active tool yet.
+			std::string id;
+			auto pos = body.find("\"id\"");
+			if (pos != std::string::npos)
+			{
+				pos = body.find(':', pos);
+				if (pos != std::string::npos)
+				{
+					pos = body.find('"', pos);
+					if (pos != std::string::npos)
+					{
+						auto end = body.find('"', pos + 1);
+						if (end != std::string::npos)
+							id = body.substr(pos + 1, end - pos - 1);
+					}
+				}
+			}
+			_activeTool = id;
+			GePrint("[Shotblocks/v2] tool="_s + maxon::String(id.c_str()));
+			return "{\"ok\":true,\"kind\":\"tool-ack\"}";
+		}
+		if (body.find("\"kind\":\"seek\"") != std::string::npos)
+		{
+			// Scrub from JS. Body shape: {"kind":"seek","frame":<int>}.
+			// Pull the integer after `"frame":`. Naive parse is enough for
+			// the one numeric field; replace with a real JSON parser when
+			// the message vocabulary grows beyond a handful of commands.
+			Int32 frame = 0;
+			auto pos = body.find("\"frame\"");
+			if (pos != std::string::npos)
+			{
+				pos = body.find(':', pos);
+				if (pos != std::string::npos)
+				{
+					++pos;
+					while (pos < body.size() && (body[pos] == ' ' || body[pos] == '\t'))
+						++pos;
+					frame = (Int32)std::strtol(body.c_str() + pos, nullptr, 10);
+				}
+			}
+			BaseDocument* doc = GetActiveDocument();
+			if (doc)
+			{
+				Int32 fps = doc->GetFps();
+				BaseTime minT = doc->GetMinTime();
+				BaseTime maxT = doc->GetMaxTime();
+				Int32 minFrame = minT.GetFrame(fps);
+				Int32 maxFrame = maxT.GetFrame(fps);
+				if (frame < 0)
+					frame = 0;
+				Int32 absFrame = minFrame + frame;
+				if (absFrame < minFrame)
+					absFrame = minFrame;
+				if (absFrame > maxFrame)
+					absFrame = maxFrame;
+				doc->SetTime(BaseTime(absFrame, fps));
+				// EVMSG_TIMECHANGED triggers the viewport + timeline + our
+				// own PostTick via CoreMessage, keeping every UI in sync.
+				EventAdd();
+			}
+			return "{\"ok\":true,\"kind\":\"seek-ack\"}";
+		}
 		GePrint("[Shotblocks/v2] unhandled cmd: "_s + maxon::String(body.c_str()));
 		return "{\"ok\":false,\"error\":\"unknown command\"}";
 	}
@@ -560,6 +678,8 @@ private:
 
 	std::mutex                   _queueMu;
 	std::deque<HttpRequest>      _queue;
+
+	std::string          _activeTool{"select"};
 };
 
 
