@@ -827,12 +827,60 @@
   // redeploy. Snap any non-1 zoom back to 1 on every load.
   if (document.body && document.body.style) document.body.style.zoom = '1';
 
-  // Inbound listener for C++→JS messages (frame ticks, doc info, etc.).
-  // Not consumed yet in this static pass; we'll wire it in next.
+  // JS->C++ bridge.
+  // ---------------
+  // Both Maxon-blessed paths (SetWebMessageCallback, SetResourceRequestInterceptCallback)
+  // are dead in C4D 2026's HtmlViewer. The host runs a tiny HTTP server on
+  // 127.0.0.1:<port>; it tells us the port via a {kind:"hello",port:N}
+  // message on first navigate. Until that arrives we queue outbound calls.
+  let hostPort = 0;
+  const pendingSends = [];
+
+  function flushPending() {
+    while (pendingSends.length) {
+      const { obj, resolve, reject } = pendingSends.shift();
+      doFetch(obj).then(resolve, reject);
+    }
+  }
+
+  function doFetch(obj) {
+    // text/plain is a CORS "simple request" content type, so the browser
+    // skips the OPTIONS preflight entirely. The body is still JSON; the
+    // C++ side parses it regardless of the Content-Type header.
+    return fetch('http://127.0.0.1:' + hostPort + '/cmd', {
+      method: 'POST',
+      headers: { 'Content-Type': 'text/plain' },
+      body: JSON.stringify(obj),
+    }).then(r => r.text()).then(t => {
+      try { return JSON.parse(t); } catch { return { raw: t }; }
+    });
+  }
+
+  function sendToHost(obj) {
+    if (hostPort) return doFetch(obj);
+    return new Promise((resolve, reject) => {
+      pendingSends.push({ obj, resolve, reject });
+    });
+  }
+
+  // Inbound C++->JS listener.
   if (window.chrome && window.chrome.webview && window.chrome.webview.addEventListener) {
     window.chrome.webview.addEventListener('message', (ev) => {
-      // Placeholder: parse and dispatch later.
-      void ev;
+      const raw = typeof ev.data === 'string' ? ev.data : String(ev.data);
+      let msg;
+      try { msg = JSON.parse(raw); } catch { console.log('[sb] non-JSON from host:', raw); return; }
+      if (msg.kind === 'hello') {
+        hostPort = msg.port | 0;
+        console.log('[sb] host hello, port=' + hostPort);
+        flushPending();
+        // Round-trip a ping so we can see the channel work end-to-end
+        // in the C4D console + DevTools.
+        sendToHost({ kind: 'ping', t: Date.now() })
+          .then(ack => console.log('[sb] ping ack:', ack))
+          .catch(err => console.warn('[sb] ping failed:', err.message));
+        return;
+      }
+      console.log('[sb] host->', msg);
     });
   }
 })();
