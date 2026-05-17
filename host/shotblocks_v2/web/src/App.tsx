@@ -6,6 +6,7 @@ import { useHost } from './useHost';
 import { useStore } from './store';
 import { Ruler } from './components/Ruler';
 import { Playhead } from './components/Playhead';
+import { Scrollbar } from './components/Scrollbar';
 
 // Round 1 of the React port: layout grid + static chrome only.
 // No live state, no interactions yet. Visual parity with the legacy
@@ -34,6 +35,38 @@ function Timecode() {
   const frame = useStore((s) => s.currentFrame);
   const fps = useStore((s) => s.fps);
   return <div className="topbar__timecode">{formatTimecode(frame, fps)}</div>;
+}
+
+/** Bottom horizontal scrollbar — pans/zooms the visible time window. */
+function HScroll() {
+  const h = useStore((s) => s.h);
+  const setHVisible = useStore((s) => s.setHVisible);
+  return (
+    <div className="h-scroll">
+      <Scrollbar
+        axis="x"
+        window={h}
+        minSpan={4}
+        onChange={setHVisible}
+      />
+    </div>
+  );
+}
+
+/** Vertical scrollbar for one side of the V/A split. */
+function VScroll({ which }: { which: 'video' | 'audio' }) {
+  const win = useStore((s) => which === 'video' ? s.vVideo : s.vAudio);
+  const setter = useStore((s) => which === 'video' ? s.setVVideoVisible : s.setVAudioVisible);
+  return (
+    <div className="v-scroll" title={`${which === 'video' ? 'Video' : 'Audio'} tracks scroll/zoom`}>
+      <Scrollbar
+        axis="y"
+        window={win}
+        minSpan={0.1}
+        onChange={setter}
+      />
+    </div>
+  );
 }
 
 function App() {
@@ -180,14 +213,14 @@ function App() {
           </div>
         </div>
 
-        {/* row 3 — h-scroll. Scrollbar lands in round 3. */}
-        <div className="h-scroll" />
+        {/* row 3 — h-scroll */}
+        <HScroll />
 
-        {/* row 2, col 4 — v-gutter. Scrollbars land in round 3. */}
+        {/* row 2, col 4 — v-gutter */}
         <div className="v-gutter">
-          <div className="v-scroll" title="Video tracks scroll/zoom" />
+          <VScroll which="video" />
           <div className="stack__divider v-gutter__divider" id="vgutter-divider" />
-          <div className="v-scroll" title="Audio tracks scroll/zoom" />
+          <VScroll which="audio" />
         </div>
       </div>
     </div>
