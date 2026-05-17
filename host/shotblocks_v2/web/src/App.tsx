@@ -84,23 +84,21 @@ function VScroll({ which, elementRef }: { which: 'video' | 'audio'; elementRef?:
 /** Drives per-side track-height + scroll-offset CSS vars from each
  *  vertical scrollbar window.
  *
- *  Zoom: trackHeight = NATURAL_TRACK_PX / span. Lane stays anchored at
- *  the V/A divider via .stack__videos flex-end / .stack__audios
- *  flex-start. Both end-dots are real handles; the dot positions ARE
- *  vMin/vMax.
+ *  Range model: max = 2 × trackCount, with the default visible window
+ *  centered at span = trackCount. That gives the user equal headroom
+ *  on both sides of the default — they can zoom IN (drag dots toward
+ *  each other) or OUT (drag dots apart) from the natural state.
  *
- *  Scroll: when zoomed in, the lane overflows. vMin within
- *  [0, max - span] determines how far we've scrolled. scrollFrac = 0
- *  means the divider-adjacent edge of the lane is visible (natural);
- *  scrollFrac = 1 means the far edge is visible.
+ *  trackHeight = NATURAL_TRACK_PX × trackCount / span.
+ *    span = trackCount  → natural 65px tracks (default).
+ *    span < trackCount  → zoomed in (taller tracks, overflow scrolls).
+ *    span > trackCount  → zoomed out (shorter tracks; sub-32px flips
+ *                          to the thin shot-block layout).
  *
- *  Translate direction:
- *  - Video (flex-end, lane bottom at divider, extends up): translate
- *    DOWN by scrollFrac * overflowPx. The lane top moves into view at
- *    the top of the region while the bottom slides past the divider
- *    (clipped by parent overflow:hidden).
- *  - Audio (flex-start, lane top at divider, extends down): translate
- *    UP, symmetric. */
+ *  Scroll: vMin within the available scroll range maps to a translate
+ *  on the lane content. Lane stays anchored at the V/A divider via
+ *  the flex layout; the translate moves what's visible inside the
+ *  side region. */
 const NATURAL_TRACK_PX = 65;
 
 function useVerticalZoomVars(
@@ -114,7 +112,8 @@ function useVerticalZoomVars(
 
   useEffect(() => {
     const span = Math.max(0.01, vVideo.vMax - vVideo.vMin);
-    const trackPx = NATURAL_TRACK_PX / span;
+    const trackCount = Math.max(1, vVideo.max / 2);
+    const trackPx = NATURAL_TRACK_PX * trackCount / span;
     const overflow = Math.max(0, trackPx - vSize.height);
     const scrollRange = Math.max(0.0001, (vVideo.max - vVideo.min) - span);
     const scrollFrac = scrollRange > 0 ? Math.max(0, vVideo.vMin - vVideo.min) / scrollRange : 0;
@@ -125,7 +124,8 @@ function useVerticalZoomVars(
 
   useEffect(() => {
     const span = Math.max(0.01, vAudio.vMax - vAudio.vMin);
-    const trackPx = NATURAL_TRACK_PX / span;
+    const trackCount = Math.max(1, vAudio.max / 2);
+    const trackPx = NATURAL_TRACK_PX * trackCount / span;
     const overflow = Math.max(0, trackPx - aSize.height);
     const scrollRange = Math.max(0.0001, (vAudio.max - vAudio.min) - span);
     const scrollFrac = scrollRange > 0 ? Math.max(0, vAudio.vMin - vAudio.min) / scrollRange : 0;
@@ -197,33 +197,37 @@ function LanesStack({
   );
 }
 
-/** Keeps the vertical scrollbar ranges in sync with track counts. When
- *  a track is added, the side's `max` grows; existing scroll/zoom is
- *  preserved unless the view was fully zoomed-out, in which case we
- *  expand to cover the new range. */
+/** Keeps the vertical scrollbar ranges in sync with track counts.
+ *  Range = 2× track count so the centered default window leaves equal
+ *  headroom to zoom OUT on both sides. Preserves user zoom unless the
+ *  view is at the default centered span. */
 function useTrackCountSync() {
   const videoTracks = useStore((s) => s.videoTracks);
   const audioTracks = useStore((s) => s.audioTracks);
 
   useEffect(() => {
-    const max = Math.max(1, videoTracks.length);
+    const n = Math.max(1, videoTracks.length);
+    const max = n * 2;
     const s = useStore.getState();
-    const wasFull = s.vVideo.vMin === s.vVideo.min && s.vVideo.vMax === s.vVideo.max;
     if (s.vVideo.max === max) return;
-    if (wasFull) {
-      useStore.setState({ vVideo: { min: 0, max, vMin: 0, vMax: max } });
+    const wasDefault = Math.abs((s.vVideo.vMax - s.vVideo.vMin) - n) < 0.01
+                    && Math.abs(((s.vVideo.vMin + s.vVideo.vMax) / 2) - n) < 0.01;
+    if (wasDefault) {
+      useStore.setState({ vVideo: { min: 0, max, vMin: n / 2, vMax: n + n / 2 } });
     } else {
       useStore.setState({ vVideo: { ...s.vVideo, max } });
     }
   }, [videoTracks.length]);
 
   useEffect(() => {
-    const max = Math.max(1, audioTracks.length);
+    const n = Math.max(1, audioTracks.length);
+    const max = n * 2;
     const s = useStore.getState();
-    const wasFull = s.vAudio.vMin === s.vAudio.min && s.vAudio.vMax === s.vAudio.max;
     if (s.vAudio.max === max) return;
-    if (wasFull) {
-      useStore.setState({ vAudio: { min: 0, max, vMin: 0, vMax: max } });
+    const wasDefault = Math.abs((s.vAudio.vMax - s.vAudio.vMin) - n) < 0.01
+                    && Math.abs(((s.vAudio.vMin + s.vAudio.vMax) / 2) - n) < 0.01;
+    if (wasDefault) {
+      useStore.setState({ vAudio: { min: 0, max, vMin: n / 2, vMax: n + n / 2 } });
     } else {
       useStore.setState({ vAudio: { ...s.vAudio, max } });
     }

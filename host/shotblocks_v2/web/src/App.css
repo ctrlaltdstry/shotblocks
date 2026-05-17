@@ -292,7 +292,16 @@ body.va-splitter-hover .stack__divider.is-grabbable,
 /* Track header — pulled from the legacy markup pattern.
    Per-side height vars set by vertical zoom (round 3+). */
 .track-header {
-  flex: 0 0 var(--track-h);
+  /* `flex: 0 1` (not `0 0`) so the header CAN shrink past its content
+     height to match the lane when the user zooms out aggressively.
+     Without flex-shrink, the chip + label/eye column floors the
+     header around 30-40px while the lane keeps shrinking — the two
+     stacks visibly desync at extreme zoom. min-height + overflow
+     ensure the inner content gets clipped cleanly instead of pushing
+     the box. */
+  flex: 0 1 var(--track-h);
+  min-height: 0;
+  overflow: hidden;
   background: var(--color-grey-12);
   border-bottom: 1px solid var(--color-grey-16);
   display: flex; align-items: center; justify-content: space-between;

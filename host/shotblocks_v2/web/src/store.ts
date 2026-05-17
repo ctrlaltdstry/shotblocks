@@ -203,8 +203,11 @@ export const useStore = create<State>((set) => ({
   playing: false,
   scrubFrame: null,
   h:      { min: 0, max: 150, vMin: 0, vMax: 150 },
-  vVideo: { min: 0, max: 1,   vMin: 0, vMax: 1   },
-  vAudio: { min: 0, max: 1,   vMin: 0, vMax: 1   },
+  // Vertical windows: range is 2× the track count so the default
+  // (centered, span = trackCount) leaves equal headroom on each side
+  // for zoom-out. With 1 track: range [0, 2], default [0.5, 1.5].
+  vVideo: { min: 0, max: 2,   vMin: 0.5, vMax: 1.5 },
+  vAudio: { min: 0, max: 2,   vMin: 0.5, vMax: 1.5 },
   vaShare: 0.5,
   activeTool: 'select',
   videoTracks: [{ id: 1, name: 'Video 1', clips: [] }],
