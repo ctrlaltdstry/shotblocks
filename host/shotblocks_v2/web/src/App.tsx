@@ -1,4 +1,4 @@
-import { useRef } from 'react';
+import { useEffect, useRef } from 'react';
 import './icons.css';
 import './App.css';
 import logoUrl from './icons/logo.svg';
@@ -7,6 +7,8 @@ import { useStore } from './store';
 import { Ruler } from './components/Ruler';
 import { Playhead } from './components/Playhead';
 import { Scrollbar } from './components/Scrollbar';
+import { VaSplitter } from './components/VaSplitter';
+import { useElementSize } from './useElementSize';
 
 // Round 1 of the React port: layout grid + static chrome only.
 // No live state, no interactions yet. Visual parity with the legacy
@@ -53,12 +55,15 @@ function HScroll() {
   );
 }
 
-/** Vertical scrollbar for one side of the V/A split. */
-function VScroll({ which }: { which: 'video' | 'audio' }) {
+/** Vertical scrollbar for one side of the V/A split. Both dots are
+ *  the actual edges of the visible window — drag them together to
+ *  zoom in, apart to zoom out. The lane content stays anchored at the
+ *  V/A divider via the .stack__videos / .stack__audios flex rules. */
+function VScroll({ which, elementRef }: { which: 'video' | 'audio'; elementRef?: React.RefObject<HTMLDivElement | null> }) {
   const win = useStore((s) => which === 'video' ? s.vVideo : s.vAudio);
   const setter = useStore((s) => which === 'video' ? s.setVVideoVisible : s.setVAudioVisible);
   return (
-    <div className="v-scroll" title={`${which === 'video' ? 'Video' : 'Audio'} tracks scroll/zoom`}>
+    <div ref={elementRef} className="v-scroll" title={`${which === 'video' ? 'Video' : 'Audio'} tracks scroll/zoom`}>
       <Scrollbar
         axis="y"
         window={win}
@@ -69,9 +74,80 @@ function VScroll({ which }: { which: 'video' | 'audio' }) {
   );
 }
 
+/** Drives per-side track-height + scroll-offset CSS vars from each
+ *  vertical scrollbar window.
+ *
+ *  Zoom: trackHeight = NATURAL_TRACK_PX / span. Lane stays anchored at
+ *  the V/A divider via .stack__videos flex-end / .stack__audios
+ *  flex-start. Both end-dots are real handles; the dot positions ARE
+ *  vMin/vMax.
+ *
+ *  Scroll: when zoomed in, the lane overflows. vMin within
+ *  [0, max - span] determines how far we've scrolled. scrollFrac = 0
+ *  means the divider-adjacent edge of the lane is visible (natural);
+ *  scrollFrac = 1 means the far edge is visible.
+ *
+ *  Translate direction:
+ *  - Video (flex-end, lane bottom at divider, extends up): translate
+ *    DOWN by scrollFrac * overflowPx. The lane top moves into view at
+ *    the top of the region while the bottom slides past the divider
+ *    (clipped by parent overflow:hidden).
+ *  - Audio (flex-start, lane top at divider, extends down): translate
+ *    UP, symmetric. */
+const NATURAL_TRACK_PX = 65;
+
+function useVerticalZoomVars(
+  videosRegionRef: React.RefObject<HTMLDivElement | null>,
+  audiosRegionRef: React.RefObject<HTMLDivElement | null>,
+) {
+  const vVideo = useStore((s) => s.vVideo);
+  const vAudio = useStore((s) => s.vAudio);
+  const vSize = useElementSize(videosRegionRef);
+  const aSize = useElementSize(audiosRegionRef);
+
+  useEffect(() => {
+    const span = Math.max(0.01, vVideo.vMax - vVideo.vMin);
+    const trackPx = NATURAL_TRACK_PX / span;
+    const overflow = Math.max(0, trackPx - vSize.height);
+    const scrollRange = Math.max(0.0001, (vVideo.max - vVideo.min) - span);
+    const scrollFrac = scrollRange > 0 ? Math.max(0, vVideo.vMin - vVideo.min) / scrollRange : 0;
+    const scrollY = scrollFrac * overflow;
+    document.documentElement.style.setProperty('--video-track-h', trackPx + 'px');
+    document.documentElement.style.setProperty('--video-scroll-y', scrollY + 'px');
+  }, [vVideo.vMin, vVideo.vMax, vVideo.min, vVideo.max, vSize.height]);
+
+  useEffect(() => {
+    const span = Math.max(0.01, vAudio.vMax - vAudio.vMin);
+    const trackPx = NATURAL_TRACK_PX / span;
+    const overflow = Math.max(0, trackPx - aSize.height);
+    const scrollRange = Math.max(0.0001, (vAudio.max - vAudio.min) - span);
+    const scrollFrac = scrollRange > 0 ? Math.max(0, vAudio.vMin - vAudio.min) / scrollRange : 0;
+    const scrollY = -scrollFrac * overflow;
+    document.documentElement.style.setProperty('--audio-track-h', trackPx + 'px');
+    document.documentElement.style.setProperty('--audio-scroll-y', scrollY + 'px');
+  }, [vAudio.vMin, vAudio.vMax, vAudio.min, vAudio.max, aSize.height]);
+}
+
 function App() {
   useHost();
   const lanesAreaRef = useRef<HTMLDivElement | null>(null);
+  const headersStackRef = useRef<HTMLDivElement | null>(null);
+  const headersVideosRef = useRef<HTMLDivElement | null>(null);
+  const lanesStackRef = useRef<HTMLDivElement | null>(null);
+  const lanesVideosRef = useRef<HTMLDivElement | null>(null);
+  const lanesAudiosRef = useRef<HTMLDivElement | null>(null);
+  const vgutterRef = useRef<HTMLDivElement | null>(null);
+  const vgutterVideoRef = useRef<HTMLDivElement | null>(null);
+
+  // Push vaShare into CSS vars on every change. Both stacks (headers
+  // + lanes) read --va-video-share / --va-audio-share via flex-grow.
+  const vaShare = useStore((s) => s.vaShare);
+  useEffect(() => {
+    document.documentElement.style.setProperty('--va-video-share', String(vaShare));
+    document.documentElement.style.setProperty('--va-audio-share', String(1 - vaShare));
+  }, [vaShare]);
+
+  useVerticalZoomVars(lanesVideosRef, lanesAudiosRef);
 
   return (
     <div className="app">
@@ -146,8 +222,8 @@ function App() {
 
         {/* row 2, col 2 — track headers */}
         <div className="headers">
-          <div className="stack">
-            <div className="stack__videos" id="headers-videos">
+          <div className="stack" ref={headersStackRef}>
+            <div className="stack__videos" id="headers-videos" ref={headersVideosRef}>
               <div className="track-header is-video" data-track="V1">
                 <div className="track-header__twirl">
                   <span className="icon icon--triangle" style={{ '--icon-w': '8px', '--icon-h': '10px', '--icon-rot': '90deg' } as React.CSSProperties} />
@@ -171,7 +247,7 @@ function App() {
                 </div>
               </div>
             </div>
-            <div className="stack__divider" id="headers-divider" />
+            <VaSplitter stackRef={headersStackRef} videosRef={headersVideosRef} />
             <div className="stack__audios" id="headers-audios">
               <div className="track-header is-audio" data-track="A1">
                 <div className="track-header__twirl">
@@ -200,12 +276,12 @@ function App() {
         <div className="stage">
           <div className="stage__edge-shadow" />
           <div className="lanes-area" id="lanes-area" ref={lanesAreaRef}>
-            <div className="stack">
-              <div className="stack__videos" id="lanes-videos">
+            <div className="stack" ref={lanesStackRef}>
+              <div className="stack__videos" id="lanes-videos" ref={lanesVideosRef}>
                 <div className="lane" data-track="V1" data-side="video" />
               </div>
-              <div className="stack__divider" id="lanes-divider" />
-              <div className="stack__audios" id="lanes-audios">
+              <VaSplitter stackRef={lanesStackRef} videosRef={lanesVideosRef} />
+              <div className="stack__audios" id="lanes-audios" ref={lanesAudiosRef}>
                 <div className="lane" data-track="A1" data-side="audio" />
               </div>
             </div>
@@ -216,10 +292,11 @@ function App() {
         {/* row 3 — h-scroll */}
         <HScroll />
 
-        {/* row 2, col 4 — v-gutter */}
-        <div className="v-gutter">
-          <VScroll which="video" />
-          <div className="stack__divider v-gutter__divider" id="vgutter-divider" />
+        {/* row 2, col 4 — v-gutter. Uses the same VaSplitter; the two
+            VScrolls' flex-grow reads --va-video-share / --va-audio-share. */}
+        <div className="v-gutter" ref={vgutterRef}>
+          <VScroll which="video" elementRef={vgutterVideoRef} />
+          <VaSplitter stackRef={vgutterRef} videosRef={vgutterVideoRef} />
           <VScroll which="audio" />
         </div>
       </div>

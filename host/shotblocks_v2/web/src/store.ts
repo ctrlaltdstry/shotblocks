@@ -35,12 +35,18 @@ export interface State {
   vVideo: ScrollWindow;
   vAudio: ScrollWindow;
 
+  // V/A divider position (0..1, how much of the vertical body goes
+  // to the video side). 0.5 = centered. Drives both the lanes stack
+  // and the headers stack via flex-grow CSS vars.
+  vaShare: number;
+
   // Actions
   setTick: (frame: number, fps: number, playing: boolean) => void;
   setDocInfo: (fps: number, docFrames: number) => void;
   setHVisible: (vMin: number, vMax: number) => void;
   setVVideoVisible: (vMin: number, vMax: number) => void;
   setVAudioVisible: (vMin: number, vMax: number) => void;
+  setVaShare: (share: number) => void;
   setScrubFrame: (frame: number | null) => void;
 }
 
@@ -53,6 +59,7 @@ export const useStore = create<State>((set) => ({
   h:      { min: 0, max: 150, vMin: 0, vMax: 150 },
   vVideo: { min: 0, max: 1,   vMin: 0, vMax: 1   },
   vAudio: { min: 0, max: 1,   vMin: 0, vMax: 1   },
+  vaShare: 0.5,
 
   setTick: (frame, fps, playing) => set((s) => ({
     currentFrame: frame,
@@ -87,4 +94,6 @@ export const useStore = create<State>((set) => ({
   setVAudioVisible: (vMin, vMax) => set((s) => ({
     vAudio: { ...s.vAudio, vMin, vMax },
   })),
+
+  setVaShare: (share) => set({ vaShare: Math.max(0, Math.min(1, share)) }),
 }));

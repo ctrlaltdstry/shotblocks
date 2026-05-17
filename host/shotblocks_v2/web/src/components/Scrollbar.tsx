@@ -83,12 +83,17 @@ export function Scrollbar({ axis, window: win, minSpan, onChange, extraInset = 0
     let vMin = d.startMin;
     let vMax = d.startMax;
     if (d.active === 'thumb') {
+      // Pan: both edges shift together.
       vMin += deltaUnits;
       vMax += deltaUnits;
     } else if (d.active === 'start') {
+      // Top/left dot moves with the cursor. Visible window shrinks
+      // from the top.
       vMin += deltaUnits;
       if (vMin > vMax - minSpan) vMin = vMax - minSpan;
     } else {
+      // Bottom/right dot moves with the cursor. Window shrinks from
+      // the bottom.
       vMax += deltaUnits;
       if (vMax < vMin + minSpan) vMax = vMin + minSpan;
     }
