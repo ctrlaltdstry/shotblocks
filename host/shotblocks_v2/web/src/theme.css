@@ -1,0 +1,44 @@
+/* Design tokens — mirrored from Figma variables. Source of truth is
+   the Figma file. When variables change there, refresh via the MCP. */
+:root {
+  /* Grey ramp */
+  --color-grey-7:  #121212;
+  --color-grey-10: #1a1a1a;
+  --color-grey-12: #1f1f1f;
+  --color-grey-16: #292929;
+  --color-grey-24: #3d3d3d;
+  --color-grey-50: #7f7f7f;
+  --color-grey-white: #ffffff;
+
+  /* Timeline accents */
+  --color-timeline-primary-highlight:    #007aff;
+  --color-timeline-default-block:        #4da2ff;
+  --color-timeline-audio:                #5fe781;
+  --color-timeline-audio-selected:       #27dc56;
+  --color-timeline-icon-audio-default:   #9bf0b1;
+  --color-timeline-icon-waveform-on:     #ffffff;
+  --color-timeline-locked:               #383838;
+  --color-timeline-orphan-block:         #ff6259;
+  --color-timeline-hover:                #ffffff4d;
+
+  /* Layout */
+  --topbar-h:    26px;
+  --utilstrip-h: 39px;
+  --rail-w:      50px;
+  --headers-w:   200px;
+  --ruler-h:     39px;
+  --track-h:     65px;
+  --video-track-h: 65px;
+  --audio-track-h: 65px;
+  --va-divider-h:  4px;
+
+  /* Scrollbars */
+  --scrollbar-sz:        19px;
+  --scrollbar-pill-sz:   15px;
+  --scrollbar-end-sz:    15px;
+  --scrollbar-end-inset: 0px;
+
+  /* V/A split (1/1 = centered). JS rewrites these as the splitter drags. */
+  --va-video-share: 1;
+  --va-audio-share: 1;
+}

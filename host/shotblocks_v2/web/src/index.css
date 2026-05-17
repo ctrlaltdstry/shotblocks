@@ -1,12 +1,41 @@
-/* Global reset. Real theme tokens land when we port the timeline UI
-   (the legacy timeline.html and tokens.css have everything we need). */
+@import './theme.css';
+
+/* Bundled Inter font. Files live in src/fonts/ — Vite inlines them as
+   base64 data URLs because we set assetsInlineLimit to a huge value. */
+@font-face {
+  font-family: 'Inter';
+  font-style: normal;
+  font-weight: 400;
+  font-display: block;
+  src: url('./fonts/Inter-Regular.woff2') format('woff2');
+}
+@font-face {
+  font-family: 'Inter';
+  font-style: normal;
+  font-weight: 600;
+  font-display: block;
+  src: url('./fonts/Inter-SemiBold.woff2') format('woff2');
+}
+@font-face {
+  font-family: 'Inter';
+  font-style: normal;
+  font-weight: 700;
+  font-display: block;
+  src: url('./fonts/Inter-Bold.woff2') format('woff2');
+}
+
 html, body {
-  margin: 0;
-  padding: 0;
-  background: #0d0d0d;
-  color: #e5e5e5;
-  height: 100%;
-  overflow: hidden;
+  margin: 0; padding: 0;
+  background: var(--color-grey-10);
+  color: var(--color-grey-white);
+  height: 100%; overflow: hidden;
+  font-family: Inter, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+  color-scheme: dark;
+  /* The whole app is chrome — no text selection by default. Individual
+     elements (e.g. a future search field) can opt back in with their
+     own user-select: text rule. */
+  user-select: none;
+  -webkit-user-select: none;
 }
 * { box-sizing: border-box; }
-#root { height: 100vh; }
+#root { height: 100vh; width: 100vw; }
