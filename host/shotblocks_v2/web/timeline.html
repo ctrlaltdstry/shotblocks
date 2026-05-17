@@ -567,6 +567,8 @@
     flex: 0 0 var(--track-h);
     background: var(--color-grey-12);
     border-bottom: 1px solid var(--color-grey-16);
+    position: relative;       /* shot blocks position absolutely inside */
+    overflow: hidden;         /* clip blocks that extend past the visible window */
   }
   .stack__videos .lane:first-child {
     border-top: 1px solid var(--color-grey-16);
@@ -577,6 +579,30 @@
   .track-header.is-video { flex-basis: var(--video-track-h); }
   .stack__audios .lane,
   .track-header.is-audio { flex-basis: var(--audio-track-h); }
+
+  /* Shot block — PLACEHOLDER visual. Real Figma component lands later.
+     `left` and `width` are pixel-positioned by JS from the clip's
+     inFrame/outFrame against the current horizontal visible window. */
+  .shot-block {
+    position: absolute;
+    top: 4px; bottom: 4px;
+    background: var(--color-timeline-primary-highlight);
+    border-radius: 4px;
+    color: var(--color-grey-white);
+    font-family: Inter, sans-serif;
+    font-size: 11px;
+    font-weight: 600;
+    display: flex; align-items: center;
+    padding: 0 8px;
+    overflow: hidden;
+    white-space: nowrap;
+    cursor: grab;
+    user-select: none;
+    box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.15);
+  }
+  .shot-block:hover {
+    box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.35);
+  }
 
   /* Bottom horizontal scrollbar — sits in its own grid row under .stage */
   .h-scroll {
@@ -868,6 +894,50 @@
 (function () {
   const $ = (id) => document.getElementById(id);
 
+  // -----------------------------------------------------------------
+  // On-page debug overlay. WebView2 inside C4D doesn't easily expose
+  // DevTools, so mirror console.{log,warn,error} into a floating panel
+  // in the corner of the page. Toggle with backtick (`). Disabled by
+  // default; flip SHOW_DEBUG_OVERLAY to true to start with it open.
+  // -----------------------------------------------------------------
+  const SHOW_DEBUG_OVERLAY = false;
+  const debugPanel = document.createElement('div');
+  debugPanel.id = 'sb-debug-overlay';
+  debugPanel.style.cssText = [
+    'position:fixed','right:6px','bottom:24px','width:520px','max-height:40vh',
+    'overflow:auto','padding:6px 8px','background:rgba(0,0,0,0.85)','color:#cfe',
+    'font:11px/1.35 ui-monospace,Consolas,monospace','border:1px solid #333',
+    'border-radius:4px','z-index:9999','pointer-events:auto','white-space:pre-wrap',
+    'display:' + (SHOW_DEBUG_OVERLAY ? 'block' : 'none')
+  ].join(';');
+  function debugAppend(level, args) {
+    const ts = new Date().toISOString().slice(11, 19);
+    const line = document.createElement('div');
+    line.style.color = level === 'error' ? '#f88' : level === 'warn' ? '#fc8' : '#cfe';
+    const text = args.map(a => {
+      try { return typeof a === 'string' ? a : JSON.stringify(a); }
+      catch { return String(a); }
+    }).join(' ');
+    line.textContent = `[${ts}] ${text}`;
+    debugPanel.appendChild(line);
+    debugPanel.scrollTop = debugPanel.scrollHeight;
+  }
+  const origLog = console.log.bind(console);
+  const origWarn = console.warn.bind(console);
+  const origErr = console.error.bind(console);
+  console.log   = (...a) => { try { debugAppend('log',  a); } catch {} origLog(...a); };
+  console.warn  = (...a) => { try { debugAppend('warn', a); } catch {} origWarn(...a); };
+  console.error = (...a) => { try { debugAppend('error', a); } catch {} origErr(...a); };
+  window.addEventListener('error', (ev) => {
+    debugAppend('error', [`uncaught: ${ev.message} @ ${ev.filename}:${ev.lineno}`]);
+  });
+  document.addEventListener('DOMContentLoaded', () => document.body.appendChild(debugPanel));
+  window.addEventListener('keydown', (ev) => {
+    if (ev.key === '`') {
+      debugPanel.style.display = debugPanel.style.display === 'none' ? 'block' : 'none';
+    }
+  });
+
   // Authoritative state pushed from C++ via PostWebMessage. Visible
   // window is driven by the horizontal scrollbar (state.h.vMin..vMax in
   // frames); pan/zoom of the lanes vertically is driven by the v-video
@@ -884,9 +954,15 @@
     // Track lists. Index 0 = closest to the V/A divider (lowest number
     // for video, lowest number for audio). New tracks are added at the
     // outer ends (top of video stack, bottom of audio stack).
-    videoTracks: [{ id: 1, name: 'Video 1' }],
-    audioTracks: [{ id: 1, name: 'Audio 1' }],
+    // Each track carries its own clips array: { id, inFrame, outFrame,
+    // sourceName, sourceType }. inFrame/outFrame are inclusive of in,
+    // exclusive of out.
+    videoTracks: [{ id: 1, name: 'Video 1', clips: [] }],
+    audioTracks: [{ id: 1, name: 'Audio 1', clips: [] }],
   };
+  // Monotonic clip ID. Unique across all tracks for the session.
+  let nextClipId = 1;
+  const DEFAULT_CLIP_DURATION_FRAMES = 24;
 
   function pad2(n) { return (n < 10 ? '0' : '') + n; }
 
@@ -1216,8 +1292,9 @@
 
     hVideos.innerHTML = videosOrdered.map(videoHeaderHTML).join('');
     hAudios.innerHTML = audiosOrdered.map(audioHeaderHTML).join('');
-    lVideos.innerHTML = videosOrdered.map(t => `<div class="lane" data-track="V${t.id}"></div>`).join('');
-    lAudios.innerHTML = audiosOrdered.map(t => `<div class="lane" data-track="A${t.id}"></div>`).join('');
+    lVideos.innerHTML = videosOrdered.map(t => `<div class="lane" data-track="V${t.id}" data-side="video"></div>`).join('');
+    lAudios.innerHTML = audiosOrdered.map(t => `<div class="lane" data-track="A${t.id}" data-side="audio"></div>`).join('');
+    renderClips();
 
     // Track count drives the v-scrollbar range. Default: all visible.
     const wasFullVideo = state.vVideo.vMin === state.vVideo.min && state.vVideo.vMax === state.vVideo.max;
@@ -1229,6 +1306,92 @@
     updateScrollbars();
     applyVerticalZoom('video');
     applyVerticalZoom('audio');
+  }
+
+  // Render shot blocks (clips) into their lanes. Called whenever clips
+  // change OR the horizontal visible window changes (so we have to
+  // recompute left+width). Track structure must already exist —
+  // renderTracks() builds it; renderClips() only updates lane contents.
+  function shotBlockHTML(clip) {
+    const label = clip.sourceName || 'clip';
+    return `<div class="shot-block" data-clip="${clip.id}" title="${label}">${label}</div>`;
+  }
+
+  function pxPerFrameForLanes() {
+    const lanes = document.querySelector('.lanes-area');
+    if (!lanes) return 0;
+    const w = lanes.getBoundingClientRect().width;
+    const visibleSpan = Math.max(1, state.h.vMax - state.h.vMin);
+    return w / visibleSpan;
+  }
+
+  function renderClips() {
+    const pxPerFrame = pxPerFrameForLanes();
+    const vMin = state.h.vMin;
+    const sides = [
+      { tracks: state.videoTracks, container: $('lanes-videos'), prefix: 'V' },
+      { tracks: state.audioTracks, container: $('lanes-audios'), prefix: 'A' },
+    ];
+    for (const side of sides) {
+      if (!side.container) continue;
+      for (const t of side.tracks) {
+        const lane = side.container.querySelector(`.lane[data-track="${side.prefix}${t.id}"]`);
+        if (!lane) continue;
+        lane.innerHTML = t.clips.map(shotBlockHTML).join('');
+        for (const clip of t.clips) {
+          const el = lane.querySelector(`.shot-block[data-clip="${clip.id}"]`);
+          if (!el) continue;
+          const left = (clip.inFrame  - vMin) * pxPerFrame;
+          const width = (clip.outFrame - clip.inFrame) * pxPerFrame;
+          el.style.left  = left + 'px';
+          el.style.width = Math.max(2, width) + 'px';
+        }
+      }
+    }
+  }
+
+  // OM-drop handler. C++ sends absolute screen coordinates; convert to
+  // viewport-local (subtract WebView2's screenX/Y), then figure out
+  // which lane was hit and which frame the X maps to. Drop creates a
+  // new clip on that lane at that frame.
+  function handleOmDrop(msg) {
+    if (!msg || !Array.isArray(msg.items) || msg.items.length === 0) return;
+    // C++ already converted absolute screen coords to HtmlViewer viewport
+    // coords (via Global2Local + GetItemDim), so we just use them.
+    const localX = msg.viewportX;
+    const localY = msg.viewportY;
+    const targets = document.elementsFromPoint(localX, localY);
+    const laneEl = targets.find(el => el.classList && el.classList.contains('lane'));
+    if (!laneEl) {
+      console.log('[sb] drop missed any lane at', localX, localY);
+      return;
+    }
+    const trackId = laneEl.getAttribute('data-track');     // e.g. "V1" or "A1"
+    const side    = laneEl.getAttribute('data-side');      // "video" or "audio"
+    const list    = side === 'video' ? state.videoTracks : state.audioTracks;
+    const idNum   = parseInt(trackId.slice(1), 10);
+    const track   = list.find(t => t.id === idNum);
+    if (!track) return;
+
+    // Map drop X within the lane to a frame number.
+    const laneRect = laneEl.getBoundingClientRect();
+    const xInLane = Math.max(0, localX - laneRect.left);
+    const pxPerFrame = pxPerFrameForLanes();
+    if (pxPerFrame <= 0) return;
+    const dropFrame = Math.round(state.h.vMin + xInLane / pxPerFrame);
+
+    // Drop the first item only for now (multi-select drops later).
+    const item = msg.items[0];
+    const clip = {
+      id: nextClipId++,
+      inFrame:  dropFrame,
+      outFrame: dropFrame + DEFAULT_CLIP_DURATION_FRAMES,
+      sourceName: item.name || 'clip',
+      sourceType: item.type | 0,
+    };
+    track.clips.push(clip);
+    renderClips();
+    console.log('[sb] dropped', item.name, 'on', trackId, 'at frame', dropFrame);
   }
 
 
@@ -1403,7 +1566,7 @@
       $('h-scroll-track'),  $('h-scroll-thumb'),
       $('h-scroll-end-left'), $('h-scroll-end-right'),
       'x',
-      () => { layout(); /* re-renders ruler + playhead */ });
+      () => { layout(); renderClips(); /* re-renders ruler + playhead + clip rects */ });
     attachScrollbar('vVideo',
       $('v-video-track'),  $('v-video-thumb'),
       $('v-video-end-top'), $('v-video-end-bottom'),
@@ -1443,7 +1606,7 @@
   attachToolPalette();
   attachVaSplitter();
   attachAllScrollbars();
-  window.addEventListener('resize', () => { layout(); updateScrollbars(); });
+  window.addEventListener('resize', () => { layout(); updateScrollbars(); renderClips(); });
 
   // Suppress browser-level page zoom. Inside a docked DAW panel, Ctrl+wheel
   // and Ctrl+/Ctrl-/Ctrl0 should not scale the whole UI. The wheel handler
@@ -1543,6 +1706,10 @@
         state.playing = !!msg.playing;
         positionPlayhead();
         updateTimecode();
+        return;
+      }
+      if (msg.kind === 'om-drop') {
+        handleOmDrop(msg);
         return;
       }
       console.log('[sb] host->', msg);

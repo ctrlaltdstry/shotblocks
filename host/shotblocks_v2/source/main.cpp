@@ -357,54 +357,99 @@ public:
 		PostTick();
 	}
 
-	// Probe for OM-drag-into-dialog. Logs everything we see so we can
-	// verify whether the HtmlViewer/WebView2 child swallows the drag at
-	// the OS level before C4D delivers it to us, or whether the drag
-	// bubbles up to the dialog as expected.
+	// Object Manager → timeline drag handler. We accept any dropped
+	// BaseList2D (cameras and the v1 shotblocks rig today; filter
+	// tightens later). On every BFM_DRAGRECEIVE while the cursor is
+	// over the HtmlViewer, show the accept cursor. On BFM_DRAG_FINISHED,
+	// forward the drop to JS as {kind:"om-drop", ...} so the UI can
+	// place a shot block on the right lane at the right frame.
+	//
+	// Coords: BFM_DRAG_SCREENX/Y are absolute screen pixels. JS gets
+	// raw screen coords plus the dialog's screen origin so it can
+	// translate to viewport-local space without guessing HiDPI scaling.
 	Int32 Message(const BaseContainer& msg, BaseContainer& result) override
 	{
 		if (msg.GetId() == BFM_DRAGRECEIVE)
 		{
-			const Bool finished = msg.GetBool(BFM_DRAG_FINISHED);
 			const Bool lost     = msg.GetBool(BFM_DRAG_LOST);
-			const Int32 sx      = msg.GetInt32(BFM_DRAG_SCREENX);
-			const Int32 sy      = msg.GetInt32(BFM_DRAG_SCREENY);
+			const Bool finished = msg.GetBool(BFM_DRAG_FINISHED);
 
+			// Reject drags that aren't over our HtmlViewer area.
+			if (lost || !CheckDropArea(ID_HOST_HTMLVIEW, msg, true, true))
+				return 0;
+
+			// Pull the dragged item(s). Only proceed if it's an AtomArray
+			// holding at least one accepted type. Reject everything else
+			// up front so the cursor reflects "can't drop here."
 			Int32 type = 0;
 			void* obj  = nullptr;
 			GetDragObject(msg, &type, &obj);
+			if (type != DRAGTYPE_ATOMARRAY || !obj)
+				return 0;
 
-			Int32 count = 0;
-			Int32 firstObjType = 0;
-			maxon::String firstName("?");
-			if (type == DRAGTYPE_ATOMARRAY && obj)
+			AtomArray* arr = static_cast<AtomArray*>(obj);
+			if (arr->GetCount() == 0)
+				return 0;
+
+			// During hover (not finished), just paint the accept cursor.
+			if (!finished)
+				return SetDragDestination(MOUSE_POINT_HAND);
+
+			// FINISHED — actually deliver to JS.
+			// Convert absolute screen coords to coords inside the
+			// HtmlViewer viewport:
+			//   1) Screen2Local: screen → dialog-local (the dialog's
+			//      user-area origin). NOTE: Global2Local is screen →
+			//      C4D APP WINDOW local, which is NOT what we want.
+			//   2) Subtract the HtmlViewer's position within the dialog
+			//      via GetItemDim, leaving coords inside the viewport.
+			Int32 sx = msg.GetInt32(BFM_DRAG_SCREENX);
+			Int32 sy = msg.GetInt32(BFM_DRAG_SCREENY);
+			Screen2Local(&sx, &sy);
+			Int32 hvX = 0, hvY = 0, hvW = 0, hvH = 0;
+			if (GetItemDim(ID_HOST_HTMLVIEW, &hvX, &hvY, &hvW, &hvH))
 			{
-				AtomArray* arr = static_cast<AtomArray*>(obj);
-				count = arr->GetCount();
-				if (count > 0)
-				{
-					C4DAtom* atom = arr->GetIndex(0);
-					BaseList2D* b2 = static_cast<BaseList2D*>(atom);
-					if (b2)
-					{
-						firstObjType = b2->GetType();
-						firstName = b2->GetName();
-					}
-				}
+				sx -= hvX;
+				sy -= hvY;
 			}
 
-			char buf[160];
-			_snprintf_s(buf, sizeof(buf), _TRUNCATE,
-				"[Shotblocks/v2] DRAG type=%d count=%d firstType=%d xy=%d,%d %s%s name=",
-				(int)type, (int)count, (int)firstObjType,
-				(int)sx, (int)sy,
-				finished ? "FINISHED " : "",
-				lost     ? "LOST"      : "");
-			GePrint(maxon::String(buf) + firstName);
+			// Build a JSON payload: {kind:"om-drop", screenX, screenY,
+			//                        items:[{name, type}, ...]}.
+			// (Object identity by name for now; switch to a stable ID
+			// like a BaseLink GUID when the model needs persistence.)
+			maxon::String items("["_s);
+			for (Int32 i = 0; i < arr->GetCount(); ++i)
+			{
+				C4DAtom* atom = arr->GetIndex(i);
+				BaseList2D* b2 = static_cast<BaseList2D*>(atom);
+				if (!b2)
+					continue;
+				if (i > 0)
+					items += ","_s;
+				char hdr[64];
+				_snprintf_s(hdr, sizeof(hdr), _TRUNCATE,
+					"{\"type\":%d,\"name\":\"", (int)b2->GetType());
+				items += maxon::String(hdr);
+				// Naive escape: names with " or \ will break this. Real
+				// JSON encoder when we add a JSON dependency. For now,
+				// C4D object names rarely contain those characters.
+				items += b2->GetName();
+				items += "\"}"_s;
+			}
+			items += "]"_s;
 
-			// Accept drops over the HtmlViewer rect; show the "hand" cursor.
-			if (!lost && CheckDropArea(ID_HOST_HTMLVIEW, msg, true, true))
-				return SetDragDestination(MOUSE_POINT_HAND);
+			// viewportX/Y are coords inside the HtmlViewer's web viewport.
+			// JS can pass them straight to document.elementsFromPoint().
+			char head[256];
+			_snprintf_s(head, sizeof(head), _TRUNCATE,
+				"{\"kind\":\"om-drop\",\"viewportX\":%d,\"viewportY\":%d,\"items\":",
+				(int)sx, (int)sy);
+			maxon::String payload = maxon::String(head) + items + "}"_s;
+
+			if (_htmlView)
+				_htmlView->PostWebMessage(payload);
+			GePrint("[Shotblocks/v2] om-drop posted: "_s + payload);
+			return SetDragDestination(MOUSE_POINT_HAND);
 		}
 		return GeDialog::Message(msg, result);
 	}

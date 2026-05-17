@@ -29,5 +29,12 @@ if (-not (Test-Path $exe))   { throw "C4D exe not found: $exe" }
 if (-not (Test-Path $scene)) { throw "Scene not found: $scene" }
 
 Write-Host "Launching C4D with $scene..."
+# Enable WebView2 remote debugging so we can attach Chrome to the
+# HtmlViewer-hosted page at chrome://inspect (port 9222). Required
+# because C4D doesn't expose F12 / right-click "Inspect" inside the
+# HtmlViewerCustomGui. The env var must be set on the spawned process,
+# not just this PowerShell session.
+$env:WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS = "--remote-debugging-port=9222"
 Start-Process -FilePath $exe -ArgumentList "`"$scene`""
 Write-Host "Done. Cinema 4D is starting; check the dialog and console once it's up."
+Write-Host "DevTools: open Chrome/Edge to http://localhost:9222 and click the Shotblocks page."
