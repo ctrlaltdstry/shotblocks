@@ -431,6 +431,18 @@ body.va-splitter-hover .stack__divider.is-grabbable,
     0 0 250px -29px var(--color-timeline-primary-highlight);
 }
 
+/* Marquee selection rectangle — 1px primary-highlight outline drawn
+   while the user is dragging on empty .lanes-area space. Live update
+   of the selection happens in useMarquee.ts; the rectangle here is
+   purely visual. */
+.marquee-rect {
+  position: absolute;
+  pointer-events: none;
+  border: 1px solid var(--color-timeline-primary-highlight);
+  background: color-mix(in srgb, var(--color-timeline-primary-highlight) 12%, transparent);
+  z-index: 5;
+}
+
 /* Shot block — Figma node 173:1827 spec. State × type × height matrix
    composed via class modifiers. Tall (>=32px lane): label top-left,
    icon bottom-left. Thin (<32px lane): label fills row, icon right. */
@@ -438,7 +450,11 @@ body.va-splitter-hover .stack__divider.is-grabbable,
   position: absolute;
   top: 0; bottom: 0;            /* fills full lane height; no inset */
   border-radius: 4px;
-  overflow: hidden;
+  /* overflow:visible (default) — required so the edge-hover bracket
+     and selected-outline overlays can extend 1px outside the clip's
+     box to overlap the clip's own 1px border. The inner
+     .shot-block__content wrapper has its OWN overflow:hidden so the
+     label/icon clip cleanly to the rounded corners. */
   cursor: grab;
   user-select: none;
   font-family: Inter, sans-serif;
@@ -450,17 +466,38 @@ body.va-splitter-hover .stack__divider.is-grabbable,
      adjacent clips touch this gives the visible "two clips with a
      1px line between them, both rounded" look. */
   border: 1px solid #3671b2;
-  display: flex; flex-direction: column;
-  justify-content: space-between;
-  padding: 5px 14px 4px;        /* compensated for the 1px border */
-  /* Inset box-shadow gives a 1px white border that sits INSIDE the
-     block's box (the lane has overflow:hidden so a real outline gets
-     clipped). No layout shift on selection because inset shadow
-     doesn't take space. */
-  box-shadow: inset 0 0 0 0 transparent;
-  transition: box-shadow 0.08s ease, border-color 0.08s ease;
+  transition: border-color 0.08s ease;
 }
-.shot-block.is-selected { box-shadow: inset 0 0 0 1px var(--color-grey-white); }
+/* Inner content wrapper. Holds the label + icon, takes the original
+   .shot-block's flex layout + padding, and crucially has its own
+   overflow:hidden + border-radius so content gets clipped to the
+   clip's rounded corners on narrow clips (no more icon poking out
+   the side). Brackets and selected-outline live outside this so
+   they can still extend past the clip's border. */
+.shot-block__content {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  flex-direction: column;
+  justify-content: space-between;
+  padding: 5px 14px 4px;
+  overflow: hidden;
+  border-radius: 4px;
+}
+/* Selected stroke is white (per Figma node 173:2549 — "Selected"
+   variant). Rendered as a child-div overlay (.shot-block__selected-
+   outline) at inset:-1px so it covers the clip's own 1px dark border
+   exactly. Same pattern as the edge-hover bracket — see memory
+   clip-state-overlay-pattern. Background swap (saturated highlight
+   color) is still per-type below since it's a fill change, not an
+   overlay. */
+/* During an in-timeline drag, the clip element itself translates under
+   the cursor — no ghost, no dim. We just want a grabbing cursor and a
+   z-index lift so the moving clip draws above any clip it crosses. */
+.shot-block.is-dragging {
+  cursor: grabbing;
+  z-index: 10;
+}
 /* Each border is the clip's own background dimmed by 30% black.
    color-mix avoids hand-derived hex constants and stays correct if
    the timeline color tokens ever change. */
@@ -470,7 +507,6 @@ body.va-splitter-hover .stack__divider.is-grabbable,
 }
 .shot-block.is-video.is-selected {
   background: var(--color-timeline-primary-highlight);
-  border-color: color-mix(in srgb, var(--color-timeline-primary-highlight) 70%, black);
 }
 .shot-block.is-audio    {
   background: var(--color-timeline-audio);
@@ -478,7 +514,6 @@ body.va-splitter-hover .stack__divider.is-grabbable,
 }
 .shot-block.is-audio.is-selected {
   background: var(--color-timeline-audio-selected);
-  border-color: color-mix(in srgb, var(--color-timeline-audio-selected) 70%, black);
 }
 .shot-block.is-orphaned {
   background: var(--color-timeline-orphan-block);
@@ -486,7 +521,6 @@ body.va-splitter-hover .stack__divider.is-grabbable,
 }
 .shot-block.is-orphaned.is-selected {
   background: var(--color-timeline-red, #ff3b30);
-  border-color: color-mix(in srgb, var(--color-timeline-red, #ff3b30) 70%, black);
 }
 .shot-block.is-locked   {
   background: var(--color-timeline-locked);
@@ -501,8 +535,16 @@ body.va-splitter-hover .stack__divider.is-grabbable,
   overflow: hidden;
 }
 .shot-block__icon-wrap {
+  /* Same recipe as .shot-block__label — when the clip narrows, the
+     wrapper's width is capped at its flex-cell space and overflow:
+     hidden clips the inner icon span. max-width:100% (relative to
+     the flex container) ensures we never claim more horizontal room
+     than the column actually has. */
   flex: 0 0 auto;
-  display: flex; align-items: center;
+  max-width: 100%;
+  min-width: 0;
+  display: block;
+  overflow: hidden;
 }
 
 /* Icons inside a shot block. Unselected = 30% white; selected = full
@@ -525,8 +567,10 @@ body.va-splitter-hover .stack__divider.is-grabbable,
   align-self: flex-start;
 }
 
-/* Thin layout: switch to a single row, icon at right. */
-.shot-block.is-thin {
+/* Thin layout: switch to a single row, icon at right. The thin-state
+   modifier lives on the outer .shot-block; the flex layout it tunes
+   lives on the inner .shot-block__content. */
+.shot-block.is-thin .shot-block__content {
   flex-direction: row;
   align-items: center;
   padding: 4px 25px 4px 15px;
@@ -537,32 +581,100 @@ body.va-splitter-hover .stack__divider.is-grabbable,
 }
 
 /* Edge-hover brackets — yellow `[` on left, mirrored `]` on right.
-   Pseudo-elements positioned ABSOLUTELY over the block's own edges.
-   Bracket SVG (9×65, fill #FFD452) is inlined as a data URL so it
-   resolves under file://. preserveAspectRatio="none" lets the bracket
-   stretch vertically with the lane.
-   Bracket sits INSIDE the block geometry (left:0 / right:0) so it
-   gets clipped by overflow:hidden — matches Figma's "hugs the border"
-   intent. Width 9px. */
-.shot-block::before,
-.shot-block::after {
-  content: '';
+   Per Figma node 193:1166 / 193:1168 (single-edge "Default"/"Variant2",
+   7×65px) and node 193:1170 ("Variant3", 14×65 — the rolling-edit seam
+   variant rendered when both edges of two adjacent clips light up).
+
+   Implementation: a pseudo-element with three borders (top / left /
+   bottom) and rounded left corners — no SVG mask needed. The right
+   border is omitted so it visually "opens" toward the clip interior.
+   For the right edge the same element is mirrored via scaleX(-1).
+
+   Brackets sit INSIDE the block geometry (left:0 / right:0) so they
+   get clipped by the clip's overflow:hidden. */
+/* Edge-hover bracket overlays — per Figma node 202:1274. Each bracket
+   is a 13x65 rounded rectangle hugging the clip's edge:
+     • 30% white background fill (--color-timeline-hover)
+     • Yellow #EDA840 border on three sides (open toward clip interior)
+     • Rounded corners on the closed side (matches clip's 4px radius)
+     • Three vertical white dots (3x15 SVG) centered in the bracket
+
+   Both brackets are always rendered (one as left, one as right);
+   opacity transitions on .is-edge-left / .is-edge-right give the
+   fade-in effect. The dots SVG uses preserveAspectRatio so the dots
+   stay proportional even when the lane is zoomed tall (memory:
+   icons-always-proportional). */
+.shot-block__bracket {
   position: absolute;
-  top: 0; bottom: 0;
-  width: 9px;
-  background-color: #FFD452;
-  -webkit-mask-image: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' preserveAspectRatio='none' viewBox='0 0 9 65' fill='none'><path d='M9 1C9 1.55228 8.55228 2 8 2H4C2.89543 2 2 2.89543 2 4V61C2 62.1046 2.89543 63 4 63H8C8.55228 63 9 63.4477 9 64C9 64.5523 8.55228 65 8 65H4C1.79086 65 0 63.2091 0 61V4C0 1.79086 1.79086 0 4 0H8C8.55228 0 9 0.447715 9 1Z' fill='%23FFD452'/></svg>");
-          mask-image: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' preserveAspectRatio='none' viewBox='0 0 9 65' fill='none'><path d='M9 1C9 1.55228 8.55228 2 8 2H4C2.89543 2 2 2.89543 2 4V61C2 62.1046 2.89543 63 4 63H8C8.55228 63 9 63.4477 9 64C9 64.5523 8.55228 65 8 65H4C1.79086 65 0 63.2091 0 61V4C0 1.79086 1.79086 0 4 0H8C8.55228 0 9 0.447715 9 1Z' fill='%23FFD452'/></svg>");
-  -webkit-mask-repeat: no-repeat; mask-repeat: no-repeat;
-  -webkit-mask-size: 100% 100%; mask-size: 100% 100%;
+  /* Pull outward by 1px on all sides so the bracket's OUTER edge
+     coincides with the clip's OUTER edge — directly on top of the
+     clip's own 1px dark border. Without this, the bracket sits inside
+     the padding box (which is INSIDE the clip's border), so the
+     yellow rounded corner curves inward away from the clip's curve. */
+  top: -1px;
+  bottom: -1px;
+  width: 13px;
+  box-sizing: border-box;
+  border-radius: 4px;
+  opacity: 0;
+  transition: opacity 0.18s ease;
+  pointer-events: none;
+  background: var(--color-timeline-hover, rgba(255, 255, 255, 0.3));
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  /* Lift above the selected-outline (z:1) so that when a selected
+     clip is part of a rolling-edit hover, its bracket still shows
+     instead of being covered by its own white selection outline. */
+  z-index: 2;
+}
+.shot-block__bracket::before {
+  /* The three dots, rendered as a background SVG on a fixed-size
+     pseudo so the dots stay 3x15 regardless of bracket height. */
+  content: '';
+  display: block;
+  width: 3px;
+  height: 15px;
+  background-image: url('./icons/bracket-dots.svg');
+  background-size: 3px 15px;
+  background-repeat: no-repeat;
+  background-position: center;
+}
+.shot-block__bracket--left {
+  left: -1px;
+  border-top: 1px solid var(--color-timeline-edge-highlight, #EDA840);
+  border-left: 1px solid var(--color-timeline-edge-highlight, #EDA840);
+  border-bottom: 1px solid var(--color-timeline-edge-highlight, #EDA840);
+  border-top-right-radius: 0;
+  border-bottom-right-radius: 0;
+}
+.shot-block__bracket--right {
+  right: -1px;
+  border-top: 1px solid var(--color-timeline-edge-highlight, #EDA840);
+  border-right: 1px solid var(--color-timeline-edge-highlight, #EDA840);
+  border-bottom: 1px solid var(--color-timeline-edge-highlight, #EDA840);
+  border-top-left-radius: 0;
+  border-bottom-left-radius: 0;
+}
+.shot-block.is-edge-left  .shot-block__bracket--left  { opacity: 1; }
+.shot-block.is-edge-right .shot-block__bracket--right { opacity: 1; }
+
+/* Selected-outline overlay — child-div pattern matching the bracket.
+   1px white border at inset:-1px so it sits exactly on top of the
+   clip's own 1px dark stroke. No fade transition by default (selection
+   is a click, not a hover); add `transition: opacity` here later if
+   we want a softer feel. */
+.shot-block__selected-outline {
+  position: absolute;
+  inset: -1px;
+  box-sizing: border-box;
+  border: 1px solid var(--color-grey-white);
+  border-radius: 4px;
   opacity: 0;
   pointer-events: none;
-  z-index: 3;
+  z-index: 1;
 }
-.shot-block::before { left: 0; }
-.shot-block::after  { right: 0; transform: scaleX(-1); }
-.shot-block.is-edge-left::before  { opacity: 1; }
-.shot-block.is-edge-right::after  { opacity: 1; }
+.shot-block.is-selected .shot-block__selected-outline { opacity: 1; }
 .stack__videos .lane:first-child {
   border-top: 1px solid var(--color-grey-16);
 }

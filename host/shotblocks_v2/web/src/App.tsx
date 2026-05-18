@@ -5,6 +5,9 @@ import './App.css';
 import logoUrl from './icons/logo.svg';
 import { useHost } from './useHost';
 import { useOmDrop } from './useOmDrop';
+import { useActiveClipRouter } from './useActiveClipRouter';
+import { usePersistence } from './usePersistence';
+import { useKeyboard } from './useKeyboard';
 import { useStore } from './store';
 import { Ruler } from './components/Ruler';
 import { Playhead } from './components/Playhead';
@@ -14,6 +17,8 @@ import { TrackHeader } from './components/TrackHeader';
 import { Lane } from './components/Lane';
 import { ToolPalette } from './components/ToolPalette';
 import { DropGhost } from './components/DropGhost';
+import { MarqueeOverlay } from './components/MarqueeOverlay';
+import { useMarquee } from './useMarquee';
 import { DebugOverlay } from './DebugOverlay';
 import { useElementSize } from './useElementSize';
 
@@ -262,9 +267,13 @@ function usePageZoomSuppress() {
 function App() {
   useHost();
   useOmDrop();
+  useActiveClipRouter();
+  usePersistence();
+  useKeyboard();
   useTrackCountSync();
   usePageZoomSuppress();
   const lanesAreaRef = useRef<HTMLDivElement | null>(null);
+  useMarquee(lanesAreaRef);
   const headersStackRef = useRef<HTMLDivElement | null>(null);
   const headersVideosRef = useRef<HTMLDivElement | null>(null);
   const lanesStackRef = useRef<HTMLDivElement | null>(null);
@@ -358,6 +367,7 @@ function App() {
             />
             <DropGhost lanesAreaRef={lanesAreaRef} />
             <Playhead lanesAreaRef={lanesAreaRef} />
+            <MarqueeOverlay />
           </div>
         </div>
 

@@ -57,8 +57,10 @@
 #include <functional>
 #include <future>
 #include <mutex>
+#include <set>
 #include <string>
 #include <thread>
+#include <unordered_map>
 
 #pragma comment(lib, "Ws2_32.lib")
 
@@ -140,6 +142,55 @@ static Bool GetAnimatedFrameRange(BaseObject* op, Int32 fps,
 	*outFirst = first.GetFrame(fps);
 	*outLast  = last.GetFrame(fps);
 	return true;
+}
+
+
+// -----------------------------------------------------------------------------
+// Persistence — clip data lives in a hidden helper BaseObject inserted at
+// the document root, mirroring the Python plugin (sb_persistence.py). The
+// helper is marked via a BaseContainer string key so we can find it again
+// across save/load cycles. Per-clip camera BaseLinks are stored on the same
+// helper, keyed by BASE+objectId — survives object renames in the OM and
+// follows the doc through save/load.
+// -----------------------------------------------------------------------------
+static const Int32 BCKEY_V2_HELPER_MARKER = 1100;   // String: identifies the helper
+static const Int32 BCKEY_V2_CLIPS_JSON    = 1101;   // String: JSON tracks + nextClipId
+static const Int32 BCKEY_V2_VERSION       = 1102;   // Int32: monotonic save version
+static const Int32 BCKEY_V2_CAM_LINK_BASE = 2100;   // BaseLink at BASE + objectId
+static const char  V2_HELPER_MARKER_VALUE[]  = "shotblocks_v2_helper";
+static const char  V2_HELPER_NULL_NAME[]     = "_shotblocks_v2";
+
+// Find the existing v2 helper in `doc`, or nullptr.
+static BaseObject* FindV2Helper(BaseDocument* doc)
+{
+	if (!doc) return nullptr;
+	for (BaseObject* op = doc->GetFirstObject(); op; op = op->GetNext())
+	{
+		BaseContainer* bc = op->GetDataInstance();
+		if (!bc) continue;
+		if (bc->GetString(BCKEY_V2_HELPER_MARKER) == maxon::String(V2_HELPER_MARKER_VALUE))
+			return op;
+	}
+	return nullptr;
+}
+
+// Find or create the v2 helper. Hidden + display:none so it never appears
+// in the Object Manager or viewport.
+static BaseObject* GetOrCreateV2Helper(BaseDocument* doc)
+{
+	if (!doc) return nullptr;
+	BaseObject* helper = FindV2Helper(doc);
+	if (helper) return helper;
+	helper = BaseObject::Alloc(Onull);
+	if (!helper) return nullptr;
+	helper->SetName(maxon::String(V2_HELPER_NULL_NAME));
+	BaseContainer* bc = helper->GetDataInstance();
+	if (bc)
+		bc->SetString(BCKEY_V2_HELPER_MARKER, maxon::String(V2_HELPER_MARKER_VALUE));
+	helper->ChangeNBit(NBIT::OHIDE, NBITCONTROL::SET);
+	doc->InsertObject(helper, nullptr, nullptr);
+	GePrint("[Shotblocks/v2] created persistence helper"_s);
+	return helper;
 }
 
 
@@ -485,8 +536,11 @@ public:
 			sy -= hvY;
 		}
 
-		// Build the items array. Per-item: type, name, and either
-		// inFrame/outFrame (animated range) or hasAnim:false.
+		// Build the items array. Per-item: type, name, animated-range,
+		// and (on FINISHED only) an objectId that JS keeps around to
+		// later request camera switching via set-active-camera. We only
+		// allocate the link on FINISHED so hover-only previews don't
+		// leak entries into _cameraLinks.
 		BaseDocument* doc = GetActiveDocument();
 		const Int32 fps = doc ? doc->GetFps() : 30;
 		maxon::String items("["_s);
@@ -498,19 +552,30 @@ public:
 				continue;
 			if (i > 0)
 				items += ","_s;
-			char hdr[96];
+
+			Int32 objectId = 0;
+			if (finished && b2->IsInstanceOf(Obase) && doc)
+			{
+				BaseObject* op = static_cast<BaseObject*>(b2);
+				objectId = _nextObjectId++;
+				AutoAlloc<BaseLink> link;
+				if (link)
+				{
+					link->SetLink(op);
+					_cameraLinks.emplace(objectId, std::move(link));
+				}
+			}
+
+			char hdr[160];
 			_snprintf_s(hdr, sizeof(hdr), _TRUNCATE,
-				"{\"type\":%d,\"name\":\"", (int)b2->GetType());
+				"{\"type\":%d,\"objectId\":%d,\"name\":\"",
+				(int)b2->GetType(), (int)objectId);
 			items += maxon::String(hdr);
 			items += b2->GetName();
 			// Animated range if present. Only BaseObjects (3D objects)
 			// have keyframes worth walking; other BaseList2Ds skip.
 			Int32 firstFrame = 0, lastFrame = 0;
 			Bool hasAnim = false;
-			// IsInstanceOf(Obase) is C4D's "is this a 3D BaseObject"
-			// check (Cinema's base classes aren't polymorphic so
-			// dynamic_cast doesn't work). Tags, materials, etc. fall
-			// through to hasAnim = false.
 			if (b2->IsInstanceOf(Obase))
 			{
 				BaseObject* op = static_cast<BaseObject*>(b2);
@@ -559,11 +624,35 @@ public:
 			_lastTimeChangedTickMs = GeGetMilliSeconds();
 			PostTick();
 		}
+		else if (id == EVMSG_CHANGE)
+		{
+			CheckForExternalStateChange();
+		}
 		else if (id == g_sb_msg_http_request)
 		{
 			DrainHttpQueue();
 		}
 		return GeDialog::CoreMessage(id, msg);
+	}
+
+	// Compare the helper's version counter against what we last wrote /
+	// loaded. A mismatch means C4D's undo system rolled the helper to
+	// a different snapshot (Ctrl+Z / Ctrl+Y on a save-state record);
+	// JS needs to reload. PostWebMessage is one-way; JS handles the
+	// message by re-firing load-state.
+	void CheckForExternalStateChange()
+	{
+		BaseDocument* doc = GetActiveDocument();
+		if (!doc) return;
+		BaseObject* helper = FindV2Helper(doc);
+		if (!helper) return;
+		BaseContainer* bc = helper->GetDataInstance();
+		if (!bc) return;
+		const Int32 curVersion = bc->GetInt32(BCKEY_V2_VERSION);
+		if (curVersion == _lastSeenVersion) return;
+		_lastSeenVersion = curVersion;
+		if (_htmlView && _navigated)
+			_htmlView->PostWebMessage("{\"kind\":\"state-changed\"}"_s);
 	}
 
 private:
@@ -758,8 +847,310 @@ private:
 			}
 			return "{\"ok\":true,\"kind\":\"seek-ack\"}";
 		}
+		if (body.find("\"kind\":\"set-active-camera\"") != std::string::npos)
+		{
+			// JS routes the playhead-derived active clip's camera here.
+			// Body: {"kind":"set-active-camera","objectId":N} where N=0
+			// means "release the BaseDraw back to its default" (gap or
+			// orphan case, matching Python _route_camera_for_frame).
+			Int32 objectId = 0;
+			auto pos = body.find("\"objectId\"");
+			if (pos != std::string::npos)
+			{
+				pos = body.find(':', pos);
+				if (pos != std::string::npos)
+				{
+					++pos;
+					while (pos < body.size() && (body[pos] == ' ' || body[pos] == '\t'))
+						++pos;
+					objectId = (Int32)std::strtol(body.c_str() + pos, nullptr, 10);
+				}
+			}
+
+			BaseDocument* doc = GetActiveDocument();
+			BaseDraw* bd = PickTargetBaseDraw(doc);
+			Bool changed = false;
+			BaseObject* cam = nullptr;
+			BaseObject* prevCam = nullptr;
+			if (bd && doc)
+			{
+				if (objectId != 0)
+				{
+					auto it = _cameraLinks.find(objectId);
+					if (it != _cameraLinks.end() && it->second)
+						cam = static_cast<BaseObject*>(it->second->GetLink(doc));
+				}
+				prevCam = bd->GetSceneCamera(doc);
+				if (prevCam != cam)
+				{
+					bd->SetSceneCamera(cam);
+					// EventAdd alone reliably repaints the viewport when
+					// scrubbing forward (time-change + camera-change land
+					// together), but does NOT always repaint when the
+					// camera change isn't accompanied by a time change in
+					// the same direction — backward scrub from the same
+					// frame number that previously belonged to a
+					// different clip is the case. DrawViews with
+					// FORCEFULLREDRAW pushes the new camera state through
+					// to the GL drawport immediately.
+					DrawViews(DRAWFLAGS::FORCEFULLREDRAW);
+					EventAdd();
+					changed = true;
+				}
+			}
+			_currentActiveObjectId = objectId;
+			return changed
+				? "{\"ok\":true,\"kind\":\"set-active-camera-ack\",\"changed\":true}"
+				: "{\"ok\":true,\"kind\":\"set-active-camera-ack\",\"changed\":false}";
+		}
+		if (body.find("\"kind\":\"save-state\"") != std::string::npos)
+		{
+			// JS sends the full clip-list JSON as a single string. We
+			// don't parse it on this side — it's opaque to C++. Stored
+			// verbatim on the v2 helper for later retrieval.
+			//
+			// Body shape:
+			//   {"kind":"save-state","json":"<escaped-json-string>","objectIds":[1,2,5]}
+			// objectIds is the list of all currently-live objectIds so
+			// we can prune stale BaseLinks (cameras that used to be on
+			// timeline clips but were deleted from the timeline).
+			BaseDocument* doc = GetActiveDocument();
+			if (!doc) return "{\"ok\":false,\"error\":\"no doc\"}";
+
+			// Extract the JSON string value. Naive scan: find '"json":'
+			// then read the quoted string with backslash-escape handling.
+			std::string json;
+			{
+				auto p = body.find("\"json\"");
+				if (p == std::string::npos)
+					return "{\"ok\":false,\"error\":\"missing json field\"}";
+				p = body.find(':', p);
+				if (p == std::string::npos) return "{\"ok\":false,\"error\":\"bad save body\"}";
+				p = body.find('"', p);
+				if (p == std::string::npos) return "{\"ok\":false,\"error\":\"bad save body\"}";
+				++p;
+				while (p < body.size() && body[p] != '"')
+				{
+					if (body[p] == '\\' && p + 1 < body.size())
+					{
+						char c = body[p + 1];
+						if      (c == 'n')  json += '\n';
+						else if (c == 't')  json += '\t';
+						else if (c == 'r')  json += '\r';
+						else if (c == '"')  json += '"';
+						else if (c == '\\') json += '\\';
+						else if (c == '/')  json += '/';
+						else                json += c;
+						p += 2;
+					}
+					else
+					{
+						json += body[p++];
+					}
+				}
+			}
+
+			BaseObject* helper = GetOrCreateV2Helper(doc);
+			if (!helper) return "{\"ok\":false,\"error\":\"helper alloc failed\"}";
+			BaseContainer* bc = helper->GetDataInstance();
+			if (!bc) return "{\"ok\":false,\"error\":\"helper bc missing\"}";
+
+			doc->StartUndo();
+			doc->AddUndo(UNDOTYPE::CHANGE_SMALL, helper);
+			bc->SetString(BCKEY_V2_CLIPS_JSON, maxon::String(json.c_str()));
+			// Bump a monotonic version counter so EVMSG_CHANGE
+			// handlers (including ours) can distinguish "the helper
+			// changed because of something the user did via Ctrl+Z"
+			// from "we just wrote it ourselves".
+			const Int32 newVersion = bc->GetInt32(BCKEY_V2_VERSION) + 1;
+			bc->SetInt32(BCKEY_V2_VERSION, newVersion);
+			_lastSeenVersion = newVersion;
+
+			// Persist BaseLinks for every currently-live objectId.
+			// Removed-from-timeline objectIds (in old _cameraLinks but
+			// not in this save's objectIds list) get their BaseContainer
+			// entries cleared so the helper doesn't accumulate cruft.
+			// Parse the objectIds array.
+			std::set<Int32> liveIds;
+			{
+				auto p = body.find("\"objectIds\"");
+				if (p != std::string::npos)
+				{
+					p = body.find('[', p);
+					if (p != std::string::npos)
+					{
+						++p;
+						while (p < body.size() && body[p] != ']')
+						{
+							while (p < body.size() && (body[p] == ' ' || body[p] == ',' || body[p] == '\t')) ++p;
+							if (p >= body.size() || body[p] == ']') break;
+							char* endp = nullptr;
+							long v = std::strtol(body.c_str() + p, &endp, 10);
+							if (endp && endp != body.c_str() + p)
+							{
+								if (v != 0) liveIds.insert((Int32)v);
+								p = endp - body.c_str();
+							}
+							else
+							{
+								++p;
+							}
+						}
+					}
+				}
+			}
+			// Write/refresh BaseLinks for every live id we have a
+			// _cameraLinks entry for. BaseContainer::SetLink stores a
+			// persistent link to the BaseList2D that survives doc save
+			// + reload, and follows the object through OM renames.
+			for (Int32 id : liveIds)
+			{
+				auto it = _cameraLinks.find(id);
+				if (it == _cameraLinks.end() || !it->second) continue;
+				BaseObject* op = static_cast<BaseObject*>(it->second->GetLink(doc));
+				if (!op) continue;
+				bc->SetLink(BCKEY_V2_CAM_LINK_BASE + id, op);
+			}
+			doc->EndUndo();
+			EventAdd();
+			return "{\"ok\":true,\"kind\":\"save-state-ack\"}";
+		}
+		if (body.find("\"kind\":\"load-state\"") != std::string::npos)
+		{
+			// JS asks for the persisted blob. Returns the JSON string
+			// (escaped for re-embedding) and rebuilds the in-memory
+			// _cameraLinks map from the helper's stored BaseLinks so
+			// camera routing works on the very first frame after
+			// reload — no need to re-drop the cameras.
+			BaseDocument* doc = GetActiveDocument();
+			if (!doc) return "{\"ok\":false,\"error\":\"no doc\"}";
+			BaseObject* helper = FindV2Helper(doc);
+			if (!helper) return "{\"ok\":true,\"kind\":\"load-state-ack\",\"json\":\"\"}";
+			BaseContainer* bc = helper->GetDataInstance();
+			if (!bc) return "{\"ok\":true,\"kind\":\"load-state-ack\",\"json\":\"\"}";
+
+			String raw = bc->GetString(BCKEY_V2_CLIPS_JSON);
+			std::string rawUtf8;
+			{
+				// cinema::String adds GetCStringCopy on top of
+				// maxon::String. Returns a heap-allocated UTF-8 buffer
+				// that we must free via DeleteMem.
+				Char* cstr = raw.GetCStringCopy();
+				if (cstr)
+				{
+					rawUtf8 = cstr;
+					DeleteMem(cstr);
+				}
+			}
+
+			// Rebuild _cameraLinks from the helper's stored BaseLinks.
+			// BaseContainer doesn't expose an enumeration API for keys,
+			// so we scan a known range (objectId is monotonic from 1).
+			_cameraLinks.clear();
+			Int32 maxObjectIdSeen = 0;
+			const Int32 SCAN_MAX = 4096;
+			for (Int32 id = 1; id <= SCAN_MAX; ++id)
+			{
+				BaseList2D* linked = bc->GetLink(BCKEY_V2_CAM_LINK_BASE + id, doc);
+				if (!linked) continue;
+				if (!linked->IsInstanceOf(Obase)) continue;
+				AutoAlloc<BaseLink> newLink;
+				if (!newLink) continue;
+				newLink->SetLink(linked);
+				_cameraLinks.emplace(id, std::move(newLink));
+				if (id > maxObjectIdSeen) maxObjectIdSeen = id;
+			}
+			if (maxObjectIdSeen + 1 > _nextObjectId)
+				_nextObjectId = maxObjectIdSeen + 1;
+			// Seed _lastSeenVersion to the helper's current version so
+			// the immediate post-load EVMSG_CHANGE (if any) doesn't
+			// trigger a spurious state-changed notification.
+			_lastSeenVersion = bc->GetInt32(BCKEY_V2_VERSION);
+
+			// Escape the JSON string for embedding in our response.
+			std::string esc;
+			esc.reserve(rawUtf8.size() + 8);
+			for (char c : rawUtf8)
+			{
+				if      (c == '\\') esc += "\\\\";
+				else if (c == '"')  esc += "\\\"";
+				else if (c == '\n') esc += "\\n";
+				else if (c == '\r') esc += "\\r";
+				else if (c == '\t') esc += "\\t";
+				else                esc += c;
+			}
+			std::string resp = "{\"ok\":true,\"kind\":\"load-state-ack\",\"json\":\"";
+			resp += esc;
+			resp += "\"}";
+			return resp;
+		}
+		if (body.find("\"kind\":\"undo\"") != std::string::npos)
+		{
+			// WebView2 swallows Ctrl+Z before C4D's menu sees it, so JS
+			// forwards the keystroke here. We invoke C4D's native undo
+			// (DoUndo). The undo will roll back the helper's
+			// BaseContainer, EVMSG_CHANGE will fire, our handler will
+			// detect the version mismatch and tell JS to reload.
+			BaseDocument* doc = GetActiveDocument();
+			if (doc)
+			{
+				doc->DoUndo();
+				EventAdd();
+			}
+			return "{\"ok\":true,\"kind\":\"undo-ack\"}";
+		}
+		if (body.find("\"kind\":\"redo\"") != std::string::npos)
+		{
+			BaseDocument* doc = GetActiveDocument();
+			if (doc)
+			{
+				doc->DoRedo();
+				EventAdd();
+			}
+			return "{\"ok\":true,\"kind\":\"redo-ack\"}";
+		}
 		GePrint("[Shotblocks/v2] unhandled cmd: "_s + maxon::String(body.c_str()));
 		return "{\"ok\":false,\"error\":\"unknown command\"}";
+	}
+
+	// Pick the BaseDraw the camera router writes to. First call pins
+	// the choice — preferring a perspective view — so 4-up layouts'
+	// Top / Front / Side viewports don't get hijacked when the user
+	// focuses one. Subsequent calls reuse the pin unless the pinned
+	// BaseDraw was destroyed. Matches Python _pick_target_basedraw
+	// (sb_canvas_playback.py:192).
+	BaseDraw* PickTargetBaseDraw(BaseDocument* doc)
+	{
+		if (!doc) return nullptr;
+		// Verify the pin is still alive in this document by walking
+		// the BaseDraw list.
+		if (_pinnedBaseDraw)
+		{
+			for (Int32 i = 0; ; ++i)
+			{
+				BaseDraw* bd = doc->GetBaseDraw(i);
+				if (!bd) break;
+				if (bd == _pinnedBaseDraw)
+					return _pinnedBaseDraw;
+			}
+			_pinnedBaseDraw = nullptr;  // stale
+		}
+		// First call (or stale pin): prefer the first perspective BD.
+		for (Int32 i = 0; ; ++i)
+		{
+			BaseDraw* bd = doc->GetBaseDraw(i);
+			if (!bd) break;
+			GeData proj;
+			bd->GetParameter(ConstDescID(DescLevel(BASEDRAW_DATA_PROJECTION)), proj, DESCFLAGS_GET::NONE);
+			if (proj.GetInt32() == BASEDRAW_PROJECTION_PERSPECTIVE)
+			{
+				_pinnedBaseDraw = bd;
+				return bd;
+			}
+		}
+		// No perspective view — fall back to active BD.
+		_pinnedBaseDraw = doc->GetActiveBaseDraw();
+		return _pinnedBaseDraw;
 	}
 
 	// ------- C++ -> JS state push -------
@@ -824,6 +1215,30 @@ private:
 	std::deque<HttpRequest>      _queue;
 
 	std::string          _activeTool{"select"};
+
+	// OM-drop camera registry. Each dragged BaseObject is assigned a
+	// session-unique objectId; that id is sent to JS in the om-drop
+	// payload and stored on the JS Clip. JS later sends
+	// {kind:"set-active-camera", objectId:N} when the playhead enters
+	// the clip's range; C++ resolves N via _cameraLinks and writes the
+	// BaseObject to the pinned BaseDraw.
+	//
+	// BaseLink survives object deletion (resolves to null) — matches
+	// Python's shot-orphan semantics where the timeline keeps the clip
+	// but the camera link goes dead.
+	std::unordered_map<Int32, AutoAlloc<BaseLink>> _cameraLinks;
+	Int32                _nextObjectId{1};
+	// Pinned BaseDraw target — selected on first camera-set call so
+	// subsequent calls don't hijack other viewports (per Python
+	// _pick_target_basedraw / sb_canvas_playback.py:192).
+	BaseDraw*            _pinnedBaseDraw{nullptr};
+	Int32                _currentActiveObjectId{0};
+	// Helper-version bookkeeping. Bumped on every save-state write;
+	// EVMSG_CHANGE compares the current helper version against this
+	// cached value to detect when Ctrl+Z / Ctrl+Y rolled the helper
+	// back/forward to a different version, in which case we tell JS
+	// to reload (push notification → state-changed message).
+	Int32                _lastSeenVersion{0};
 };
 
 

@@ -17,6 +17,11 @@ export interface OmItem {
   hasAnim: boolean;
   inFrame?: number;
   outFrame?: number;
+  /** Session-unique id assigned by C++ on drop FINISH; 0 on hover.
+   *  JS stores this on the created Clip and includes it in
+   *  set-active-camera so C++ can resolve back to the source
+   *  BaseObject. */
+  objectId?: number;
 }
 
 export type HostInbound =
@@ -25,12 +30,18 @@ export type HostInbound =
   | { kind: 'doc-info'; fps: number; docFrames: number; playRangeIn: number; playRangeOut: number }
   | { kind: 'om-hover';  viewportX: number; viewportY: number; items: OmItem[] }
   | { kind: 'om-drop';   viewportX: number; viewportY: number; items: OmItem[] }
-  | { kind: 'om-cancel' };
+  | { kind: 'om-cancel' }
+  | { kind: 'state-changed' };
 
 export type HostOutbound =
   | { kind: 'ping'; t: number }
   | { kind: 'seek'; frame: number }
-  | { kind: 'tool'; id: string };
+  | { kind: 'tool'; id: string }
+  | { kind: 'set-active-camera'; objectId: number }
+  | { kind: 'save-state'; json: string; objectIds: number[] }
+  | { kind: 'load-state' }
+  | { kind: 'undo' }
+  | { kind: 'redo' };
 
 type Listener = (msg: HostInbound) => void;
 

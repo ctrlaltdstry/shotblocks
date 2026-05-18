@@ -1,5 +1,6 @@
-import type { CSSProperties } from 'react';
+import { useRef, type CSSProperties } from 'react';
 import { useStore, type Clip } from '../store';
+import { useClipDrag } from '../useClipDrag';
 
 /** Shot block (a clip rendered inside a Lane). Visual matrix per
  *  Figma node 173:1827: state × type × height.
@@ -19,34 +20,45 @@ import { useStore, type Clip } from '../store';
 export function ShotBlock({
   clip,
   side,
+  trackId,
   thin,
   style,
 }: {
   clip: Clip;
   side: 'video' | 'audio';
+  trackId: string;
   thin: boolean;
   style?: CSSProperties;
 }) {
   const edgeHover = useStore((s) => s.edgeHover);
   const hoverLeft  = edgeHover.has(clip.id + ':left');
   const hoverRight = edgeHover.has(clip.id + ':right');
+  const dragClip = useStore((s) => s.dragClip);
+  const isDragging = dragClip?.clipId === clip.id;
+  const isSelected = useStore((s) => s.selectedClipIds.has(clip.id));
+  const ref = useRef<HTMLDivElement | null>(null);
+  useClipDrag(clip, trackId, side, ref);
 
+  // Selection is store-driven, not clip-state-driven. The legacy
+  // clip.state values for 'selected' / 'orphaned-selected' are kept as
+  // a compatibility hint (orphan + selected still need the red color),
+  // but the actual is-selected class comes from selectedClipIds.
   const cls = [
     'shot-block',
     side === 'video' ? 'is-video' : 'is-audio',
-    clip.state === 'selected' && 'is-selected',
-    clip.state === 'orphaned' && 'is-orphaned',
-    clip.state === 'orphaned-selected' && 'is-orphaned is-selected',
+    isSelected && 'is-selected',
+    (clip.state === 'orphaned' || clip.state === 'orphaned-selected') && 'is-orphaned',
     (clip.state === 'locked' || clip.locked) && 'is-locked',
     thin && 'is-thin',
     hoverLeft  && 'is-edge-left',
     hoverRight && 'is-edge-right',
+    isDragging && 'is-dragging',
   ].filter(Boolean).join(' ');
 
   // Icon class follows state + side:
-  //   video unselected/selected     -> camera
-  //   video orphan / orphan-sel     -> camera-off
-  //   audio (always)                -> waveform
+  //   video, non-orphan  -> camera
+  //   video, orphan      -> camera-off
+  //   audio (always)     -> waveform
   let iconClass = 'icon icon--block-camera';
   if (side === 'audio') iconClass = 'icon icon--block-waveform';
   else if (clip.state === 'orphaned' || clip.state === 'orphaned-selected') {
@@ -55,15 +67,31 @@ export function ShotBlock({
 
   return (
     <div
+      ref={ref}
       className={cls}
       style={style}
       title={clip.sourceName}
       data-clip={clip.id}
     >
-      <div className="shot-block__label">{clip.sourceName}</div>
-      <div className="shot-block__icon-wrap">
-        <span className={iconClass} />
+      {/* Content (label + icon) inside its own overflow:hidden frame
+          so it gets clipped by the clip's rounded corners when the
+          clip is narrow. The clip itself keeps overflow:visible so
+          the bracket / selected overlays can extend 1px past its
+          border (see memory clip-state-overlay-pattern). */}
+      <div className="shot-block__content">
+        <div className="shot-block__label">{clip.sourceName}</div>
+        <div className="shot-block__icon-wrap">
+          <span className={iconClass} />
+        </div>
       </div>
+      {/* Edge-hover brackets — always in the DOM at opacity 0; fade
+          in via .is-edge-left / .is-edge-right on parent. Yellow
+          three-sided rounded rectangles per Figma node 193:1166. */}
+      <div className="shot-block__bracket shot-block__bracket--left" />
+      <div className="shot-block__bracket shot-block__bracket--right" />
+      {/* Selected-outline overlay — white 1px stroke covering the
+          clip's own border. Toggled via .is-selected. */}
+      <div className="shot-block__selected-outline" />
     </div>
   );
 }

@@ -15,17 +15,50 @@ export function DropGhost({
 
   const lanesArea = lanesAreaRef.current;
   if (!lanesArea) return null;
-  const laneEl = lanesArea.querySelector(`.lane[data-track="${dragPreview.trackId}"]`) as HTMLElement | null;
-  if (!laneEl) return null;
-
   const areaRect = lanesArea.getBoundingClientRect();
-  const laneRect = laneEl.getBoundingClientRect();
   const visibleSpan = Math.max(1, h.vMax - h.vMin);
-  const pxPerFrame = laneRect.width / visibleSpan;
-  const left   = (laneRect.left - areaRect.left) + (dragPreview.inFrame - h.vMin) * pxPerFrame;
+
+  let laneLeft = 0, laneWidth = 0, top = 0, height = 0;
+  const laneEl = lanesArea.querySelector(`.lane[data-track="${dragPreview.trackId}"]`) as HTMLElement | null;
+
+  if (laneEl) {
+    const laneRect = laneEl.getBoundingClientRect();
+    laneLeft = laneRect.left - areaRect.left;
+    laneWidth = laneRect.width;
+    top = laneRect.top - areaRect.top;
+    height = laneRect.height;
+  } else {
+    // Spawn-target preview: the destination track doesn't exist yet
+    // (the user is dragging past the outermost lane on this side).
+    // Project the ghost into the slot where the new track would land
+    // — directly above the topmost video lane or below the bottommost
+    // audio lane — at the same height as the existing outermost lane.
+    const side = dragPreview.trackId.startsWith('V') ? 'video'
+               : dragPreview.trackId.startsWith('A') ? 'audio' : null;
+    if (!side) return null;
+    const stackId = side === 'video' ? 'lanes-videos' : 'lanes-audios';
+    const stack = lanesArea.querySelector('#' + stackId) as HTMLElement | null;
+    if (!stack) return null;
+    const stackRect = stack.getBoundingClientRect();
+    const lanes = Array.from(stack.querySelectorAll<HTMLElement>('.lane'));
+    if (!lanes.length) return null;
+    // Video stack is rendered Vn..V1 top-to-bottom (outermost on top).
+    // Audio stack is rendered A1..An top-to-bottom (outermost on bot).
+    const outermost = side === 'video' ? lanes[0] : lanes[lanes.length - 1];
+    const outerRect = outermost.getBoundingClientRect();
+    laneLeft = outerRect.left - areaRect.left;
+    laneWidth = outerRect.width;
+    height = outerRect.height;
+    if (side === 'video') {
+      top = (stackRect.top - areaRect.top) - height;
+    } else {
+      top = stackRect.bottom - areaRect.top;
+    }
+  }
+
+  const pxPerFrame = laneWidth / visibleSpan;
+  const left   = laneLeft + (dragPreview.inFrame - h.vMin) * pxPerFrame;
   const width  = Math.max(2, (dragPreview.outFrame - dragPreview.inFrame) * pxPerFrame);
-  const top    = laneRect.top - areaRect.top;
-  const height = laneRect.height;
 
   return (
     <div

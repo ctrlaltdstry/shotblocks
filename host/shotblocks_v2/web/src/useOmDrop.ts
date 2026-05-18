@@ -69,6 +69,7 @@ export function useOmDrop(): void {
           outFrame: resolved.outFrame,
           sourceName: resolved.sourceName,
           sourceType: item.type | 0,
+          objectId: (item.objectId ?? 0) | 0,
           state: 'unselected',
           locked: false,
         });

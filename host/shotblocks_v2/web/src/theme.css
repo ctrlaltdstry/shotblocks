@@ -20,6 +20,7 @@
   --color-timeline-locked:               #383838;
   --color-timeline-orphan-block:         #ff6259;
   --color-timeline-hover:                #ffffff4d;
+  --color-timeline-edge-highlight:       #EDA840;
 
   /* Layout */
   --topbar-h:    26px;
