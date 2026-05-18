@@ -30,8 +30,26 @@ the eventual target.
 
 ### Scrollbars
 Three custom scrollbars (h-time, v-video, v-audio). Track + thumb +
-two end-dots. Thumb panning, dot zoom. Default centered with zoom
-headroom on both sides (range = 2× track count).
+two end-dots.
+
+- **Thumb drag** pans the visible window.
+- **End-dot drag** zooms mirrored-from-center (both edges move
+  symmetrically about the window's midpoint).
+- **Video scrollbar is inverted** — thumb-at-top corresponds to
+  V<max> (the visually-topmost track) being visible. Audio +
+  horizontal stay natural.
+- **maxSpan cap** prevents zoom-out past where lanes hit
+  MIN_TRACK_PX (48px). Past that the dots stop sliding apart since
+  further zoom-out is a no-op visually.
+- **Adaptive vMax**: `vVideo.max / vAudio.max = maxSpan + (overflow /
+  MIN_TRACK_PX)`. When all content fits at min height, max = maxSpan
+  and the thumb fills the entire scrollbar at zoom-out. When content
+  overflows, the extra is pan headroom.
+- The v-window on each side **scales proportionally** on track-count
+  changes (zoom ratio preserved) and **pins to the outer end** so
+  newly-spawned tracks land in view with their spawn-buffer.
+
+See memory `v2-min-track-height-clamp` for the full math.
 
 ### Shot blocks (clips)
 - Render from store via `<Lane>` → `<ShotBlock>`.
@@ -189,6 +207,36 @@ headroom on both sides (range = 2× track count).
   10 frames). Clamps so no clip goes below frame 0.
 - **Ctrl/Cmd+Z** → undo (forwarded to C4D).
 - **Ctrl/Cmd+Y** or **Ctrl/Cmd+Shift+Z** → redo.
+- **Ctrl/Cmd+C / X / V** → copy / cut / paste from timeline-local
+  clipboard.
+
+### Navigation gestures (C4D viewport style)
+- **Alt + right-click + drag** = zoom around the cursor's frame +
+  track-row. Sensitivity `factor = exp(-delta / 200)` matching Python
+  (`sb_canvas_drag.py:661`). Diagonal drag zooms both axes
+  simultaneously and independently. Contextmenu is suppressed when
+  Alt is held; plain right-click still opens the menu.
+- **Middle-mouse-button drag** = hand-tool pan. 1:1 cursor-glue.
+  Horizontal pans h-time; vertical pans the side (V/A) the cursor
+  started in. Couldn't ship in Python — C4D intercepts MMB before
+  GeUserArea (`sb_canvas.py:2190`); works in WebView2 because we get
+  MMB as `button === 1` pointer events.
+
+See memory `v2-c4d-nav-gestures`.
+
+### Track lifecycle
+- **Add**: implicit. Drag a clip into the upper half of the outermost
+  V<max> lane → V<max+1> spawns on release (lower half for audio).
+  Throwing past the stack edge entirely also spawns. A `.lane-spacer`
+  slot is always rendered above V<max> / below A<max> so the spawn
+  buffer is always reachable. See memory `v2-auto-track-lifecycle`.
+- **Delete**: right-click any track header → `Delete Track` or
+  `Delete Empty Tracks` (per-side). Any track is deletable; after
+  delete, remaining tracks renumber dense from id=1. Deleting the
+  last track on a side auto-respawns an empty V1/A1.
+- **No more auto-cull.** Empty tracks persist until explicitly
+  removed. The earlier "empty non-base track vanishes on every move"
+  behavior is gone.
 
 ### Page zoom suppress
 - Ctrl+wheel and Ctrl+[+,-,0] intercepted so they don't scale the
@@ -200,15 +248,35 @@ headroom on both sides (range = 2× track count).
   Buttons use `onMouseDown preventDefault` so they don't grab
   keyboard focus and intercept subsequent shortcuts.
 
+### CDP introspection from outside the dialog
+- The store is exposed on `window.__SHOTBLOCKS_STORE__` for live
+  introspection. WebView2's remote-debugging port is on
+  `localhost:9222` (set by dev-loop.ps1).
+- `scripts/cdp-eval.mjs <expression>` evaluates JS inside the live
+  Shotblocks page from the command line. Useful for snapshotting
+  store state, computed styles, or `elementsFromPoint` results when
+  a "weird interaction" comes in.
+- See memory `webview2-devtools`.
+
+### Drag-state recovery (defensive)
+- `useDragRecovery` (App.tsx) mirrors `body.is-clip-dragging` from
+  `store.dragClip` (single source of truth). It also registers
+  global window listeners — `pointerup` (capture), `pointercancel`,
+  `blur`, `visibilitychange` — that force-clear stuck drag state and
+  inline drag styles.
+- Two cases needed this safety net:
+  1. **Cross-track re-mount.** useClipDrag's effect deps include
+     `trackId`. A ripple drag's cross-track commit unmounts the
+     ShotBlock from its source lane and remounts on the dest; the
+     old listeners die before pointerup, the new ones don't see the
+     original pointerdown.
+  2. **Win+Shift+S screenshot.** Steals focus from the WebView2
+     mid-drag; pointerup never reaches the page.
+- See memory `v2-drag-recovery-pattern` and
+  `webview2-screenshot-loses-focus`.
+
 ## What does NOT work yet
 
-- **GSAP inertia animation** on vertical lane-change during drag —
-  visual polish, would smooth the transform-jump when crossing
-  tracks. Library is installed; never wired up.
-- **Razor tool** — palette button exists but does nothing. Should
-  split a clip at the cursor position into two clips.
-- **Right-click context menu** — Delete / Lock / Copy / Paste.
-- **Copy/paste clips.**
 - **Audio file import** (drag a WAV / MP3 onto an audio lane).
 - **Real shot library / shot-creation flow** (currently every clip
   comes from OM-dropping a camera; v1 had a preset shot library).
@@ -216,6 +284,14 @@ headroom on both sides (range = 2× track count).
   look-at, fBm noise, autofocus, framing, zoom). Currently the
   active camera just swaps; the rig math from v1 Python hasn't been
   ported yet.
+
+## Known latent issues
+
+- **Cross-track ripple drag stuck-class** — useClipDrag's effect deps
+  include trackId; cross-track ripple commits re-mount the hook
+  mid-drag. `useDragRecovery` papers over the user-visible symptom
+  (stuck class, stuck inline styles) but the underlying listener
+  teardown still happens. Solo replace drag isn't affected.
 
 ## Stack
 
@@ -308,34 +384,38 @@ useHost                — bridge init + tick/doc-info routing
 useOmDrop              — om-hover / om-drop / om-cancel routing
 useActiveClipRouter    — playhead → set-active-camera per Python _route_camera_for_frame
 usePersistence         — load on hello / state-changed, debounced save on store changes
-useKeyboard            — Delete, arrows, Ctrl+Z/Y forwarding
+useKeyboard            — Delete, arrows, Ctrl+Z/Y forwarding, Ctrl+C/X/V
 useMarquee             — marquee drag selection on lanes-area
 useClipDrag            — body drag (solo via transform / group via moveClips)
+useDragRecovery        — body class mirror + global drag-state safety net (Round 11)
+useAltRightZoom        — Alt+RMB drag → zoom around cursor (Round 11)
+useMmbPan              — MMB drag → hand-tool pan (Round 11)
 useElementSize         — ResizeObserver wrapper
 ```
 
 Effects:
 ```
-useTrackCountSync      — vVideo.max / vAudio.max ← track count
-useVerticalZoomVars    — drives --video-track-h / --audio-track-h
+useTrackCountSync      — adaptive vVideo.max / vAudio.max; reproportions
+                         user zoom on track-count change; pins to outer
+                         end on add
+useVerticalZoomVars    — drives --video-track-h / --audio-track-h /
+                         --video-scroll-y / --audio-scroll-y;
+                         MIN_TRACK_PX = 48 hard clamp
 usePageZoomSuppress    — blocks Ctrl+wheel / Ctrl+[+,-,0]
+useSuppressNativeContextMenu — kills WebView2 "Reload/Inspect" menu
 ```
 
 ## Next planned steps (in rough order)
 
-1. **Razor tool** — palette button is wired to set
-   `activeTool='razor'`; clicking a clip with that tool active
-   should split it at the cursor X (mapped to frame). Python
-   has the split rules in sb_shot_model.py.
-2. **Right-click context menu** — Delete / Lock / Copy / Paste.
-3. **Copy / paste clips** — JS-side clipboard (timeline-local; no
-   cross-app clipboard needed).
-4. **GSAP inertia** on vertical lane-change during drag.
-5. **Audio file import** — drag WAV/MP3 onto audio lane.
-6. **Real shot library / shot-creation flow.**
-7. **Port v1 rig math to C++** (spring/damper, quat look-at, fBm
-   noise, autofocus, framing, zoom). This is the load-bearing piece
-   that turns v2 from "timeline UI" into "actual Shotblocks plugin."
+1. **Audio file import** — drag WAV/MP3 onto audio lane.
+2. **Real shot library / shot-creation flow.**
+3. **Cross-track ripple stuck-class bug** — useClipDrag's effect
+   deps tear listeners down mid-drag on ripple commits. Currently
+   masked by `useDragRecovery`, but the underlying lifecycle is
+   wrong.
+4. **Port v1 rig math to C++** (spring/damper, quat look-at, fBm
+   noise, autofocus, framing, zoom). The load-bearing piece that
+   turns v2 from "timeline UI" into "actual Shotblocks plugin."
 
 ## Key memories
 
@@ -353,8 +433,11 @@ Project decisions:
 - `v2-gsap-free-all-plugins` — GSAP is now 100% free.
 - `v2-om-drag-works` — drag from OM works natively, no overlay needed.
 - `v2-audio-source-is-file-only` — audio NEVER comes from OM.
-- `v2-auto-track-lifecycle` — tracks are implicit, no add/remove UI.
+- `v2-auto-track-lifecycle` — implicit add via drag, explicit
+  Delete Track / Delete Empty Tracks via right-click menu.
 - `v2-nle-trim-model` — standard NLE trim/roll.
+- `v2-min-track-height-clamp` — MIN_TRACK_PX=48 + adaptive vMax.
+- `v2-c4d-nav-gestures` — Alt+RMB zoom + MMB pan.
 - `clip-state-overlay-pattern` — child-div overlays at inset:-1px
   for every state visual.
 - `shotblocks-v2-va-splitter` — splitter pans the stack.
@@ -366,6 +449,8 @@ Hard-won technical findings:
 - `webview2-swallows-modifier-shortcuts` — Ctrl+Z must be forwarded
   to C4D via JS→C++ command; plain keys reach JS fine.
 - `webview2-devtools` — how to attach DevTools.
+- `webview2-screenshot-loses-focus` — Win+Shift+S steals focus
+  mid-drag; needs visibilitychange + blur recovery.
 - `c4d-animation-range-three-sources` — walk object + tags +
   children + parent chain.
 - `c4d-htmlviewer-postmessage-oneway` — Maxon's JS→C++ paths are
@@ -378,6 +463,15 @@ Hard-won technical findings:
   build.
 - `react-drag-state-in-ref` — drag state must use useRef, not
   let-vars.
+- `v2-drag-recovery-pattern` — body class mirror + global cleanup
+  for stuck drag state (cross-track re-mount, focus-loss).
+- `css-transform-makes-stacking-context` — `transform: translateY(0)`
+  silently creates a stacking context. Use `top` for pan-offset.
+- `css-container-type-size-collapses-content-driven-elements` —
+  `container-type: size` on a flex child with content-sized height
+  collapses to 0. Use inline-size or a JS body class.
+- `dont-derive-track-count-from-vmax` — old `max = 2*count` is dead;
+  read `videoTracks.length` directly.
 - `c4d-html-viewer-custom-gui` — C4D 2026's dockable web widget.
 
 UX/design rules:
