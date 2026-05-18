@@ -160,6 +160,7 @@ export interface State {
     toTrackId: string,
     newInFrame: number,
     snapFrames?: number,
+    mode?: 'replace' | 'ripple',
   ) => { trackId: string; inFrame: number; outFrame: number } | null;
 
   /** Group move: shift every clip in `clipIds` by the same delta,
@@ -192,6 +193,7 @@ export interface State {
     trackId: string,
     edge: 'left' | 'right',
     wantFrame: number,
+    mode?: 'replace' | 'ripple',
   ) => { inFrame: number; outFrame: number } | null;
 
   /** Rolling edit at a seam. `leftClipId` and `rightClipId` are two
@@ -349,6 +351,83 @@ export function magneticSnap(
   return best ? best.inFrame : desiredInFrame;
 }
 
+/** Apply Python's "ripple" overlap resolution to a track's clip list.
+ *  Push same-track shots later (or earlier) so target's range is clear,
+ *  preserving each pushed shot's duration. Ports `_ripple_around` from
+ *  sb_shot_model.py:296.
+ *
+ *  Direction policy: push-right is tried first; only if no clip got
+ *  pushed right does it try pushing earlier clips left. So ripple is
+ *  biased toward shoving forward in time, matching Python.
+ *
+ *  v2 simplification: Python uses `out + 1 + CLIP_GAP_FRAMES` for the
+ *  next clip's allowed inFrame and `in - 1 - CLIP_GAP_FRAMES` for the
+ *  previous clip's allowed outFrame. With v2's exclusive outFrame and
+ *  CLIP_GAP_FRAMES=0, those reduce to `outFrame` and `inFrame`.
+ *
+ *  Group ripple is intentionally NOT supported here — Python falls
+ *  back to replace for groups (sb_shot_model.py:356), so v2 does too.
+ */
+export function rippleAround(
+  existing: Clip[],
+  target: { id: number; inFrame: number; outFrame: number },
+): Clip[] {
+  const same = existing
+    .filter((s) => s.id !== target.id)
+    .sort((a, b) => a.inFrame - b.inFrame);
+
+  // Push-right pass.
+  let cursor = target.outFrame;
+  let pushedRight = false;
+  const rightResult: Clip[] = [];
+  for (const s of same) {
+    if (s.inFrame >= target.inFrame) {
+      if (s.inFrame < cursor) {
+        const dur = s.outFrame - s.inFrame;
+        const shifted: Clip = { ...s, inFrame: cursor, outFrame: cursor + dur };
+        rightResult.push(shifted);
+        cursor = shifted.outFrame;
+        pushedRight = true;
+      } else {
+        rightResult.push(s);
+        cursor = s.outFrame;
+      }
+    } else {
+      rightResult.push(s);
+    }
+  }
+  if (pushedRight) return rightResult;
+
+  // Push-left pass (only if push-right was a no-op). Cursor tracks
+  // the outFrame the next earlier clip can land on.
+  let leftCursor = target.inFrame;
+  const leftResult: Clip[] = [];
+  // Iterate earlier-to-later for stable result order; do the left-push
+  // logic by walking the same list in reverse, then re-sort at end.
+  const reversed = [...same].sort((a, b) => b.inFrame - a.inFrame);
+  const leftShifted: Clip[] = [];
+  for (const s of reversed) {
+    if (s.outFrame <= target.outFrame) {
+      if (s.outFrame > leftCursor) {
+        const dur = s.outFrame - s.inFrame;
+        const newOut = leftCursor;
+        const newIn = Math.max(0, newOut - dur);
+        leftShifted.push({ ...s, inFrame: newIn, outFrame: newOut });
+        leftCursor = newIn;
+      } else {
+        leftShifted.push(s);
+        leftCursor = s.inFrame;
+      }
+    } else {
+      leftShifted.push(s);
+    }
+  }
+  // Re-sort to original-style order (inFrame ascending).
+  leftShifted.sort((a, b) => a.inFrame - b.inFrame);
+  for (const s of leftShifted) leftResult.push(s);
+  return leftResult;
+}
+
 /** Apply Python's "replace" overlap resolution to a track's clip list.
  *  Given the placed `target` clip (inFrame/outFrame), each same-track
  *  clip whose range intersects target's range is:
@@ -472,7 +551,7 @@ export const useStore = create<State>((set) => ({
 
   setMarquee: (rect) => set({ marquee: rect }),
 
-  moveClip: (clipId, fromTrackId, toTrackId, newInFrame, snapFrames) => {
+  moveClip: (clipId, fromTrackId, toTrackId, newInFrame, snapFrames, mode = 'replace') => {
     const fromSide = fromTrackId.startsWith('V') ? 'video' : fromTrackId.startsWith('A') ? 'audio' : null;
     const toSide   = toTrackId.startsWith('V')   ? 'video' : toTrackId.startsWith('A')   ? 'audio' : null;
     if (!fromSide || !toSide || fromSide !== toSide) return null;
@@ -512,12 +591,17 @@ export const useStore = create<State>((set) => ({
       // Remove from source, replace overlaps on dest, add moved clip.
       const fromIdxNew = working.findIndex((t) => t.id === fromNum);
       const toIdxNew   = working.findIndex((t) => t.id === toNum);
+      // Ripple vs replace: ripple pushes neighbors aside, replace
+      // trims/removes them. Cross-track move always uses replace on
+      // the destination — there are no "neighbors to push" the moving
+      // clip is leaving behind, and pushing dest-track neighbors out
+      // would feel surprising when the user just dropped the clip onto
+      // an unrelated track. Same-track ripple is the meaningful case.
+      const resolve = mode === 'ripple' ? rippleAround : replaceOverlap;
       let next = working.map((t, i) => {
         if (i === fromIdxNew && i === toIdxNew) {
-          // Same-track move: drop moving from list, replace-overlap
-          // against the rest, then append moved clip.
           const others = t.clips.filter((c) => c.id !== clipId);
-          const after = replaceOverlap(others, { id: clipId, inFrame: placedIn, outFrame: placedOut });
+          const after = resolve(others, { id: clipId, inFrame: placedIn, outFrame: placedOut });
           return { ...t, clips: [...after, movedClip] };
         }
         if (i === fromIdxNew) {
@@ -539,7 +623,7 @@ export const useStore = create<State>((set) => ({
     return result;
   },
 
-  resizeClip: (clipId, trackId, edge, wantFrame) => {
+  resizeClip: (clipId, trackId, edge, wantFrame, mode = 'replace') => {
     const side = trackId.startsWith('V') ? 'video' : trackId.startsWith('A') ? 'audio' : null;
     if (!side) return null;
     const trackNum = parseInt(trackId.slice(1), 10);
@@ -563,10 +647,11 @@ export const useStore = create<State>((set) => ({
       }
       const target = { id: clipId, inFrame: newIn, outFrame: newOut };
       const resized: Clip = { ...clip, inFrame: newIn, outFrame: newOut };
+      const resolve = mode === 'ripple' ? rippleAround : replaceOverlap;
       const next = tracks.map((t, i) => {
         if (i !== trackIdx) return t;
         const others = t.clips.filter((c) => c.id !== clipId);
-        const after = replaceOverlap(others, target);
+        const after = resolve(others, target);
         return { ...t, clips: [...after, resized] };
       });
       result = { inFrame: newIn, outFrame: newOut };

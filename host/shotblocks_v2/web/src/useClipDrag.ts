@@ -42,10 +42,25 @@ interface DragRef {
   // release to commit the move via moveClip().
   previewTrackId: string;
   previewInFrame: number;
+  // The clip's CURRENT track id in the store. Differs from `trackId`
+  // (closure-captured original track) after a cross-track live-ripple
+  // commit migrated the clip. Used as `fromTrackId` for the next
+  // ripple commit so moveClip can locate the moving clip.
+  currentTrackId: string;
   // dx/dy applied as a CSS transform on the clip element each move.
   // Stored so we can clear on cancel/end.
   lastDx: number;
   lastDy: number;
+  // Live Shift state. Read on every pointermove so the user can
+  // toggle ripple on/off mid-drag (Premiere/Resolve UX). When the
+  // mode flips, we re-anchor startClientX + startInFrame to the
+  // current pointer + the dragged clip's live position so each
+  // mode's delta math stays coherent across the toggle. Neighbors
+  // that ripple already pushed stay pushed (user-confirmed UX call).
+  //
+  // Group drag ignores this — Python falls back to replace for groups
+  // (sb_shot_model.py:356) and v2 mirrors that.
+  rippleMode: boolean;
   // Group drag: if non-null, the drag moves every clip in this set
   // together. The anchor (= clip.id) drives snap targeting. Group
   // drags commit LIVE via moveClips on every pointermove (no CSS
@@ -138,9 +153,11 @@ export function useClipDrag(
     pxPerFrame: 0,
     previewTrackId: trackId,
     previewInFrame: clip.inFrame,
+    currentTrackId: trackId,
     lastDx: 0,
     lastDy: 0,
     groupIds: null,
+    rippleMode: false,
   });
 
   useEffect(() => {
@@ -155,6 +172,7 @@ export function useClipDrag(
       const d = dragRef.current;
       const wasActive = d.active;
       const wasGroup = d.groupIds !== null;
+      const wasRipple = d.rippleMode;
       const dest = { trackId: d.previewTrackId, inFrame: d.previewInFrame };
       d.active = false;
       d.pointerId = -1;
@@ -168,11 +186,11 @@ export function useClipDrag(
 
       useStore.getState().setDragClip(null);
 
-      // Solo drag commits on release; group drag committed live each
-      // pointermove, so nothing to commit here.
-      if (wasActive && commit && !wasGroup) {
+      // Solo REPLACE drag commits on release. Group drag and solo
+      // RIPPLE both committed live each pointermove — nothing to do.
+      if (wasActive && commit && !wasGroup && !wasRipple) {
         const snapFrames = Math.max(1, SNAP_PIXEL_RADIUS / Math.max(0.0001, d.pxPerFrame));
-        useStore.getState().moveClip(clip.id, trackId, dest.trackId, dest.inFrame, snapFrames);
+        useStore.getState().moveClip(clip.id, trackId, dest.trackId, dest.inFrame, snapFrames, 'replace');
       }
       clearTransform();
     }
@@ -180,6 +198,50 @@ export function useClipDrag(
     function onMove(ev: PointerEvent) {
       const d = dragRef.current;
       if (d.pointerId !== ev.pointerId) return;
+
+      // Re-anchor on Shift toggle: clear transform AND reset the drag
+      // origin to (current pointer, current store position) so the
+      // next mode's delta math starts from a clean baseline. Without
+      // this, switching from replace (transform-only) to ripple
+      // (live-commit) would compute frameDelta from the *original*
+      // pointer-down position, double-applying the move.
+      const nowRipple = ev.shiftKey;
+      const toggled = !d.groupIds && nowRipple !== d.rippleMode && d.active;
+      if (toggled) {
+        // Find the moving clip's live position in the store. After a
+        // live-ripple commit, this is its new place; after replace
+        // dragging, this is still its start position (no commits yet).
+        const liveStore = useStore.getState();
+        const liveTracks = side === 'video' ? liveStore.videoTracks : liveStore.audioTracks;
+        let liveTrackId: string | null = null;
+        let liveInFrame = d.startInFrame;
+        let liveOutFrame = d.startOutFrame;
+        for (const t of liveTracks) {
+          const c = t.clips.find((cc) => cc.id === clip.id);
+          if (c) {
+            liveTrackId = (side === 'video' ? 'V' : 'A') + t.id;
+            liveInFrame = c.inFrame;
+            liveOutFrame = c.outFrame;
+            break;
+          }
+        }
+        d.startClientX = ev.clientX;
+        d.startClientY = ev.clientY;
+        d.startInFrame = liveInFrame;
+        d.startOutFrame = liveOutFrame;
+        if (liveTrackId) {
+          d.previewTrackId = liveTrackId;
+          d.currentTrackId = liveTrackId;
+        }
+        d.previewInFrame = liveInFrame;
+        // Replace mode uses transform; clear any leftover ripple-side
+        // transform reset, or any leftover replace-side transform.
+        if (el) el.style.transform = '';
+        d.lastDx = 0;
+        d.lastDy = 0;
+      }
+      d.rippleMode = nowRipple;
+
       const dx = ev.clientX - d.startClientX;
       const dy = ev.clientY - d.startClientY;
       if (!d.active) {
@@ -224,6 +286,29 @@ export function useClipDrag(
       const snappedIn = Math.max(0, magneticSnap(rawInFrame, duration, editPoints, snapFrames));
       d.previewTrackId = target.trackId;
       d.previewInFrame = snappedIn;
+
+      if (!d.groupIds && d.rippleMode) {
+        // Solo ripple: commit live each pointermove so the user sees
+        // neighbors shove in real time. Same pattern as group drag —
+        // no CSS transform, the React re-render moves the clip's DOM.
+        // fromTrackId must be the clip's CURRENT track (where the
+        // last commit left it), not the closure's original trackId,
+        // because cross-track drag migrates the clip mid-drag.
+        if (el) el.style.transform = '';
+        d.lastDx = 0;
+        d.lastDy = 0;
+        const snapFramesForCommit = Math.max(1, SNAP_PIXEL_RADIUS / Math.max(0.0001, d.pxPerFrame));
+        useStore.getState().moveClip(
+          clip.id,
+          d.currentTrackId,
+          target.trackId,
+          snappedIn,
+          snapFramesForCommit,
+          'ripple',
+        );
+        d.currentTrackId = target.trackId;
+        return;
+      }
 
       if (d.groupIds) {
         // Group drag: commit live via moveClips so every selected
@@ -358,9 +443,11 @@ export function useClipDrag(
         pxPerFrame,
         previewTrackId: trackId,
         previewInFrame: liveClip.inFrame,
+        currentTrackId: trackId,
         lastDx: 0,
         lastDy: 0,
         groupIds: isGroupDrag ? new Set(selSnapshot) : null,
+        rippleMode: ev.shiftKey,
       };
 
       ev.preventDefault();

@@ -295,7 +295,11 @@ export function Lane({ track, side }: { track: Track; side: 'video' | 'audio' })
     // the nearest edit point; treat duration as 0 so magneticSnap
     // doesn't try to also snap the OTHER edge.
     const snappedWant = magneticSnap(rawWant, 0, editPoints, snapFrames);
-    resizeClip(t.clipId, trackId, t.edge, snappedWant);
+    // Shift held during trim → ripple mode (push same-track neighbors
+    // aside instead of overwriting them). Live: tapping Shift mid-drag
+    // toggles the mode in real time, mirroring Premiere/Resolve.
+    const mode = ev.shiftKey ? 'ripple' : 'replace';
+    resizeClip(t.clipId, trackId, t.edge, snappedWant, mode);
   }
 
   function onTrimPointerEnd(ev: React.PointerEvent<HTMLDivElement>) {

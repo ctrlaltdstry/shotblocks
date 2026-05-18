@@ -107,6 +107,32 @@ headroom on both sides (range = 2× track count).
   Diverges from Python's 1-frame minimum because the React UI needs
   real pixel area for hit zones (see `mine-python-for-constants`).
 
+### Ripple drag (body + trim)
+- **Shift** held during a body drag or trim drag → ripple mode. Same-
+  track neighbors are pushed aside (preserving each clip's duration)
+  instead of being trimmed or overwritten. Ports Python
+  `_ripple_around` (sb_shot_model.py:296).
+- Direction policy: push-right is tried first; only if no clip needs
+  shoving right does it try push-left. Matches Python.
+- **Live toggle**: Shift state is read on every pointermove. Press
+  Shift mid-drag → switches to ripple; release Shift mid-drag →
+  switches back to replace. Each toggle re-anchors `startClientX` +
+  `startInFrame` to current pointer + current store position so the
+  two modes' delta math stays coherent across the switch.
+- **Neighbors stay pushed** when ripple-then-replace mid-drag. Only
+  the dragged clip resumes transform-only preview from its new
+  position (user-confirmed UX call).
+- Body drag in ripple mode commits LIVE per pointermove (same pattern
+  as group drag) — no CSS transform; React re-renders neighbors as
+  they shove. `fromTrackId` tracks via `dragRef.currentTrackId`
+  because cross-track ripple commits migrate the moving clip.
+- **Group ripple is not implemented** — Python explicitly punted
+  (sb_shot_model.py:356) and v2 mirrors that. Shift during a multi-
+  select body drag is ignored.
+- Known wart: each ripple pointermove is its own undo entry, so a
+  long ripple drag may take many Ctrl+Z's to fully undo. Same wart
+  exists for group drag today; not yet batched.
+
 ### Rolling edit
 - Middle third of a seam between two adjacent clips → cursor
   becomes `col-resize`, BOTH edge brackets light up.
@@ -176,9 +202,6 @@ headroom on both sides (range = 2× track count).
 
 ## What does NOT work yet
 
-- **Ripple drag mode** (Shift while dragging pushes neighbors out
-  of the way rather than replace-overwriting them — Python has it
-  as a third drag mode).
 - **GSAP inertia animation** on vertical lane-change during drag —
   visual polish, would smooth the transform-jump when crossing
   tracks. Library is installed; never wired up.
@@ -300,20 +323,17 @@ usePageZoomSuppress    — blocks Ctrl+wheel / Ctrl+[+,-,0]
 
 ## Next planned steps (in rough order)
 
-1. **Ripple drag mode** — Shift held during a body or trim drag
-   pushes neighbors out of the way instead of overwriting them.
-   Python has the algorithm: `_ripple_around` in sb_shot_model.py.
-2. **Razor tool** — palette button is wired to set
+1. **Razor tool** — palette button is wired to set
    `activeTool='razor'`; clicking a clip with that tool active
    should split it at the cursor X (mapped to frame). Python
    has the split rules in sb_shot_model.py.
-3. **Right-click context menu** — Delete / Lock / Copy / Paste.
-4. **Copy / paste clips** — JS-side clipboard (timeline-local; no
+2. **Right-click context menu** — Delete / Lock / Copy / Paste.
+3. **Copy / paste clips** — JS-side clipboard (timeline-local; no
    cross-app clipboard needed).
-5. **GSAP inertia** on vertical lane-change during drag.
-6. **Audio file import** — drag WAV/MP3 onto audio lane.
-7. **Real shot library / shot-creation flow.**
-8. **Port v1 rig math to C++** (spring/damper, quat look-at, fBm
+4. **GSAP inertia** on vertical lane-change during drag.
+5. **Audio file import** — drag WAV/MP3 onto audio lane.
+6. **Real shot library / shot-creation flow.**
+7. **Port v1 rig math to C++** (spring/damper, quat look-at, fBm
    noise, autofocus, framing, zoom). This is the load-bearing piece
    that turns v2 from "timeline UI" into "actual Shotblocks plugin."
 
