@@ -22,6 +22,17 @@ export interface Clip {
   locked: boolean;
 }
 
+/** One clip captured to the timeline-local clipboard. Snapshots the
+ *  clip data plus the track it lived on so paste can prefer the same
+ *  track. */
+export interface ClipboardEntry {
+  /** All clip fields except `id` — paste mints fresh ids. */
+  clip: Omit<Clip, 'id'>;
+  /** Source track id like 'V1' / 'A2'. Paste tries to land on the
+   *  same id, falling back to V1/A1 if that track no longer exists. */
+  trackId: string;
+}
+
 export interface Track {
   id: number;
   name: string;
@@ -123,6 +134,20 @@ export interface State {
   // seam where two clips meet, BOTH edges land in the set so both
   // clips render their bracket (the "double" look the user expects).
   edgeHover: Set<string>;
+
+  // Timeline-local clipboard. Populated by copyClips/cutClips, read by
+  // pasteClips. Survives only within the session — no doc save, no
+  // OS-clipboard bridging in v1. Each entry carries the clip's data
+  // plus its source trackId so paste can target the same track.
+  clipboard: ClipboardEntry[];
+
+  // Right-click menu state. Non-null while a context menu is visible.
+  // `x` / `y` are viewport-relative; `targetClipId` is the clip the
+  // menu was opened on (null for empty-area menus, which only show
+  // Paste). Menu items act on the current selection — right-clicking
+  // an unselected clip first replaces the selection with that clip
+  // (NLE convention), so the selection is always authoritative.
+  contextMenu: { x: number; y: number; targetClipId: number | null } | null;
 
   // Actions
   setTick: (frame: number, fps: number, playing: boolean) => void;
@@ -231,6 +256,34 @@ export interface State {
    *  (sourceName, sourceType, objectId, state, locked) are carried
    *  to both halves. */
   splitClip: (clipId: number, trackId: string, frame: number) => number | null;
+
+  /** Copy the given clips' data into the timeline-local clipboard.
+   *  Existing clipboard contents are replaced. */
+  copyClips: (clipIds: Set<number>) => void;
+
+  /** Copy + delete in one action. Mirrors Premiere's Ctrl+X. */
+  cutClips: (clipIds: Set<number>) => void;
+
+  /** Paste clipboard contents at the playhead frame. Multi-clip
+   *  pastes preserve relative spacing — the earliest copied clip
+   *  lands at the playhead and the rest follow. Each clip targets
+   *  its source track (V1/A1 fallback if it no longer exists).
+   *  Pasted clips replaceOverlap their landing range and become the
+   *  new selection. Returns the new clip ids. */
+  pasteClips: () => number[];
+
+  /** Toggle the locked state of every selected clip. If any selected
+   *  clip is unlocked, lock all; otherwise unlock all. */
+  toggleLockSelection: (clipIds: Set<number>) => void;
+
+  /** Split every selected clip the playhead frame is inside. Each
+   *  call routes through splitClip's validation (frame strictly
+   *  inside, both halves >= MIN_CLIP_FRAMES, not locked); clips that
+   *  fail validation are silently skipped. */
+  splitSelectionAtPlayhead: (clipIds: Set<number>) => void;
+
+  /** Show / hide the right-click context menu. */
+  setContextMenu: (menu: { x: number; y: number; targetClipId: number | null } | null) => void;
 }
 
 /** Monotonic clip id. Unique across all tracks for the session.
@@ -513,6 +566,8 @@ export const useStore = create<State>((set) => ({
   marquee: null,
   edgeHover: new Set<string>(),
   razorHoverX: null,
+  clipboard: [],
+  contextMenu: null,
 
   setTick: (frame, fps, playing) => set((s) => ({
     currentFrame: frame,
@@ -862,6 +917,160 @@ export const useStore = create<State>((set) => ({
   },
 
   setRazorHoverX: (x) => set((s) => (s.razorHoverX === x ? s : { razorHoverX: x })),
+
+  copyClips: (clipIds) => {
+    if (clipIds.size === 0) return;
+    const s = useStore.getState();
+    const entries: ClipboardEntry[] = [];
+    const captureFromTracks = (tracks: Track[], side: 'V' | 'A') => {
+      for (const t of tracks) {
+        for (const c of t.clips) {
+          if (!clipIds.has(c.id)) continue;
+          // Strip id; paste mints fresh ones.
+          const { id: _id, ...rest } = c;
+          void _id;
+          entries.push({ clip: rest, trackId: side + t.id });
+        }
+      }
+    };
+    captureFromTracks(s.videoTracks, 'V');
+    captureFromTracks(s.audioTracks, 'A');
+    set({ clipboard: entries });
+  },
+
+  cutClips: (clipIds) => {
+    if (clipIds.size === 0) return;
+    useStore.getState().copyClips(clipIds);
+    // Inline delete (same shape as useKeyboard.deleteSelection so we
+    // don't depend on it). Empty non-base tracks get culled.
+    set((s) => {
+      const filterTrack = (t: Track) => ({
+        ...t,
+        clips: t.clips.filter((c) => !clipIds.has(c.id)),
+      });
+      return {
+        videoTracks: s.videoTracks.map(filterTrack).filter((t) => t.id === 1 || t.clips.length > 0),
+        audioTracks: s.audioTracks.map(filterTrack).filter((t) => t.id === 1 || t.clips.length > 0),
+        selectedClipIds: new Set<number>(),
+      };
+    });
+  },
+
+  pasteClips: () => {
+    const s = useStore.getState();
+    if (s.clipboard.length === 0) return [];
+    // Anchor on the earliest inFrame across copied clips, so multi-
+    // clip pastes preserve relative spacing with the earliest clip
+    // landing AT the playhead.
+    const anchor = s.clipboard.reduce(
+      (m, e) => Math.min(m, e.clip.inFrame),
+      Infinity,
+    );
+    if (!Number.isFinite(anchor)) return [];
+    const playhead = s.scrubFrame ?? s.currentFrame;
+    const delta = playhead - anchor;
+    const newIds: number[] = [];
+
+    // Group clipboard entries by destination track, falling back to
+    // V1/A1 when the source track no longer exists.
+    type Pending = { trackId: string; clip: Clip };
+    const pending: Pending[] = [];
+    for (const e of s.clipboard) {
+      const side = e.trackId.startsWith('V') ? 'video' : 'audio';
+      const tracks = side === 'video' ? s.videoTracks : s.audioTracks;
+      const sourceNum = parseInt(e.trackId.slice(1), 10);
+      const exists = tracks.some((t) => t.id === sourceNum);
+      const destTrackId = exists ? e.trackId : (side === 'video' ? 'V1' : 'A1');
+      const id = nextClipId++;
+      newIds.push(id);
+      pending.push({
+        trackId: destTrackId,
+        clip: {
+          ...e.clip,
+          id,
+          inFrame: Math.max(0, e.clip.inFrame + delta),
+          outFrame: Math.max(1, e.clip.outFrame + delta),
+        },
+      });
+    }
+
+    // Apply replaceOverlap per destination track so existing clips
+    // get trimmed/removed by the incoming pastes (same convention as
+    // in-timeline drag / OM drop with the active "replace" mode).
+    set((s2) => {
+      const apply = (tracks: Track[], side: 'V' | 'A'): Track[] => {
+        return tracks.map((t) => {
+          const arrivals = pending
+            .filter((p) => p.trackId === side + t.id)
+            .map((p) => p.clip);
+          if (arrivals.length === 0) return t;
+          let combined = t.clips;
+          for (const a of arrivals) {
+            combined = replaceOverlap(combined, { id: a.id, inFrame: a.inFrame, outFrame: a.outFrame });
+            combined = [...combined, a];
+          }
+          return { ...t, clips: combined };
+        });
+      };
+      return {
+        videoTracks: apply(s2.videoTracks, 'V'),
+        audioTracks: apply(s2.audioTracks, 'A'),
+        selectedClipIds: new Set<number>(newIds),
+      };
+    });
+    return newIds;
+  },
+
+  toggleLockSelection: (clipIds) => {
+    if (clipIds.size === 0) return;
+    set((s) => {
+      // If any selected clip is unlocked, lock all; otherwise unlock all.
+      let anyUnlocked = false;
+      for (const t of [...s.videoTracks, ...s.audioTracks]) {
+        for (const c of t.clips) {
+          if (clipIds.has(c.id) && !c.locked) { anyUnlocked = true; break; }
+        }
+        if (anyUnlocked) break;
+      }
+      const nextLocked = anyUnlocked;
+      const apply = (t: Track): Track => ({
+        ...t,
+        clips: t.clips.map((c) => clipIds.has(c.id) ? { ...c, locked: nextLocked } : c),
+      });
+      return {
+        videoTracks: s.videoTracks.map(apply),
+        audioTracks: s.audioTracks.map(apply),
+      };
+    });
+  },
+
+  splitSelectionAtPlayhead: (clipIds) => {
+    if (clipIds.size === 0) return;
+    const s = useStore.getState();
+    const playhead = s.scrubFrame ?? s.currentFrame;
+    // Capture a snapshot so we don't iterate while the store mutates;
+    // splitClip rejects out-of-range frames silently per Python.
+    const targets: Array<{ id: number; trackId: string }> = [];
+    for (const t of s.videoTracks) {
+      for (const c of t.clips) {
+        if (clipIds.has(c.id) && c.inFrame < playhead && playhead < c.outFrame) {
+          targets.push({ id: c.id, trackId: 'V' + t.id });
+        }
+      }
+    }
+    for (const t of s.audioTracks) {
+      for (const c of t.clips) {
+        if (clipIds.has(c.id) && c.inFrame < playhead && playhead < c.outFrame) {
+          targets.push({ id: c.id, trackId: 'A' + t.id });
+        }
+      }
+    }
+    for (const tgt of targets) {
+      useStore.getState().splitClip(tgt.id, tgt.trackId, playhead);
+    }
+  },
+
+  setContextMenu: (menu) => set({ contextMenu: menu }),
 
   setEdgeHover: (edges) => set((s) => {
     // Cheap identity check so we don't churn renders when the set

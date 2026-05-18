@@ -43,6 +43,30 @@ export function useKeyboard(): void {
         return;
       }
 
+      // Cut / Copy / Paste — timeline-local clipboard. Pure JS-side,
+      // no C4D round-trip. WebView2 normally lets these through when
+      // no input/contenteditable has focus.
+      if (mod && (ev.key === 'c' || ev.key === 'C')) {
+        const sel = useStore.getState().selectedClipIds;
+        if (sel.size === 0) return;
+        ev.preventDefault();
+        useStore.getState().copyClips(sel);
+        return;
+      }
+      if (mod && (ev.key === 'x' || ev.key === 'X')) {
+        const sel = useStore.getState().selectedClipIds;
+        if (sel.size === 0) return;
+        ev.preventDefault();
+        useStore.getState().cutClips(sel);
+        return;
+      }
+      if (mod && (ev.key === 'v' || ev.key === 'V')) {
+        if (useStore.getState().clipboard.length === 0) return;
+        ev.preventDefault();
+        useStore.getState().pasteClips();
+        return;
+      }
+
       // Delete / Backspace → delete selection.
       if (ev.key === 'Delete' || ev.key === 'Backspace') {
         const sel = useStore.getState().selectedClipIds;

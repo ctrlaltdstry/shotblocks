@@ -19,6 +19,7 @@ import { ToolPalette } from './components/ToolPalette';
 import { DropGhost } from './components/DropGhost';
 import { MarqueeOverlay } from './components/MarqueeOverlay';
 import { CutLineOverlay } from './components/CutLineOverlay';
+import { ContextMenu } from './components/ContextMenu';
 import { useMarquee } from './useMarquee';
 import { DebugOverlay } from './DebugOverlay';
 import { useElementSize } from './useElementSize';
@@ -240,6 +241,22 @@ function useTrackCountSync() {
   }, [audioTracks.length]);
 }
 
+/** Suppress WebView2's native right-click menu globally. We have our
+ *  own context menu wired on clips + the lanes-area; anywhere else
+ *  (track headers, ruler, palette, scrollbars) a native menu would
+ *  expose "Reload / Inspect / Save image as…" — useless and breaks
+ *  immersion in a docked DAW panel. Our own menu handlers already
+ *  preventDefault, so this is purely a fallback for unhandled spots. */
+function useSuppressNativeContextMenu() {
+  useEffect(() => {
+    function onCtx(ev: MouseEvent) {
+      ev.preventDefault();
+    }
+    document.addEventListener('contextmenu', onCtx);
+    return () => document.removeEventListener('contextmenu', onCtx);
+  }, []);
+}
+
 /** Suppress browser-level page zoom. Inside a docked DAW panel, Ctrl+
  *  wheel and Ctrl++/Ctrl+-/Ctrl+0 should never scale the whole UI.
  *  WebView2 also persists per-origin zoom between sessions, so we snap
@@ -273,6 +290,7 @@ function App() {
   useKeyboard();
   useTrackCountSync();
   usePageZoomSuppress();
+  useSuppressNativeContextMenu();
   const lanesAreaRef = useRef<HTMLDivElement | null>(null);
   useMarquee(lanesAreaRef);
   const headersStackRef = useRef<HTMLDivElement | null>(null);
@@ -366,6 +384,17 @@ function App() {
             className={'lanes-area' + (activeTool === 'razor' ? ' is-tool-razor' : '')}
             id="lanes-area"
             ref={lanesAreaRef}
+            onContextMenu={(ev) => {
+              // Empty-area right-click: only show Paste. ShotBlock's
+              // own onContextMenu stops propagation, so this fires only
+              // when the click missed any clip.
+              ev.preventDefault();
+              useStore.getState().setContextMenu({
+                x: ev.clientX,
+                y: ev.clientY,
+                targetClipId: null,
+              });
+            }}
           >
             <LanesStack
               stackRef={lanesStackRef}
@@ -382,6 +411,10 @@ function App() {
             stage (row 2), column 3, via CSS grid placement. Rendered
             only when activeTool === 'razor' && pointer is on a clip. */}
         <CutLineOverlay />
+
+        {/* Right-click context menu — viewport-positioned, renders only
+            while state.contextMenu is non-null. */}
+        <ContextMenu />
 
         {/* row 3 — h-scroll */}
         <HScroll />

@@ -54,6 +54,19 @@ export function ShotBlock({
     }
   }
 
+  // Right-click → context menu. If the clip isn't part of the current
+  // selection, replace the selection with this clip first (NLE
+  // convention: right-click doesn't act on a phantom selection).
+  function onContextMenu(ev: React.MouseEvent) {
+    ev.preventDefault();
+    ev.stopPropagation();
+    const sNow = useStore.getState();
+    if (!sNow.selectedClipIds.has(clip.id)) {
+      sNow.setSelectedClip(clip.id);
+    }
+    sNow.setContextMenu({ x: ev.clientX, y: ev.clientY, targetClipId: clip.id });
+  }
+
   // Selection is store-driven, not clip-state-driven. The legacy
   // clip.state values for 'selected' / 'orphaned-selected' are kept as
   // a compatibility hint (orphan + selected still need the red color),
@@ -89,6 +102,7 @@ export function ShotBlock({
       data-clip={clip.id}
       onPointerMove={onRazorPointerMove}
       onPointerLeave={onRazorPointerLeave}
+      onContextMenu={onContextMenu}
     >
       {/* Content (label + icon) inside its own overflow:hidden frame
           so it gets clipped by the clip's rounded corners when the
