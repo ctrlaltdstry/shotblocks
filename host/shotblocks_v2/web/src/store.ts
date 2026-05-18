@@ -149,12 +149,22 @@ export interface State {
   clipboard: ClipboardEntry[];
 
   // Right-click menu state. Non-null while a context menu is visible.
-  // `x` / `y` are viewport-relative; `targetClipId` is the clip the
-  // menu was opened on (null for empty-area menus, which only show
-  // Paste). Menu items act on the current selection — right-clicking
-  // an unselected clip first replaces the selection with that clip
+  // `x` / `y` are viewport-relative.
+  //
+  // Three variants drive the menu's item list:
+  //   - targetClipId != null   → clip menu (Cut/Copy/Paste/Delete/...)
+  //   - targetTrackId != null  → track-header menu (Delete Track)
+  //   - both null              → empty-area menu (Paste only)
+  //
+  // Menu items act on the current selection — right-clicking an
+  // unselected clip first replaces the selection with that clip
   // (NLE convention), so the selection is always authoritative.
-  contextMenu: { x: number; y: number; targetClipId: number | null } | null;
+  contextMenu: {
+    x: number;
+    y: number;
+    targetClipId: number | null;
+    targetTrackId: string | null;
+  } | null;
 
   // Actions
   setTick: (frame: number, fps: number, playing: boolean) => void;
@@ -291,7 +301,24 @@ export interface State {
   splitSelectionAtPlayhead: (clipIds: Set<number>) => void;
 
   /** Show / hide the right-click context menu. */
-  setContextMenu: (menu: { x: number; y: number; targetClipId: number | null } | null) => void;
+  setContextMenu: (menu: {
+    x: number;
+    y: number;
+    targetClipId: number | null;
+    targetTrackId: string | null;
+  } | null) => void;
+
+  /** Remove a track and all of its clips, then RENUMBER the remaining
+   *  tracks dense from id=1. Any track is deletable — there are no
+   *  protected "base" tracks. If removing this track would leave the
+   *  side with zero tracks, an empty V1/A1 is auto-spawned so the
+   *  user always has a drop target on each side. */
+   deleteTrack: (trackId: string) => boolean;
+
+  /** Cull every empty (clips.length === 0) non-base track on the
+   *  given side. Base track (V1 / A1) is preserved even if empty.
+   *  Returns the number of tracks removed. */
+  deleteEmptyTracks: (side: 'video' | 'audio') => number;
 }
 
 /** Monotonic clip id. Unique across all tracks for the session.
@@ -1089,6 +1116,88 @@ export const useStore = create<State>((set) => ({
   },
 
   setContextMenu: (menu) => set({ contextMenu: menu }),
+
+  deleteTrack: (trackId) => {
+    const side = trackId.startsWith('V') ? 'video' : trackId.startsWith('A') ? 'audio' : null;
+    if (!side) return false;
+    const trackNum = parseInt(trackId.slice(1), 10);
+    const namePrefix = side === 'video' ? 'Video ' : 'Audio ';
+    let ok = false;
+    set((s) => {
+      const tracks = side === 'video' ? s.videoTracks : s.audioTracks;
+      const target = tracks.find((t) => t.id === trackNum);
+      if (!target) return s;
+      // Drop selection of any clips that lived on the deleted track.
+      const deletedClipIds = new Set<number>(target.clips.map((c) => c.id));
+      let newSel = s.selectedClipIds;
+      if (deletedClipIds.size && [...s.selectedClipIds].some((id) => deletedClipIds.has(id))) {
+        newSel = new Set([...s.selectedClipIds].filter((id) => !deletedClipIds.has(id)));
+      }
+      // Drop the target, then renumber dense from id=1. Sort by old
+      // id first so the relative order of surviving tracks is
+      // preserved across the renumber.
+      const remaining = tracks
+        .filter((t) => t.id !== trackNum)
+        .sort((a, b) => a.id - b.id);
+      let next: Track[];
+      if (remaining.length === 0) {
+        // Auto-spawn an empty base track — the side must always have
+        // somewhere to drop a clip.
+        next = [{ id: 1, name: namePrefix + '1', clips: [] }];
+      } else {
+        next = remaining.map((t, i) => ({
+          ...t,
+          id: i + 1,
+          name: namePrefix + (i + 1),
+        }));
+      }
+      ok = true;
+      return {
+        ...(side === 'video' ? { videoTracks: next } : { audioTracks: next }),
+        selectedClipIds: newSel,
+      };
+    });
+    return ok;
+  },
+
+  deleteEmptyTracks: (side) => {
+    let removed = 0;
+    set((s) => {
+      const tracks = side === 'video' ? s.videoTracks : s.audioTracks;
+      // Drop every empty track, then RENUMBER the remaining ones
+      // starting at 1 so clips end up on the lowest possible track
+      // id (compact-all-gaps semantics). With nothing left, leave
+      // the base track behind as an empty placeholder so the user
+      // always has somewhere to drop a clip.
+      //
+      // Sort by current id so renumbering keeps relative order
+      // (the lowest-id non-empty track stays nearest the V/A
+      // splitter after compaction). Each renamed track's `name`
+      // ("Video 3", "Audio 2", etc.) is regenerated to match the
+      // new id; the display chip + label both read from this.
+      const namePrefix = side === 'video' ? 'Video ' : 'Audio ';
+      const occupied = tracks
+        .filter((t) => t.clips.length > 0)
+        .sort((a, b) => a.id - b.id);
+      let next: Track[];
+      if (occupied.length === 0) {
+        // No clips anywhere on this side. Keep a single base track
+        // even if its original id wasn't 1 — the base slot must
+        // always exist.
+        next = [{ id: 1, name: namePrefix + '1', clips: [] }];
+      } else {
+        next = occupied.map((t, i) => ({
+          ...t,
+          id: i + 1,
+          name: namePrefix + (i + 1),
+        }));
+      }
+      removed = tracks.length - next.length;
+      if (removed === 0) return s;
+      return side === 'video' ? { videoTracks: next } : { audioTracks: next };
+    });
+    return removed;
+  },
 
   setEdgeHover: (edges) => set((s) => {
     // Cheap identity check so we don't churn renders when the set

@@ -64,7 +64,7 @@ export function ShotBlock({
     if (!sNow.selectedClipIds.has(clip.id)) {
       sNow.setSelectedClip(clip.id);
     }
-    sNow.setContextMenu({ x: ev.clientX, y: ev.clientY, targetClipId: clip.id });
+    sNow.setContextMenu({ x: ev.clientX, y: ev.clientY, targetClipId: clip.id, targetTrackId: null });
   }
 
   // Selection is store-driven, not clip-state-driven. The legacy

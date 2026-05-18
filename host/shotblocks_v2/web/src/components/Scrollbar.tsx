@@ -7,16 +7,30 @@ export interface ScrollbarProps {
   window: ScrollWindow;
   /** Minimum visible span — clamp on zoom-in so the window can't collapse. */
   minSpan: number;
+  /** Optional maximum visible span — clamp on zoom-out so the window
+   *  can't grow beyond a useful range. Used for vertical zoom where
+   *  past a certain span the lanes hit their MIN height and further
+   *  zoom-out has no visual effect; capping the span keeps the
+   *  scrollbar's pan/zoom math sensible. */
+  maxSpan?: number;
   onChange: (vMin: number, vMax: number) => void;
   /** Optional inset for the dot center relative to the track end (in
    *  addition to the dot's radius). 0 = dot outer edge flush with the
    *  track end. */
   extraInset?: number;
+  /** Flip the mapping between scrollbar position and window range.
+   *  Default: thumb-top  ↔ vMin, thumb-bottom ↔ vMax.
+   *  Inverted: thumb-top ↔ vMax, thumb-bottom ↔ vMin.
+   *  The video stack pile is bottom-up (V1 at the bottom, V<max> at
+   *  the top) so its scrollbar reads naturally only with invert=true:
+   *  thumb-top maps to the visually-top track. Audio + horizontal
+   *  scrollbars stay default. */
+  invert?: boolean;
 }
 
 const DOT_RADIUS = 7.5;     // matches --scrollbar-end-sz / 2 (15 / 2)
 
-export function Scrollbar({ axis, window: win, minSpan, onChange, extraInset = 0 }: ScrollbarProps) {
+export function Scrollbar({ axis, window: win, minSpan, maxSpan, onChange, extraInset = 0, invert = false }: ScrollbarProps) {
   const trackRef = useRef<HTMLDivElement | null>(null);
   const { width, height } = useElementSize(trackRef);
   const length = axis === 'x' ? width : height;
@@ -24,8 +38,13 @@ export function Scrollbar({ axis, window: win, minSpan, onChange, extraInset = 0
   const range = Math.max(1, win.max - win.min);
   const inset = DOT_RADIUS + extraInset;
   const usable = Math.max(1, length - inset * 2);
-  const startFrac = (win.vMin - win.min) / range;
-  const endFrac = (win.vMax - win.min) / range;
+  // Inverted: vMax sits at the visual top/left of the track instead
+  // of vMin. Each scrollbar end-dot still represents one window edge,
+  // but the geometry flips so the thumb-position reads naturally.
+  const lowFrac  = (win.vMin - win.min) / range;
+  const highFrac = (win.vMax - win.min) / range;
+  const startFrac = invert ? 1 - highFrac : lowFrac;
+  const endFrac   = invert ? 1 - lowFrac  : highFrac;
   const dotStart = inset + startFrac * usable;
   const dotEnd = inset + endFrac * usable;
   const thumbStart = Math.max(0, dotStart - DOT_RADIUS);
@@ -56,6 +75,12 @@ export function Scrollbar({ axis, window: win, minSpan, onChange, extraInset = 0
       vMin = c - minSpan / 2;
       vMax = c + minSpan / 2;
     }
+    // Maintain max span (when provided).
+    if (maxSpan != null && vMax - vMin > maxSpan) {
+      const c = (vMin + vMax) / 2;
+      vMin = c - maxSpan / 2;
+      vMax = c + maxSpan / 2;
+    }
     if (vMin < win.min) { vMax += win.min - vMin; vMin = win.min; }
     if (vMax > win.max) { vMin -= vMax - win.max; vMax = win.max; }
     if (vMin < win.min) vMin = win.min;
@@ -79,23 +104,50 @@ export function Scrollbar({ axis, window: win, minSpan, onChange, extraInset = 0
   function move(ev: React.PointerEvent<HTMLDivElement>) {
     const d = drag.current;
     if (!d.active) return;
-    const deltaUnits = (getCoord(ev) - d.startCoord) * unitsPerPx();
+    const rawDelta = (getCoord(ev) - d.startCoord) * unitsPerPx();
+    // With invert=true the visual position-to-window mapping flips,
+    // so cursor delta needs to negate too — dragging the thumb DOWN
+    // on an inverted bar should shift the window TOWARD vMin, not
+    // away from it.
+    const panSign = invert ? -1 : 1;
     let vMin = d.startMin;
     let vMax = d.startMax;
     if (d.active === 'thumb') {
       // Pan: both edges shift together.
-      vMin += deltaUnits;
-      vMax += deltaUnits;
-    } else if (d.active === 'start') {
-      // Top/left dot moves with the cursor. Visible window shrinks
-      // from the top.
-      vMin += deltaUnits;
-      if (vMin > vMax - minSpan) vMin = vMax - minSpan;
+      const dp = rawDelta * panSign;
+      vMin += dp;
+      vMax += dp;
     } else {
-      // Bottom/right dot moves with the cursor. Window shrinks from
-      // the bottom.
-      vMax += deltaUnits;
-      if (vMax < vMin + minSpan) vMax = vMin + minSpan;
+      // End-dot drag: mirrored from the window's CENTER. Dragging
+      // either dot toward the center shrinks the window symmetrically
+      // (zoom in); dragging away expands symmetrically (zoom out).
+      //
+      // The 'start' dot is always the visual top/left dot (its CSS
+      // `top` / `left` is the smaller of the two). Dragging it
+      // DOWN/RIGHT (rawDelta > 0) is always "toward center." The
+      // 'end' dot is the bottom/right one — dragging it UP/LEFT
+      // (rawDelta < 0) is "toward center."
+      //
+      // Either way, zoom-in = window shrinks. We don't care which
+      // data edge each dot represents — the window shrinks by the
+      // same amount on both sides about the midpoint.
+      const towardCenter = d.active === 'start' ? rawDelta : -rawDelta;
+      let nMin = d.startMin + towardCenter;
+      let nMax = d.startMax - towardCenter;
+      // Past-center clamp: lock to min span around the midpoint.
+      if (nMax - nMin < minSpan) {
+        const c = (d.startMin + d.startMax) / 2;
+        nMin = c - minSpan / 2;
+        nMax = c + minSpan / 2;
+      }
+      // Cap zoom-out at maxSpan when provided.
+      if (maxSpan != null && nMax - nMin > maxSpan) {
+        const c = (d.startMin + d.startMax) / 2;
+        nMin = c - maxSpan / 2;
+        nMax = c + maxSpan / 2;
+      }
+      vMin = nMin;
+      vMax = nMax;
     }
     const clamped = clamp(vMin, vMax);
     onChange(clamped.vMin, clamped.vMax);

@@ -1,12 +1,32 @@
-import type { CSSProperties } from 'react';
-import type { Track } from '../store';
+import type { CSSProperties, MouseEvent } from 'react';
+import { useStore, type Track } from '../store';
 
 /** Track header rendered inside the headers column. Visual is the same
- *  as the legacy timeline.html — twirl, lock, chip, eye/MS row, label. */
+ *  as the legacy timeline.html — twirl, lock, chip, eye/MS row, label.
+ *
+ *  Right-click opens the track-header context menu (Delete Track).
+ *  V1 / A1 base tracks always exist; their Delete Track item is
+ *  disabled. The menu component reads targetTrackId off store.contextMenu
+ *  to decide which variant to render. */
 export function TrackHeader({ track, side }: { track: Track; side: 'video' | 'audio' }) {
   const isVideo = side === 'video';
+  const trackId = (isVideo ? 'V' : 'A') + track.id;
+  function onContextMenu(ev: MouseEvent) {
+    ev.preventDefault();
+    ev.stopPropagation();
+    useStore.getState().setContextMenu({
+      x: ev.clientX,
+      y: ev.clientY,
+      targetClipId: null,
+      targetTrackId: trackId,
+    });
+  }
   return (
-    <div className={'track-header ' + (isVideo ? 'is-video' : 'is-audio')} data-track={(isVideo ? 'V' : 'A') + track.id}>
+    <div
+      className={'track-header ' + (isVideo ? 'is-video' : 'is-audio')}
+      data-track={trackId}
+      onContextMenu={onContextMenu}
+    >
       <div className="track-header__twirl">
         <span className="icon icon--triangle" style={{ '--icon-w': '8px', '--icon-h': '10px', '--icon-rot': '90deg' } as CSSProperties} />
       </div>

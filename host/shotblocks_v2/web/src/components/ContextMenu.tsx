@@ -52,7 +52,9 @@ export function ContextMenu() {
   const sel = state.selectedClipIds;
   const hasSelection = sel.size > 0;
   const clipboardHasItems = state.clipboard.length > 0;
-  const onEmptyArea = menu.targetClipId == null;
+  const onClip = menu.targetClipId != null;
+  const onTrackHeader = menu.targetTrackId != null;
+  const trackId = menu.targetTrackId;
 
   // Determine lock-toggle label: "Unlock" if any selected clip is
   // already locked, else "Lock". Mirrors toggleLockSelection's flip
@@ -69,17 +71,56 @@ export function ContextMenu() {
   function close() { setContextMenu(null); }
   function run(fn: () => void) { fn(); close(); }
 
-  const items: Item[] = onEmptyArea
-    ? [
-        {
-          kind: 'item',
-          label: 'Paste',
-          hint: 'Ctrl+V',
-          disabled: !clipboardHasItems,
-          onPick: () => run(() => { state.pasteClips(); }),
-        },
-      ]
-    : [
+  let items: Item[];
+  if (onTrackHeader) {
+    const side: 'video' | 'audio' | null = trackId
+      ? (trackId.startsWith('V') ? 'video' : trackId.startsWith('A') ? 'audio' : null)
+      : null;
+    const sideTracks = side === 'video' ? state.videoTracks
+                     : side === 'audio' ? state.audioTracks
+                     : [];
+    // "Delete Empty Tracks" is meaningful only if removing empties
+    // would actually change the layout. If every clip on this side
+    // already lives on contiguous tracks starting from V1/A1, there's
+    // nothing to clean — grey the item out.
+    const occupiedCount = sideTracks.filter((t) => t.clips.length > 0).length;
+    const totalCount = sideTracks.length;
+    // If there are no clips at all, the cleanup would just leave a
+    // single empty V1/A1 — no change unless we have more than 1 track
+    // to drop. If there ARE clips, a cleanup helps only if there are
+    // more tracks than occupied ones (i.e. some are empty).
+    const hasEmpty = occupiedCount === 0
+      ? totalCount > 1
+      : occupiedCount < totalCount;
+    items = [
+      {
+        kind: 'item',
+        label: 'Delete Track',
+        onPick: () => run(() => {
+          if (trackId) state.deleteTrack(trackId);
+        }),
+      },
+      {
+        kind: 'item',
+        label: 'Delete Empty Tracks',
+        disabled: !hasEmpty,
+        onPick: () => run(() => {
+          if (side) state.deleteEmptyTracks(side);
+        }),
+      },
+    ];
+  } else if (!onClip) {
+    items = [
+      {
+        kind: 'item',
+        label: 'Paste',
+        hint: 'Ctrl+V',
+        disabled: !clipboardHasItems,
+        onPick: () => run(() => { state.pasteClips(); }),
+      },
+    ];
+  } else {
+    items = [
         {
           kind: 'item',
           label: 'Cut',
@@ -136,6 +177,7 @@ export function ContextMenu() {
           onPick: () => run(() => { state.toggleLockSelection(sel); }),
         },
       ];
+  }
 
   // Clamp position so the menu stays on-screen.
   const visibleItems = items.filter((i) => i.kind === 'item').length;

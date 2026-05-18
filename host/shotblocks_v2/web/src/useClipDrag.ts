@@ -239,7 +239,8 @@ export function useClipDrag(
 
       useStore.getState().setDragClip(null);
       useStore.getState().setSpawnGhost(null);
-      document.body.classList.remove('is-clip-dragging');
+      // Body `.is-clip-dragging` class is mirrored from dragClip
+      // state by useDragRecovery — no manual remove needed here.
 
       // Solo REPLACE drag commits on release. Group drag and solo
       // RIPPLE both committed live each pointermove — nothing to do.
@@ -304,11 +305,8 @@ export function useClipDrag(
       if (!d.active) {
         if (Math.hypot(dx, dy) < DRAG_THRESHOLD_PX) return;
         d.active = true;
-        // CSS hook for overflow:visible AND flattening lane
-        // transforms during drag so the dragged clip's z-index lift
-        // escapes the per-lane stacking context and paints above
-        // sibling lanes.
-        document.body.classList.add('is-clip-dragging');
+        // Body `.is-clip-dragging` class is mirrored from dragClip
+        // state by useDragRecovery.
         useStore.getState().setDragClip({ clipId: clip.id, fromTrackId: trackId });
       }
 

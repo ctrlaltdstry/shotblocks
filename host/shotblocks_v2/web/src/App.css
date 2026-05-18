@@ -263,10 +263,31 @@
    each side's vMin position. We apply the translate to the lane and
    its matching header so the V1 chip stays aligned with the V1 lane.
    The .stack__divider has no translate so it stays put. */
+/* Pan offset uses CSS `top` rather than transform: translateY so the
+   lane doesn't form its own stacking context. The dragged clip's
+   z-index lift then works without us having to flatten lane
+   transforms during drag (which previously caused the visible scroll
+   position to snap to 0 the moment a body drag started, "jumping"
+   the view down). `top` doesn't affect layout — the lane keeps its
+   reserved height — so the whole pile shifts in lockstep. */
 .stack__videos > .lane,
-.stack__videos > .track-header { transform: translateY(var(--video-scroll-y, 0px)); }
+.stack__videos > .track-header,
+.stack__videos > .lane-spacer { top: var(--video-scroll-y, 0px); }
 .stack__audios > .lane,
-.stack__audios > .track-header { transform: translateY(var(--audio-scroll-y, 0px)); }
+.stack__audios > .track-header,
+.stack__audios > .lane-spacer { top: var(--audio-scroll-y, 0px); }
+
+/* Spawn-buffer slot above V<max> / below A<max>. Same height as a
+   lane via the per-side track-h vars, no background or borders so it
+   reads as empty space. resolveLane treats this area as the spawn
+   zone since it isn't a .lane element. */
+.lane-spacer {
+  flex: 0 0 var(--track-h);
+  position: relative;
+  pointer-events: none;
+}
+.lane-spacer[data-side="video"] { flex-basis: var(--video-track-h); }
+.lane-spacer[data-side="audio"] { flex-basis: var(--audio-track-h); }
 .stack__divider {
   flex: 0 0 var(--va-divider-h);
   background: var(--color-grey-7);
@@ -290,16 +311,18 @@ body.va-splitter-hover .stack__divider.is-grabbable,
 }
 
 /* Track header — pulled from the legacy markup pattern.
-   Per-side height vars set by vertical zoom (round 3+). */
+   Per-side height vars set by vertical zoom (round 3+).
+   Uses `flex: 0 0` to match the corresponding .lane exactly: both
+   take their height from --video-track-h / --audio-track-h (driven
+   by useVerticalZoomVars) and both overflow the parent stack
+   together when zoomed in past the available height. The earlier
+   `flex: 0 1` (shrink to fit) caused the headers to silently shrink
+   when the lanes overflowed upward — headers and lanes desynced
+   visually whenever the topmost track touched the utilities strip.
+   min-height + overflow:hidden still keep inner widgets clipped if
+   the var shrinks the box smaller than the chip/label can fit. */
 .track-header {
-  /* `flex: 0 1` (not `0 0`) so the header CAN shrink past its content
-     height to match the lane when the user zooms out aggressively.
-     Without flex-shrink, the chip + label/eye column floors the
-     header around 30-40px while the lane keeps shrinking — the two
-     stacks visibly desync at extreme zoom. min-height + overflow
-     ensure the inner content gets clipped cleanly instead of pushing
-     the box. */
-  flex: 0 1 var(--track-h);
+  flex: 0 0 var(--track-h);
   min-height: 0;
   overflow: hidden;
   background: var(--color-grey-12);
@@ -357,6 +380,7 @@ body.va-splitter-hover .stack__divider.is-grabbable,
   gap: 6px;
 }
 .track-header.is-audio .track-header__right-col { padding: 3px 0; }
+
 .track-header__icons-row {
   display: flex; align-items: center; justify-content: space-between;
   width: 30px;
@@ -448,29 +472,22 @@ body.va-splitter-hover .stack__divider.is-grabbable,
 }
 /* While a body drag is in progress, the dragged clip is translated
    via CSS transform — possibly far enough up/down to leave its
-   parent lane and even its parent stack. We open up the overflow
-   chain (lane → stack) during drag so the clip stays visible the
-   whole way, including when dragging over the spawn-zone of an
-   outer track. The body class is set/cleared by useClipDrag. */
-body.is-clip-dragging .stack__videos,
-body.is-clip-dragging .stack__audios,
+   source LANE on its way to a neighbor lane or the spawn-buffer
+   slot above V<max> / below A<max>. We open the overflow on the
+   lane only, NOT on the parent stack — the stack stays clipped at
+   its edge so the dragged clip can't visually spill past the V/A
+   divider into the other side. The clip's destination is always
+   within its own stack (cross-side drag is rejected), so lane-only
+   overflow is enough. */
 body.is-clip-dragging .lane {
   overflow: visible;
 }
-/* Each lane normally has `transform: translateY(var(--*-scroll-y))`
-   which silently creates a per-lane stacking context, scoping the
-   dragged clip's z-index lift inside its source lane. During a drag
-   we flatten the transform to none so lanes are no longer stacking
-   contexts — the clip's z-index then competes globally against all
-   other lanes and paints on top regardless of source lane. Side
-   effect: vertical-zoom scroll position visually snaps to 0 during
-   drag. Acceptable trade-off; you can't scroll mid-drag anyway. */
-body.is-clip-dragging .stack__videos > .lane,
-body.is-clip-dragging .stack__audios > .lane,
-body.is-clip-dragging .stack__videos > .track-header,
-body.is-clip-dragging .stack__audios > .track-header {
-  transform: none;
-}
+/* Earlier we flattened lane transforms during drag because the
+   per-lane translateY scroll-pan was making each lane a stacking
+   context, scoping the dragged clip's z-index lift to its source
+   lane. Now that pan uses `top` (not `transform`), lanes aren't
+   stacking contexts and the clip lift competes globally — no
+   flatten needed. */
 /* Removed an earlier `:has(.shot-block.is-dragging)` z-index lift on
    the source lane — it stayed applied after the React effect for the
    dragged clip re-mounted mid-drag (because trackId changes when the
