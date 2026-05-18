@@ -1,4 +1,5 @@
 import { useEffect, useRef, type RefObject } from 'react';
+import { gsap } from 'gsap';
 import { useStore, magneticSnap, type Clip } from './store';
 
 /** Pixel slop before a pointerdown becomes a real drag. Below this we
@@ -48,9 +49,16 @@ interface DragRef {
   // ripple commit so moveClip can locate the moving clip.
   currentTrackId: string;
   // dx/dy applied as a CSS transform on the clip element each move.
-  // Stored so we can clear on cancel/end.
+  // Stored so we can clear on cancel/end. lastDx is the latest
+  // horizontal target (cursor-driven, written direct). lastDy is the
+  // VERTICAL TARGET — the value the clip is heading toward — and may
+  // differ from animatedDy mid-glide. animatedDy is what's actually
+  // written to the element; gsap tweens it toward lastDy whenever a
+  // track-change makes lastDy jump, giving the clip a smooth ~180ms
+  // ease.out vertical glide between lanes.
   lastDx: number;
   lastDy: number;
+  animatedDy: number;
   // Live Shift state. Read on every pointermove so the user can
   // toggle ripple on/off mid-drag (Premiere/Resolve UX). When the
   // mode flips, we re-anchor startClientX + startInFrame to the
@@ -86,36 +94,76 @@ function resolveLane(
   clientY: number,
   side: 'video' | 'audio',
 ): LaneTarget {
-  const targets = document.elementsFromPoint(clientX, clientY);
-  for (const el of targets) {
-    if (!(el instanceof HTMLElement)) continue;
-    if (!el.classList.contains('lane')) continue;
-    if (el.getAttribute('data-side') !== side) return null;
-    const trackId = el.getAttribute('data-track');
-    if (!trackId) return null;
-    return { kind: 'existing', trackId };
-  }
-
   const stack = document.getElementById(
     side === 'video' ? 'lanes-videos' : 'lanes-audios',
   );
   if (!stack) return null;
   const stackRect = stack.getBoundingClientRect();
-  if (clientX < stackRect.left || clientX > stackRect.right) return null;
 
+  // Compute spawn id for this side, so we can return it whether the
+  // cursor is past the stack edge or just hovering the outermost lane.
   const lanes = Array.from(stack.querySelectorAll<HTMLElement>('.lane'));
-  if (!lanes.length) return null;
   const ids = lanes
     .map((l) => parseInt((l.getAttribute('data-track') || '').slice(1), 10))
     .filter((n) => Number.isFinite(n));
-  if (!ids.length) return null;
-  const maxId = Math.max(...ids);
+  const maxId = ids.length ? Math.max(...ids) : 0;
   const spawnId = (side === 'video' ? 'V' : 'A') + (maxId + 1);
 
-  if (side === 'video') {
-    if (clientY < stackRect.top) return { kind: 'spawn', trackId: spawnId };
-  } else {
-    if (clientY > stackRect.bottom) return { kind: 'spawn', trackId: spawnId };
+  // Resolve which lane the cursor is hovering, if any. We can't use
+  // elementsFromPoint because the dragged ShotBlock has its
+  // pointer-events set to none during drag — and even with that
+  // working, lane lookup by bounding-rect is simpler and more direct.
+  let hoverLane: HTMLElement | null = null;
+  if (clientX >= stackRect.left && clientX <= stackRect.right) {
+    for (const lane of lanes) {
+      if (lane.getAttribute('data-side') !== side) continue;
+      const r = lane.getBoundingClientRect();
+      if (clientY >= r.top && clientY <= r.bottom) {
+        hoverLane = lane;
+        break;
+      }
+    }
+  }
+
+  // Cursor inside a lane: check whether we should spawn instead.
+  // Spawn rule: when hovering the OUTERMOST track on this side (the
+  // V<maxId> for video, A<maxId> for audio), the half of the lane
+  // farthest from the V/A splitter resolves to a new track. That
+  // gives a "drag up a bit" gesture that creates V2 from V1 without
+  // needing to drag all the way into the ruler. Stays on the existing
+  // outermost track if hovering the inner half.
+  if (hoverLane) {
+    const trackId = hoverLane.getAttribute('data-track');
+    if (!trackId) return null;
+    const trackNum = parseInt(trackId.slice(1), 10);
+    if (trackNum === maxId) {
+      const r = hoverLane.getBoundingClientRect();
+      const mid = r.top + r.height / 2;
+      // Video: V1 is at the BOTTOM of its stack (closest to splitter),
+      // V<max> is at the TOP. So the spawn-half is the upper half.
+      // Audio: A1 is at the TOP of its stack (closest to splitter),
+      // A<max> is at the BOTTOM. So the spawn-half is the lower half.
+      if (side === 'video' && clientY < mid) {
+        return { kind: 'spawn', trackId: spawnId };
+      }
+      if (side === 'audio' && clientY > mid) {
+        return { kind: 'spawn', trackId: spawnId };
+      }
+    }
+    return { kind: 'existing', trackId };
+  }
+
+  // Cursor outside the stack horizontally → reject.
+  if (clientX < stackRect.left || clientX > stackRect.right) return null;
+
+  // Cursor past the outer edge of the stack (above lanes-videos top
+  // or below lanes-audios bottom) — also a spawn target. Lets the
+  // user "throw" the clip well past the lane to commit a spawn.
+  if (side === 'video' && clientY < stackRect.top) {
+    return { kind: 'spawn', trackId: spawnId };
+  }
+  if (side === 'audio' && clientY > stackRect.bottom) {
+    return { kind: 'spawn', trackId: spawnId };
   }
   return null;
 }
@@ -156,6 +204,7 @@ export function useClipDrag(
     currentTrackId: trackId,
     lastDx: 0,
     lastDy: 0,
+    animatedDy: 0,
     groupIds: null,
     rippleMode: false,
   });
@@ -165,6 +214,10 @@ export function useClipDrag(
     if (!el) return;
 
     function clearTransform() {
+      // Kill any in-flight vertical-glide tween before clearing the
+      // transform; otherwise the tween's next onUpdate fires after we
+      // cleared and would set transform back to a stale value.
+      gsap.killTweensOf(dragRef.current, 'animatedDy');
       if (el) el.style.transform = '';
     }
 
@@ -185,6 +238,8 @@ export function useClipDrag(
       window.removeEventListener('keydown', onKey);
 
       useStore.getState().setDragClip(null);
+      useStore.getState().setSpawnGhost(null);
+      document.body.classList.remove('is-clip-dragging');
 
       // Solo REPLACE drag commits on release. Group drag and solo
       // RIPPLE both committed live each pointermove — nothing to do.
@@ -236,9 +291,11 @@ export function useClipDrag(
         d.previewInFrame = liveInFrame;
         // Replace mode uses transform; clear any leftover ripple-side
         // transform reset, or any leftover replace-side transform.
+        gsap.killTweensOf(d, 'animatedDy');
         if (el) el.style.transform = '';
         d.lastDx = 0;
         d.lastDy = 0;
+        d.animatedDy = 0;
       }
       d.rippleMode = nowRipple;
 
@@ -247,6 +304,11 @@ export function useClipDrag(
       if (!d.active) {
         if (Math.hypot(dx, dy) < DRAG_THRESHOLD_PX) return;
         d.active = true;
+        // CSS hook for overflow:visible AND flattening lane
+        // transforms during drag so the dragged clip's z-index lift
+        // escapes the per-lane stacking context and paints above
+        // sibling lanes.
+        document.body.classList.add('is-clip-dragging');
         useStore.getState().setDragClip({ clipId: clip.id, fromTrackId: trackId });
       }
 
@@ -261,6 +323,10 @@ export function useClipDrag(
         // out of bounds.
         return;
       }
+      // Spawn-ghost preview state. Cleared on every existing-lane move.
+      useStore.getState().setSpawnGhost(
+        target.kind === 'spawn' ? { side, trackId: target.trackId } : null,
+      );
 
       // Magnetic snap only — no collision-avoid. The clip is free to
       // overlap others while dragging; release-time replaceOverlap
@@ -294,9 +360,11 @@ export function useClipDrag(
         // fromTrackId must be the clip's CURRENT track (where the
         // last commit left it), not the closure's original trackId,
         // because cross-track drag migrates the clip mid-drag.
+        gsap.killTweensOf(d, 'animatedDy');
         if (el) el.style.transform = '';
         d.lastDx = 0;
         d.lastDy = 0;
+        d.animatedDy = 0;
         const snapFramesForCommit = Math.max(1, SNAP_PIXEL_RADIUS / Math.max(0.0001, d.pxPerFrame));
         useStore.getState().moveClip(
           clip.id,
@@ -353,22 +421,68 @@ export function useClipDrag(
         const dr = destLane.getBoundingClientRect();
         snappedDy = dr.top - sr.top;
       } else if (srcLane && target.kind === 'spawn') {
-        // No destination lane element yet — project one lane-height
-        // above the topmost video lane / below the bottommost audio.
+        // No destination lane element yet. Project the clip to land
+        // adjacent to the OUTERMOST existing lane on this side — that
+        // is where V<max+1>/A<max+1> will materialise on commit.
+        //
+        // Important: the stack itself fills the full V/A share height
+        // (flex-grow) so its top/bottom edges don't track the lanes —
+        // with 1 video track, the lane sits at the bottom of the
+        // stack and stack.top is far above near the ruler. Anchor on
+        // the outermost LANE's bounding rect, not the stack's.
+        //
+        //   - video: V1 at bottom of stack, V<max> at top → new lane
+        //     appears IMMEDIATELY ABOVE V<max>. Target = outermostRect.top - laneH.
+        //   - audio: A1 at top, A<max> at bottom → new lane appears
+        //     IMMEDIATELY BELOW A<max>. Target = outermostRect.bottom.
         const sr = srcLane.getBoundingClientRect();
-        const stack = document.getElementById(
-          side === 'video' ? 'lanes-videos' : 'lanes-audios',
+        const stackId = side === 'video' ? 'lanes-videos' : 'lanes-audios';
+        const lanesInStack = Array.from(
+          document.querySelectorAll<HTMLElement>(`#${stackId} .lane`),
         );
-        if (stack) {
-          const stackRect = stack.getBoundingClientRect();
-          const laneH = sr.height;
-          const targetTop = side === 'video' ? stackRect.top - laneH : stackRect.bottom;
+        if (lanesInStack.length) {
+          // The outermost lane is the topmost in DOM order for video
+          // (we render reversed), and the bottommost for audio.
+          const outermost = side === 'video'
+            ? lanesInStack[0]
+            : lanesInStack[lanesInStack.length - 1];
+          const or = outermost.getBoundingClientRect();
+          const laneH = or.height;
+          const targetTop = side === 'video' ? or.top - laneH : or.bottom;
           snappedDy = targetTop - sr.top;
         }
       }
+      // Vertical glide: when snappedDy changes (cursor crossed into a
+      // new lane), tween animatedDy → snappedDy with a short ease.out.
+      // Horizontal stays direct (cursor-driven).
+      //
+      // We write the clip's position via left/top (the element is
+      // position:fixed during drag, anchored to startRect) so it
+      // floats above ALL lane stacking contexts. CSS transform is
+      // not used here.
+      const prevTargetDy = d.lastDy;
       d.lastDx = snappedDx;
       d.lastDy = snappedDy;
-      if (el) el.style.transform = `translate(${snappedDx}px, ${snappedDy}px)`;
+      function writePos() {
+        if (!el) return;
+        el.style.transform = `translate(${d.lastDx}px, ${d.animatedDy}px)`;
+      }
+      if (el) {
+        if (snappedDy !== prevTargetDy) {
+          gsap.killTweensOf(d, 'animatedDy');
+          gsap.to(d, {
+            animatedDy: snappedDy,
+            duration: 0.30,
+            ease: 'power2.out',
+            onUpdate: writePos,
+          });
+        } else {
+          // No lane change; animatedDy is already at target (or being
+          // tweened to it from a previous lane change). Write the
+          // latest dx with whatever animatedDy currently is.
+          writePos();
+        }
+      }
     }
 
     function onUp(ev: PointerEvent) {
@@ -468,6 +582,7 @@ export function useClipDrag(
         currentTrackId: trackId,
         lastDx: 0,
         lastDy: 0,
+        animatedDy: 0,
         groupIds: isGroupDrag ? new Set(selSnapshot) : null,
         rippleMode: ev.shiftKey,
       };

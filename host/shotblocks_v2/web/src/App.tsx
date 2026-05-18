@@ -20,6 +20,7 @@ import { DropGhost } from './components/DropGhost';
 import { MarqueeOverlay } from './components/MarqueeOverlay';
 import { CutLineOverlay } from './components/CutLineOverlay';
 import { ContextMenu } from './components/ContextMenu';
+import { SpawnGhostLane } from './components/SpawnGhostLane';
 import { useMarquee } from './useMarquee';
 import { DebugOverlay } from './DebugOverlay';
 import { useElementSize } from './useElementSize';
@@ -217,8 +218,14 @@ function useTrackCountSync() {
     const max = n * 2;
     const s = useStore.getState();
     if (s.vVideo.max === max) return;
-    const wasDefault = Math.abs((s.vVideo.vMax - s.vVideo.vMin) - n) < 0.01
-                    && Math.abs(((s.vVideo.vMin + s.vVideo.vMax) / 2) - n) < 0.01;
+    // "Was at the default centered view" — compare the previous window
+    // against the PREVIOUS track count (= s.vVideo.max / 2), not the
+    // new one. Otherwise transitioning 1→2 tracks looks like "user
+    // zoomed in to half" and we'd skip the auto-fit, leaving the new
+    // outermost track outside the visible window.
+    const prevN = Math.max(1, s.vVideo.max / 2);
+    const wasDefault = Math.abs((s.vVideo.vMax - s.vVideo.vMin) - prevN) < 0.01
+                    && Math.abs(((s.vVideo.vMin + s.vVideo.vMax) / 2) - prevN) < 0.01;
     if (wasDefault) {
       useStore.setState({ vVideo: { min: 0, max, vMin: n / 2, vMax: n + n / 2 } });
     } else {
@@ -231,8 +238,9 @@ function useTrackCountSync() {
     const max = n * 2;
     const s = useStore.getState();
     if (s.vAudio.max === max) return;
-    const wasDefault = Math.abs((s.vAudio.vMax - s.vAudio.vMin) - n) < 0.01
-                    && Math.abs(((s.vAudio.vMin + s.vAudio.vMax) / 2) - n) < 0.01;
+    const prevN = Math.max(1, s.vAudio.max / 2);
+    const wasDefault = Math.abs((s.vAudio.vMax - s.vAudio.vMin) - prevN) < 0.01
+                    && Math.abs(((s.vAudio.vMin + s.vAudio.vMax) / 2) - prevN) < 0.01;
     if (wasDefault) {
       useStore.setState({ vAudio: { min: 0, max, vMin: n / 2, vMax: n + n / 2 } });
     } else {
@@ -402,9 +410,14 @@ function App() {
               audiosRef={lanesAudiosRef}
             />
             <DropGhost lanesAreaRef={lanesAreaRef} />
-            <Playhead lanesAreaRef={lanesAreaRef} />
             <MarqueeOverlay />
           </div>
+          {/* Playhead lives at the .stage level (sibling of lanes-area)
+              rather than INSIDE lanes-area, so it isn't blocked by the
+              per-lane stacking contexts that `transform: translateY(...)`
+              creates for vertical scroll. With z:5 it now paints over
+              both lane backgrounds AND clip bodies. */}
+          <Playhead lanesAreaRef={lanesAreaRef} />
         </div>
 
         {/* Razor cut-line preview — spans ruler row (row 1) through
@@ -415,6 +428,10 @@ function App() {
         {/* Right-click context menu — viewport-positioned, renders only
             while state.contextMenu is non-null. */}
         <ContextMenu />
+
+        {/* Spawn-zone preview — outlined ghost lane shown while
+            dragging a clip into a not-yet-existing track. */}
+        <SpawnGhostLane />
 
         {/* row 3 — h-scroll */}
         <HScroll />

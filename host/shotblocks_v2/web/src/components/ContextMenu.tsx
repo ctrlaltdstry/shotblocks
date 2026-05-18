@@ -116,8 +116,8 @@ export function ContextMenu() {
               clips: t.clips.filter((c) => !ids.has(c.id)),
             });
             useStore.setState({
-              videoTracks: sNow.videoTracks.map(filterTrack).filter((t) => t.id === 1 || t.clips.length > 0),
-              audioTracks: sNow.audioTracks.map(filterTrack).filter((t) => t.id === 1 || t.clips.length > 0),
+              videoTracks: sNow.videoTracks.map(filterTrack),
+              audioTracks: sNow.audioTracks.map(filterTrack),
               selectedClipIds: new Set<number>(),
             });
           }),

@@ -101,8 +101,8 @@ function deleteSelection(ids: Set<number>) {
     ...t,
     clips: t.clips.filter((c) => !ids.has(c.id)),
   });
-  const v = s.videoTracks.map(filterTrack).filter((t) => t.id === 1 || t.clips.length > 0);
-  const a = s.audioTracks.map(filterTrack).filter((t) => t.id === 1 || t.clips.length > 0);
+  const v = s.videoTracks.map(filterTrack);
+  const a = s.audioTracks.map(filterTrack);
   useStore.setState({
     videoTracks: v,
     audioTracks: a,

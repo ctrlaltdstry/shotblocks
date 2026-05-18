@@ -446,6 +446,45 @@ body.va-splitter-hover .stack__divider.is-grabbable,
   position: relative;
   overflow: hidden;
 }
+/* While a body drag is in progress, the dragged clip is translated
+   via CSS transform — possibly far enough up/down to leave its
+   parent lane and even its parent stack. We open up the overflow
+   chain (lane → stack) during drag so the clip stays visible the
+   whole way, including when dragging over the spawn-zone of an
+   outer track. The body class is set/cleared by useClipDrag. */
+body.is-clip-dragging .stack__videos,
+body.is-clip-dragging .stack__audios,
+body.is-clip-dragging .lane {
+  overflow: visible;
+}
+/* Each lane normally has `transform: translateY(var(--*-scroll-y))`
+   which silently creates a per-lane stacking context, scoping the
+   dragged clip's z-index lift inside its source lane. During a drag
+   we flatten the transform to none so lanes are no longer stacking
+   contexts — the clip's z-index then competes globally against all
+   other lanes and paints on top regardless of source lane. Side
+   effect: vertical-zoom scroll position visually snaps to 0 during
+   drag. Acceptable trade-off; you can't scroll mid-drag anyway. */
+body.is-clip-dragging .stack__videos > .lane,
+body.is-clip-dragging .stack__audios > .lane,
+body.is-clip-dragging .stack__videos > .track-header,
+body.is-clip-dragging .stack__audios > .track-header {
+  transform: none;
+}
+/* Removed an earlier `:has(.shot-block.is-dragging)` z-index lift on
+   the source lane — it stayed applied after the React effect for the
+   dragged clip re-mounted mid-drag (because trackId changes when the
+   clip migrates tracks), leaving the class permanently set on whatever
+   track was last the drag source and obscuring the playhead + edge
+   shadow there.
+   The dragged clip stays visible above sibling lanes via a different
+   path: each lane already creates its own stacking context (transform)
+   and clips above the dragged one paint after it in tree order; with
+   the source lane's overflow opened during drag the clip can extend
+   into neighboring tracks, but it stays in the lane's own stacking
+   context so sibling lane backgrounds CAN paint over it slightly.
+   That's a known trade-off until the drag commit-cleanup is fixed
+   (separate effort). */
 
 /* Drop ghost — Figma node 184:1320 "Ghosted" variant. Dark blue-black
    fill, 1px primary-highlight blue border, and a layered blue glow
@@ -535,6 +574,14 @@ body.va-splitter-hover .stack__divider.is-grabbable,
 .shot-block.is-dragging {
   cursor: grabbing;
   z-index: 10;
+  /* pointer-events: none so the visually-translated clip doesn't
+     show up in elementsFromPoint hit-tests during drag — otherwise
+     resolveLane finds the clip (and its parent V1) instead of the
+     destination lane the cursor is actually over, and track-spawn
+     above V1 / below A1 never fires (cursor sees V1 through the
+     translated clip). Drag listeners are on window, so missing
+     pointer events on this element doesn't matter. */
+  pointer-events: none;
 }
 /* Each border is the clip's own background dimmed by 30% black.
    color-mix avoids hand-derived hex constants and stays correct if
@@ -860,4 +907,25 @@ body.va-splitter-hover .stack__divider.is-grabbable,
   height: 1px;
   margin: 4px 6px;
   background: var(--color-grey-24);
+}
+
+/* ---- spawn-zone ghost lane (drag preview) ---- */
+.spawn-ghost-lane {
+  position: fixed;
+  pointer-events: none;
+  z-index: 40;
+  background: rgba(255, 255, 255, 0.04);
+  border: 1px dashed rgba(255, 255, 255, 0.30);
+  box-sizing: border-box;
+  display: flex;
+  align-items: center;
+  justify-content: flex-start;
+  padding-left: 8px;
+}
+.spawn-ghost-lane__label {
+  font-family: Inter, sans-serif;
+  font-size: 11px;
+  color: rgba(255, 255, 255, 0.45);
+  letter-spacing: 0.04em;
+  user-select: none;
 }

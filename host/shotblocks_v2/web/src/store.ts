@@ -109,6 +109,13 @@ export interface State {
   // lets the drag-from-clip path coexist with OM-drop's dragPreview.
   dragClip: { clipId: number; fromTrackId: string } | null;
 
+  // Spawn-zone hint shown while dragging. Non-null when resolveLane
+  // resolved to a `spawn` target on the current pointermove. The
+  // SpawnGhostLane renders a faded outline where V<max+1> / A<max+1>
+  // will appear on release. Cleared on every move that resolves to
+  // an existing lane, and at drag-end.
+  spawnGhost: { side: 'video' | 'audio'; trackId: string } | null;
+
   // Currently selected clip ids. Empty set = nothing selected.
   // setSelectedClip(id, additive=false) replaces; additive=true toggles
   // the id in the set (Shift/Cmd+click semantics — matches Premiere /
@@ -167,6 +174,7 @@ export interface State {
   setEdgeHover: (edges: Set<string>) => void;
   setRazorHoverX: (x: number | null) => void;
   setDragClip: (drag: { clipId: number; fromTrackId: string } | null) => void;
+  setSpawnGhost: (ghost: { side: 'video' | 'audio'; trackId: string } | null) => void;
   /** Update the selection. additive=false replaces with just `clipId`
    *  (or clears, if null). additive=true toggles `clipId` in the set
    *  (no-op when null). */
@@ -562,6 +570,7 @@ export const useStore = create<State>((set) => ({
   audioTracks: [{ id: 1, name: 'Audio 1', clips: [] }],
   dragPreview: null,
   dragClip: null,
+  spawnGhost: null,
   selectedClipIds: new Set<number>(),
   marquee: null,
   edgeHover: new Set<string>(),
@@ -610,6 +619,12 @@ export const useStore = create<State>((set) => ({
   setDragPreview: (preview) => set({ dragPreview: preview }),
 
   setDragClip: (drag) => set({ dragClip: drag }),
+  setSpawnGhost: (ghost) => set((s) => {
+    const a = s.spawnGhost;
+    if (a === ghost) return s;
+    if (a && ghost && a.side === ghost.side && a.trackId === ghost.trackId) return s;
+    return { spawnGhost: ghost };
+  }),
 
   setSelectedClip: (clipId, additive = false) => set((s) => {
     if (clipId == null) {
@@ -693,8 +708,9 @@ export const useStore = create<State>((set) => ({
         return t;
       });
 
-      // Cull non-base tracks that ended up empty (id > 1).
-      next = next.filter((t) => t.id === 1 || t.clips.length > 0);
+      // Empty non-base tracks are kept (user-confirmed: empty tracks
+      // are fine). Without this, dragging V2's sole clip up to spawn
+      // V3 culled V2 mid-move, leaving [V1, V3] — confusing.
 
       result = { trackId: toTrackId, inFrame: placedIn, outFrame: placedOut };
       return side === 'video' ? { videoTracks: next } : { audioTracks: next };
@@ -827,7 +843,9 @@ export const useStore = create<State>((set) => ({
           combined = [...combined, a];
         }
         return { ...t, clips: combined };
-      }).filter((t) => t.id === 1 || t.clips.length > 0);
+      });
+      // Empty tracks retained — explicit delete will come via a track-
+      // header button (TBD).
 
       ok = true;
       return side === 'video' ? { videoTracks: next } : { audioTracks: next };
@@ -949,8 +967,8 @@ export const useStore = create<State>((set) => ({
         clips: t.clips.filter((c) => !clipIds.has(c.id)),
       });
       return {
-        videoTracks: s.videoTracks.map(filterTrack).filter((t) => t.id === 1 || t.clips.length > 0),
-        audioTracks: s.audioTracks.map(filterTrack).filter((t) => t.id === 1 || t.clips.length > 0),
+        videoTracks: s.videoTracks.map(filterTrack),
+        audioTracks: s.audioTracks.map(filterTrack),
         selectedClipIds: new Set<number>(),
       };
     });
@@ -1115,3 +1133,11 @@ export const useStore = create<State>((set) => ({
     return added;
   },
 }));
+
+// Debug hook: expose the store on window so CDP / DevTools sessions
+// can inspect live state via useStore.getState() without React's
+// reactive layer. No-op in production builds since the bundle always
+// runs inside WebView2 anyway.
+if (typeof window !== 'undefined') {
+  (window as unknown as { __SHOTBLOCKS_STORE__: typeof useStore }).__SHOTBLOCKS_STORE__ = useStore;
+}
