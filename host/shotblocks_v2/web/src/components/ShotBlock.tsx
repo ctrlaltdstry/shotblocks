@@ -39,6 +39,21 @@ export function ShotBlock({
   const ref = useRef<HTMLDivElement | null>(null);
   useClipDrag(clip, trackId, side, ref);
 
+  // Razor cut-line preview: when the razor tool is active and the
+  // cursor is over this clip, publish the pointer's viewport X to the
+  // store so the App-level CutLineOverlay can render a vertical line
+  // spanning ruler + lanes-area. Lets the user see exactly which
+  // frame they'll cut on, on every track. Pointer-leave clears.
+  function onRazorPointerMove(ev: React.PointerEvent<HTMLDivElement>) {
+    if (useStore.getState().activeTool !== 'razor') return;
+    useStore.getState().setRazorHoverX(ev.clientX);
+  }
+  function onRazorPointerLeave() {
+    if (useStore.getState().razorHoverX != null) {
+      useStore.getState().setRazorHoverX(null);
+    }
+  }
+
   // Selection is store-driven, not clip-state-driven. The legacy
   // clip.state values for 'selected' / 'orphaned-selected' are kept as
   // a compatibility hint (orphan + selected still need the red color),
@@ -72,6 +87,8 @@ export function ShotBlock({
       style={style}
       title={clip.sourceName}
       data-clip={clip.id}
+      onPointerMove={onRazorPointerMove}
+      onPointerLeave={onRazorPointerLeave}
     >
       {/* Content (label + icon) inside its own overflow:hidden frame
           so it gets clipped by the clip's rounded corners when the

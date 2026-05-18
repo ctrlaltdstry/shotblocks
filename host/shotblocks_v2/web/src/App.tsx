@@ -18,6 +18,7 @@ import { Lane } from './components/Lane';
 import { ToolPalette } from './components/ToolPalette';
 import { DropGhost } from './components/DropGhost';
 import { MarqueeOverlay } from './components/MarqueeOverlay';
+import { CutLineOverlay } from './components/CutLineOverlay';
 import { useMarquee } from './useMarquee';
 import { DebugOverlay } from './DebugOverlay';
 import { useElementSize } from './useElementSize';
@@ -290,6 +291,8 @@ function App() {
     document.documentElement.style.setProperty('--va-audio-share', String(1 - vaShare));
   }, [vaShare]);
 
+  const activeTool = useStore((s) => s.activeTool);
+
   useVerticalZoomVars(lanesVideosRef, lanesAudiosRef);
 
   return (
@@ -359,7 +362,11 @@ function App() {
         {/* row 2, col 3 — stage (lanes, rendered from store) */}
         <div className="stage">
           <div className="stage__edge-shadow" />
-          <div className="lanes-area" id="lanes-area" ref={lanesAreaRef}>
+          <div
+            className={'lanes-area' + (activeTool === 'razor' ? ' is-tool-razor' : '')}
+            id="lanes-area"
+            ref={lanesAreaRef}
+          >
             <LanesStack
               stackRef={lanesStackRef}
               videosRef={lanesVideosRef}
@@ -370,6 +377,11 @@ function App() {
             <MarqueeOverlay />
           </div>
         </div>
+
+        {/* Razor cut-line preview — spans ruler row (row 1) through
+            stage (row 2), column 3, via CSS grid placement. Rendered
+            only when activeTool === 'razor' && pointer is on a clip. */}
+        <CutLineOverlay />
 
         {/* row 3 — h-scroll */}
         <HScroll />

@@ -385,6 +385,28 @@ export function useClipDrag(
 
     function onDown(ev: PointerEvent) {
       if (ev.button !== 0) return;
+
+      // Razor tool: click splits the clip at the cursor frame instead
+      // of starting a drag. Map cursor X → frame via the lane's
+      // pxPerFrame, then call splitClip. Validation (frame inside
+      // clip, both halves >= MIN_CLIP_FRAMES) happens in the store —
+      // edge-zone clicks just no-op silently. Ports Python
+      // _split_shot's caller path (sb_canvas razor mode).
+      if (useStore.getState().activeTool === 'razor') {
+        const laneEl = el!.closest('.lane') as HTMLElement | null;
+        if (!laneEl) return;
+        const laneRect = laneEl.getBoundingClientRect();
+        const liveStore = useStore.getState();
+        const span = Math.max(1, liveStore.h.vMax - liveStore.h.vMin);
+        const pxPerFrame = laneRect.width / span;
+        if (pxPerFrame <= 0) return;
+        const cursorFrame = Math.round(liveStore.h.vMin + (ev.clientX - laneRect.left) / pxPerFrame);
+        useStore.getState().splitClip(clip.id, trackId, cursorFrame);
+        ev.preventDefault();
+        ev.stopPropagation();
+        return;
+      }
+
       const rect = el!.getBoundingClientRect();
       const xInClip = ev.clientX - rect.left;
       const edgeReserve = clipWidthEdgeZone(rect.width);

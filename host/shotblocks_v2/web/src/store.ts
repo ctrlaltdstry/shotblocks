@@ -109,6 +109,15 @@ export interface State {
   // lanes-area-relative pixels (origin at top-left of .lanes-area).
   marquee: { x0: number; y0: number; x1: number; y1: number } | null;
 
+  // Razor tool cut-line preview. While the razor tool is active and
+  // the pointer is hovering over a clip, this holds the cursor's
+  // viewport-relative X in CSS pixels. Drives a single overlay that
+  // spans the ruler row + the lanes-area so the user can see the
+  // cut frame on every track at once. Null = no preview (cursor not
+  // on a clip, or razor tool not active). Set by ShotBlock
+  // pointermove, cleared by pointerleave.
+  razorHoverX: number | null;
+
   // Per-clip edge hover. Keyed as `${clipId}:left` / `${clipId}:right`.
   // The Lane computes this on pointermove — when the cursor is at a
   // seam where two clips meet, BOTH edges land in the set so both
@@ -131,6 +140,7 @@ export interface State {
 
   setDragPreview: (preview: DragPreview | null) => void;
   setEdgeHover: (edges: Set<string>) => void;
+  setRazorHoverX: (x: number | null) => void;
   setDragClip: (drag: { clipId: number; fromTrackId: string } | null) => void;
   /** Update the selection. additive=false replaces with just `clipId`
    *  (or clears, if null). additive=true toggles `clipId` in the set
@@ -208,6 +218,19 @@ export interface State {
     trackId: string,
     wantSeamFrame: number,
   ) => { seamFrame: number } | null;
+
+  /** Split the clip into two halves at `frame`. Left half keeps the
+   *  original id and runs [inFrame, frame); right half gets a fresh
+   *  id and runs [frame, outFrame). Mirrors Python `_split_shot`
+   *  (sb_shot_model.py:26), translated to v2's exclusive-outFrame
+   *  semantics.
+   *
+   *  Returns the new right-half id, or null if the split was
+   *  rejected (frame outside the clip, or either half would be
+   *  shorter than MIN_CLIP_FRAMES). All other clip fields
+   *  (sourceName, sourceType, objectId, state, locked) are carried
+   *  to both halves. */
+  splitClip: (clipId: number, trackId: string, frame: number) => number | null;
 }
 
 /** Monotonic clip id. Unique across all tracks for the session.
@@ -489,6 +512,7 @@ export const useStore = create<State>((set) => ({
   selectedClipIds: new Set<number>(),
   marquee: null,
   edgeHover: new Set<string>(),
+  razorHoverX: null,
 
   setTick: (frame, fps, playing) => set((s) => ({
     currentFrame: frame,
@@ -794,6 +818,50 @@ export const useStore = create<State>((set) => ({
     });
     return result;
   },
+
+  splitClip: (clipId, trackId, frame) => {
+    const side = trackId.startsWith('V') ? 'video' : trackId.startsWith('A') ? 'audio' : null;
+    if (!side) return null;
+    const trackNum = parseInt(trackId.slice(1), 10);
+    const f = Math.round(frame);
+    let newRightId: number | null = null;
+    set((s) => {
+      const tracks = side === 'video' ? s.videoTracks : s.audioTracks;
+      const trackIdx = tracks.findIndex((t) => t.id === trackNum);
+      if (trackIdx < 0) return s;
+      const clip = tracks[trackIdx].clips.find((c) => c.id === clipId);
+      if (!clip) return s;
+      // Locked clips don't accept structural edits.
+      if (clip.locked || clip.state === 'locked') return s;
+      // Reject splits that don't land strictly inside the clip OR
+      // would produce a half shorter than MIN_CLIP_FRAMES. Mirrors
+      // Python _split_shot (sb_shot_model.py:49-54), with v2's
+      // exclusive outFrame: left = [inFrame, f), right = [f, outFrame).
+      if (f <= clip.inFrame || f >= clip.outFrame) return s;
+      if (f - clip.inFrame < MIN_CLIP_FRAMES) return s;
+      if (clip.outFrame - f < MIN_CLIP_FRAMES) return s;
+      const rightId = nextClipId++;
+      const left: Clip = { ...clip, outFrame: f };
+      const right: Clip = { ...clip, id: rightId, inFrame: f };
+      const next = tracks.map((t, i) => {
+        if (i !== trackIdx) return t;
+        return {
+          ...t,
+          clips: t.clips.flatMap((c) => (c.id === clipId ? [left, right] : [c])),
+        };
+      });
+      newRightId = rightId;
+      // Deselect after split — standard NLE behavior; the user just
+      // broke focus on the original clip.
+      return {
+        ...(side === 'video' ? { videoTracks: next } : { audioTracks: next }),
+        selectedClipIds: new Set<number>(),
+      };
+    });
+    return newRightId;
+  },
+
+  setRazorHoverX: (x) => set((s) => (s.razorHoverX === x ? s : { razorHoverX: x })),
 
   setEdgeHover: (edges) => set((s) => {
     // Cheap identity check so we don't churn renders when the set
