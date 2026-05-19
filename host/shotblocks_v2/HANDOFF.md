@@ -275,15 +275,87 @@ See memory `v2-c4d-nav-gestures`.
 - See memory `v2-drag-recovery-pattern` and
   `webview2-screenshot-loses-focus`.
 
+## Audio (shipped post-Round-11)
+
+### Import
+- Drag a `.wav` or `.mp3` from Explorer onto an audio lane. Clip
+  spawns at the cursor frame at the file's full duration.
+- WebView2 hides the file path, so the binary bytes are pushed once
+  to C++ via `audio-add` and persisted in the doc helper container
+  keyed by `BCKEY_V2_AUDIO_BASE + clipId`. Save-state JSON references
+  by clipId so bytes never re-ship on clip moves/trims.
+- `audio-fetch` pulls bytes back on doc reload; `audio-remove` frees
+  helper storage when an audio clip is deleted.
+- HTTP server cap bumped 64KB → 256MB to accommodate WAV bytes
+  (peaks live in the smaller per-clip JSON; the bulk is the WAV).
+
+### Waveforms
+- `lib/peaks.ts` decodes via WebAudio `decodeAudioData`, mono
+  down-mix, then computes a multi-resolution peak pyramid at SPS
+  levels `[64, 256, 1024, 4096, 16384]`. ~1.33x finest level total
+  size; persists with the clip.
+- `WaveformCanvas.tsx` picks the COARSEST pyramid level whose
+  bucket is still ≤1 CSS pixel wide, draws a smooth quadratic-Bezier
+  filled envelope. dB-scaled (`DB_FLOOR = -60`) auto-gain via
+  `peakAbsMax` so quiet material fills the lane.
+- rAF-throttled redraw on every zoom event. Intersection-clipped
+  canvas keeps the bitmap bounded (no 32k-px white-block bug).
+- Memory: `v2-audio-waveforms`.
+
+### Playback
+- `useAudioPlayback` schedules each visible audio clip as an
+  `AudioBufferSourceNode` on transport start. Anchor-sync model:
+  `audioCtx.currentTime` snapshot at start; if C4D playhead drifts
+  >3 frames from the predicted position, stop+restart from new
+  position.
+- Mid-play scrub detected via tick subscription.
+
+### Scrub
+- Audio-scrub toggle below the dB meter in the left rail (Figma
+  icon `icon--audio-scrub`). On = play short ~80ms blips at the
+  scrub position; off = silent scrub. rAF + 60ms throttle so a
+  single ruler-drag doesn't fire dozens of overlapping sources.
+
+### Spacebar play/pause + v2-owned playback
+- **v2 owns the playhead clock during spacebar playback** (Python's
+  `_playback_tick` pattern). C++ `Timer()` advances `doc->SetTime`
+  per frame; honors `_v2LoopEnabled` + `_v2RangeIn` / `_v2RangeOut`.
+  Wraps if loop on, stops if off. C4D's native play button still
+  works independently (we react to its `EVMSG_TIMECHANGED`).
+- Why: C4D 2026 doesn't expose its cycle/loop button state to
+  plugins (confirmed both Python and C++ — see
+  [[no-c4d-cycle-api]]). Owning the clock is the only way the v2
+  loop toggle can actually mean something.
+- Memory: `v2-playback-owned`.
+
+## Play range + loop
+
+- `RangeBar.tsx` overlays the ruler. Two chevron handles, blue
+  vertical bars at the inner edges, translucent blue tint between.
+  When range = full doc, only the thin edge bars show (no-play-range
+  visual from Figma).
+- `RangeDim.tsx` paints a 30% black overlay outside [in, out],
+  spanning both ruler AND stage (lanes area). `pointer-events: none`.
+- Range data lives in C++ `_v2RangeIn` / `_v2RangeOut` (cached only;
+  NOT written to C4D's `LoopMinTime` / `LoopMaxTime`). Loop flag
+  lives in C++ `_v2LoopEnabled`. JS sends edits via `set-play-range`
+  / `set-loop`. PostDocInfo broadcasts the cached values back.
+- Hotkeys: `I` set in at playhead, `O` set out at playhead, `/`
+  range-to-selection (or all clips if no selection).
+- Loop button in the utilities strip — drives the v2 loop flag,
+  consumed by the C++ playback timer.
+- Memories: `v2-play-range`, `v2-playback-owned`, `no-c4d-cycle-api`.
+
 ## What does NOT work yet
 
-- **Audio file import** (drag a WAV / MP3 onto an audio lane).
 - **Real shot library / shot-creation flow** (currently every clip
   comes from OM-dropping a camera; v1 had a preset shot library).
 - **C++ driving the rig** (camera pose math: spring/damper, quat
   look-at, fBm noise, autofocus, framing, zoom). Currently the
   active camera just swaps; the rig math from v1 Python hasn't been
   ported yet.
+- **Most v1 Python features beyond range/loop** — see "Next planned
+  steps" for the punch list.
 
 ## Known latent issues
 
@@ -311,10 +383,13 @@ See memory `v2-c4d-nav-gestures`.
 
 Commands JS → C++:
 - `ping`, `seek`, `tool`, `set-active-camera`, `save-state`,
-  `load-state`, `undo`, `redo`.
+  `load-state`, `undo`, `redo`, `toggle-play`, `set-play-range`,
+  `set-loop`, `audio-add`, `audio-fetch`, `audio-remove`.
 
 Messages C++ → JS:
-- `hello`, `tick`, `doc-info`, `om-hover`/`om-drop`/`om-cancel`,
+- `hello`, `tick`, `doc-info` (includes playRangeIn/playRangeOut),
+  `om-hover` / `om-drop` / `om-cancel`,
+  `file-hover` / `file-drop` / `file-cancel`,
   `state-changed`.
 
 ## Asset / typography pipeline
@@ -382,15 +457,32 @@ Hooks:
 ```
 useHost                — bridge init + tick/doc-info routing
 useOmDrop              — om-hover / om-drop / om-cancel routing
+useFileDrop            — Explorer drag-drop for audio files (.wav/.mp3)
+useAudioPlayback       — WebAudio scheduling + scrub blips (audio-scrub toggle)
 useActiveClipRouter    — playhead → set-active-camera per Python _route_camera_for_frame
-usePersistence         — load on hello / state-changed, debounced save on store changes
-useKeyboard            — Delete, arrows, Ctrl+Z/Y forwarding, Ctrl+C/X/V
+usePersistence         — load on hello / state-changed, debounced save on store changes;
+                         audio bytes fetched per-clip on load
+useKeyboard            — Delete, arrows, Ctrl+Z/Y forwarding, Ctrl+C/X/V,
+                         Space (toggle-play), I/O (play-range), / (range-to-selection)
 useMarquee             — marquee drag selection on lanes-area
 useClipDrag            — body drag (solo via transform / group via moveClips)
 useDragRecovery        — body class mirror + global drag-state safety net (Round 11)
 useAltRightZoom        — Alt+RMB drag → zoom around cursor (Round 11)
 useMmbPan              — MMB drag → hand-tool pan (Round 11)
 useElementSize         — ResizeObserver wrapper
+```
+
+New components since Round 11:
+```
+RangeBar               — play-range chevron handles overlay on ruler
+RangeDim               — 30% black overlay outside [in, out], ruler + stage
+WaveformCanvas         — multi-res pyramid render for audio clips
+```
+
+New JS modules:
+```
+lib/audioStore.ts      — in-memory blob Map + C++ bridge for audio bytes
+lib/peaks.ts           — WebAudio decode + multi-resolution pyramid
 ```
 
 Effects:
@@ -405,17 +497,53 @@ usePageZoomSuppress    — blocks Ctrl+wheel / Ctrl+[+,-,0]
 useSuppressNativeContextMenu — kills WebView2 "Reload/Inspect" menu
 ```
 
-## Next planned steps (in rough order)
+## Next planned steps (in rough order — Python→v2 port punch list)
 
-1. **Audio file import** — drag WAV/MP3 onto audio lane.
-2. **Real shot library / shot-creation flow.**
-3. **Cross-track ripple stuck-class bug** — useClipDrag's effect
-   deps tear listeners down mid-drag on ripple commits. Currently
-   masked by `useDragRecovery`, but the underlying lifecycle is
-   wrong.
-4. **Port v1 rig math to C++** (spring/damper, quat look-at, fBm
-   noise, autofocus, framing, zoom). The load-bearing piece that
-   turns v2 from "timeline UI" into "actual Shotblocks plugin."
+Strategy: complete the v1 Python feature port BEFORE auditing the
+codebase for cleanup. Then a full audit pass to reorganize files,
+remove dead code, and fix the lurking lifecycle bugs. Then new
+features (shot library, slate engine, rig port).
+
+**Top-down port order, biggest user-facing wins first:**
+
+1. **Snap toggle + indicator lines + snap-to-peak.** Currently
+   magnetic snap is always on; Python has a snap button + yellow
+   snap-indicator vertical lines during drag. Needs (3) for
+   snap-to-peak.
+2. **Peak detection + visual peak markers + beat-grid overlay.**
+   Port `sb_audio_onsets.py` to JS (WebAudio + autocorrelation).
+   Triggered via the Beat Detection button. Tall yellow ticks on
+   audio clips. Optional beat-grid overlay.
+3. **Live dB meter** — drive the existing visual meter shell from
+   the playing audio amplitude.
+4. **Track-header controls (mute / solo / lock / eye)** — the
+   icons render in `TrackHeader.tsx` but none are wired. Mute/solo
+   gate playback; lock prevents edits; eye on video tracks toggles
+   viewport visibility.
+5. **Pen tool — audio level keyframes** with interp modes
+   (Linear/Hold/Ease). Affects playback gain. Largest single item.
+6. **Slip tool** — drag audio body to slide source under the clip.
+   Requires `mediaInFrame`/`mediaOutFrame` on Clip. Also fixes the
+   "waveform stretches on trim" caveat.
+7. **Medium-tier hotkeys** — Ctrl+D duplicate, Up/Down jump to
+   prev/next edit point, Alt+Arrow vertical move, `\` zoom-to-fit,
+   Ctrl+= zoom around playhead, razor snap-to-peak.
+8. **Polish** — hover-fade clip edges, range-bar dbl-click clear,
+   orphan "Remove" vs "Delete" label, OM-rename live-reflect.
+
+**Then:**
+9. **Audit + cleanup pass** — folder structure, dead code, dead
+   files. Fix the cross-track ripple stuck-class bug properly (not
+   just masked by useDragRecovery).
+10. **Shot library / shot-creation flow** — preset shot templates
+    the user can drag onto V1. Bigger UX surface; design first.
+11. **Port v1 rig math to C++** (spring/damper, quat look-at, fBm
+    noise, autofocus, framing, zoom). Turns v2 from "timeline UI"
+    into "actual Shotblocks plugin."
+
+Slate (the signature "align shots to motion-energy peaks" feature)
+was never built in v1 either — parked until v2 reaches feature
+parity with v1.
 
 ## Key memories
 
@@ -478,5 +606,22 @@ UX/design rules:
 - `figma-svg-export-quirks` — preserveAspectRatio + wrapper rotation.
 - `icons-always-proportional` — never stretch icons.
 - `recolor-svgs-via-mask` — mask-image + background-color pattern.
+- `figma-svgs-as-files` — verbatim Figma SVGs go in `web/src/icons/`
+  as `.svg` files, imported as URLs. Don't redraw as inline
+  mask-image paths (except for state-tinted monochrome icons).
+
+Audio (post-Round-11):
+- `v2-audio-file-import` — DOM drop, blob URL → loadedmetadata.
+- `webview2-intercepts-file-drops` — handle via DOM dragover/drop.
+- `webview2-hides-file-paths` — Chromium security model; no
+  absolute paths from JS.
+- `v2-audio-waveforms` — multi-res pyramid, dB-scaled, smooth Bezier.
+- `canvas-height-attr-overrides-css` — set explicit CSS height when
+  JS sets canvas.height for the bitmap.
+- `v2-http-cap-4mb` — bumped to 256MB later for audio bytes.
+- `v2-playback-owned` — v2 owns playhead during spacebar; C4D's
+  play button still works independently.
+- `v2-play-range` — RangeBar + RangeDim + I/O hotkeys.
+- `no-c4d-cycle-api` — confirmed no SDK access to C4D's loop flag.
 
 Read `MEMORY.md` at session start; it's the index over all of these.

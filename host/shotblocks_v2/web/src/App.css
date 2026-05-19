@@ -61,6 +61,15 @@
 .utilstrip__icon:hover .icon { background-color: var(--color-grey-50); }
 .utilstrip__icon.is-active .icon { background-color: var(--color-timeline-primary-highlight); }
 
+/* Audio scrub toggle in the left rail — sits near the bottom of the
+   rail, centered, with a small breathing margin below. */
+.rail__scrub-toggle {
+  flex: 0 0 auto;
+  width: 100%;
+  height: 30px;
+  margin-bottom: 2px;
+}
+
 /* row 1, col 3 — ruler */
 .ruler-row {
   grid-column: 3; grid-row: 1;
@@ -110,6 +119,50 @@
   pointer-events: none;
   z-index: 5;
 }
+
+/* Play-range dim — 30% black overlay outside [in, out]. Two strips,
+   one left of the in handle, one right of the out handle. Mounted
+   once inside .stage (covers the lanes area) and once inside the
+   ruler-row__inner (covers the ruler). Pointer-events transparent so
+   clicks pass through to scrub / clip drag / lane hit-testing. */
+.range-dim {
+  position: absolute;
+  top: 0; bottom: 0;
+  background: rgba(0, 0, 0, 0.30);
+  pointer-events: none;
+}
+/* Stage dim sits above clips (no explicit z-index → default) but
+   below the playhead (z:5), marquee (z:50), and edge brackets. */
+.stage .range-dim { z-index: 4; }
+/* Ruler dim sits above the numbers + ticks (no explicit z) but below
+   the range-bar tint (z:3), handles (z:4), and playhead handle (z:6). */
+.ruler-row .range-dim { z-index: 2; }
+
+/* Play-range bar — overlay on the ruler. Translucent blue middle
+   between two chevron handles. Sits beneath the playhead (z:5) but
+   above the ruler ticks/numbers. Pointer-events transparent so the
+   user can still click+drag the ruler to scrub the playhead even
+   when a play range is active. */
+.range-bar__middle {
+  position: absolute;
+  top: 0; bottom: 0;
+  background: rgba(0, 122, 255, 0.10);
+  pointer-events: none;
+  z-index: 3;
+}
+.range-bar__handle {
+  position: absolute;
+  top: 0; bottom: 0;
+  cursor: ew-resize;
+  z-index: 4;
+}
+.range-bar__handle img {
+  display: block;
+  width: 100%;
+  height: 100%;
+  pointer-events: none;
+  user-select: none;
+}
 .ruler-row__gutter-cap {
   grid-column: 4; grid-row: 1;
   background: var(--color-grey-10);
@@ -126,15 +179,25 @@
   position: relative;
 }
 .rail__tools {
-  flex: 1 1 50%;
+  /* Content-sized: take only the height the 4 tool icons + gap need.
+     The meter wrap below (flex: 1 1 0) grabs whatever's left. The
+     gap shrinks via clamp() so the palette compacts on narrow rails
+     instead of overflowing onto the meter. */
+  flex: 0 1 auto;
   min-height: 0;
   display: flex; flex-direction: column;
   align-items: center;
-  padding-top: 16px;
-  gap: 26px;
+  justify-content: flex-start;
+  padding: 16px 0 8px;
+  gap: clamp(4px, 4vh, 26px);
+  overflow: hidden;
 }
 .rail__meter-wrap {
-  flex: 1 1 50%;
+  /* `flex: 1 1 0` (no 50% basis) — claim whatever's left after the
+     content-sized tools palette and the fixed toggle take their
+     share. With a 50% basis the wrap fights the tools for space,
+     causing visible overlap at narrow rail heights. */
+  flex: 1 1 0;
   min-height: 0;
   position: relative;
 }
@@ -168,63 +231,67 @@
 .rail__tool:hover .icon { background-color: var(--color-grey-white); }
 .rail__tool.is-active .icon { background-color: var(--color-grey-white); }
 
-/* dB meter */
+/* dB meter — single mono bar with a label scale beside it. Purely
+   visual; this isn't an audio mixing app. Shrinks freely with the
+   rail; labels clip if there isn't room rather than forcing a
+   minimum height. */
 .rail__meter-wrap .rail__meter {
   position: absolute;
-  top: 0; bottom: 16px;
-  left: calc(50% - 24px);
-  height: auto;
+  /* Breathing room above the meter, sized as a fraction of the
+     wrap's own height so it scales with the rail. At a tall window
+     (~500px wrap) clamp resolves to the 48px max; at a narrow rail
+     (~150px wrap) it floors at 16px. Sits between the bottom of the
+     tool palette and the top of the meter. */
+  top: clamp(16px, 12%, 48px);
+  bottom: 0;
+  /* Center the meter BAR (not the meter+labels group) on the rail's
+     horizontal axis so it lines up with the tool icons above. The
+     meter layout is [labels:16px][bar:14px], so the bar's center
+     sits at left + 16 + 7 = left + 23. Setting left = 50% - 23px
+     puts the bar's center exactly at the rail center; labels hang
+     off to the left. */
+  left: calc(50% - 23px);
+  width: 30px;
 }
 .rail__meter {
-  width: 39px;
-  height: 100%;
   display: flex;
   align-items: stretch;
   color: var(--color-grey-50);
   font-family: Inter, sans-serif;
+  overflow: hidden;
+  min-height: 0;
 }
 .rail__meter-scale {
   display: flex;
   align-items: stretch;
-  padding-bottom: 9px;
+  min-height: 0;
 }
 .rail__meter-scale__labels {
   flex: 1 1 auto;
+  min-height: 0;
   display: flex; flex-direction: column;
   align-items: flex-end;
   justify-content: space-between;
-  width: 17.45px;
+  width: 16px;
   padding-right: 3px;
   font-size: 6px;
   font-weight: 400;
   line-height: 1;
   box-sizing: border-box;
+  overflow: hidden;
 }
 .rail__meter-bars {
-  width: 18.63px;
-  height: 100%;
-  display: flex; flex-direction: column;
-  align-items: center;
-  gap: 3px;
-}
-.rail__meter-bars__pair {
-  flex: 1 1 0;
-  display: flex; align-items: center;
-  gap: 3px;
-  width: 100%;
+  width: 14px;
+  display: flex;
+  align-items: stretch;
+  justify-content: center;
+  min-height: 0;
 }
 .rail__meter-bar {
-  width: 7.815px;
-  height: 100%;
+  flex: 1 1 0;
+  min-height: 0;
   background: var(--color-grey-7);
 }
-.rail__meter-bars__lr {
-  display: flex; align-items: center; gap: 10px;
-  width: 100%;
-  font-size: 8px;
-  line-height: 1;
-}
-.rail__meter-bars__lr span { display: block; }
 
 /* row 2 col 2 — track headers */
 .headers {
@@ -629,7 +696,32 @@ body.is-clip-dragging .lane {
   border-color: color-mix(in srgb, var(--color-timeline-locked) 70%, black);
 }
 
+/* Audio waveform — covers only the lane-visible intersection of the
+   clip's box (JS positions left + width on every layout pass). Top
+   and bottom always pinned via inset; horizontal sizing is dynamic
+   to keep the canvas bitmap well under Chromium's ~32k px max axis,
+   which otherwise renders the whole clip as a solid white box at
+   high zoom. See WaveformCanvas.tsx. */
+.waveform-canvas {
+  position: absolute;
+  top: 0;
+  left: 0;          /* JS overrides per-frame */
+  width: 100%;      /* JS overrides per-frame */
+  /* Explicit height:100% beats the canvas element's HTML `height`
+     attribute (which becomes the default CSS height when JS sets
+     canvas.height for the bitmap). Without this, `canvas.height =
+     1805` would also lock canvas CSS height to 1805px regardless of
+     the parent. */
+  height: 100%;
+  pointer-events: none;
+  color: rgba(255, 255, 255, 0.55);
+}
+.shot-block.is-audio.is-selected .waveform-canvas {
+  color: rgba(255, 255, 255, 0.75);
+}
+
 .shot-block__label {
+  position: relative;        /* lift above the waveform canvas */
   flex: 0 0 auto;
   line-height: 1;
   white-space: nowrap;
@@ -642,6 +734,7 @@ body.is-clip-dragging .lane {
      hidden clips the inner icon span. max-width:100% (relative to
      the flex container) ensures we never claim more horizontal room
      than the column actually has. */
+  position: relative;        /* lift above the waveform canvas */
   flex: 0 0 auto;
   max-width: 100%;
   min-width: 0;

@@ -67,6 +67,48 @@ export function useKeyboard(): void {
         return;
       }
 
+      // Spacebar → toggle C4D playback. Standard NLE shortcut. We
+      // forward to C++ which calls CallCommand(12412); C4D drives the
+      // playhead via EVMSG_TIMECHANGED and our existing tick stream
+      // routes the frame updates back to JS.
+      if (ev.key === ' ' || ev.code === 'Space') {
+        ev.preventDefault();
+        ev.stopPropagation();
+        void send({ kind: 'toggle-play' });
+        return;
+      }
+
+      // I → set play-range in at playhead. O → set play-range out at
+      // playhead. NLE standard. Bare keys (no modifier). Mirrors
+      // Python's _on_keyboard handler (sb_canvas.py:2470).
+      if (!mod && !ev.altKey && (ev.key === 'i' || ev.key === 'I')) {
+        ev.preventDefault();
+        const s = useStore.getState();
+        const frame = s.scrubFrame ?? s.currentFrame;
+        const newIn  = Math.max(0, Math.min(frame, s.playRangeOut - 1));
+        s.setPlayRange(newIn, s.playRangeOut);
+        void send({ kind: 'set-play-range', inFrame: newIn, outFrame: s.playRangeOut });
+        return;
+      }
+      if (!mod && !ev.altKey && (ev.key === 'o' || ev.key === 'O')) {
+        ev.preventDefault();
+        const s = useStore.getState();
+        const frame = s.scrubFrame ?? s.currentFrame;
+        const newOut = Math.max(s.playRangeIn + 1, Math.min(frame, s.docFrames));
+        s.setPlayRange(s.playRangeIn, newOut);
+        void send({ kind: 'set-play-range', inFrame: s.playRangeIn, outFrame: newOut });
+        return;
+      }
+      // `/` → set play-range to selection (or all clips if nothing is
+      // selected). Mirrors Python's _range_to_selection_or_all
+      // (sb_canvas.py:2576).
+      if (!mod && !ev.altKey && ev.key === '/') {
+        ev.preventDefault();
+        const s = useStore.getState();
+        rangeToSelectionOrAll(s);
+        return;
+      }
+
       // Delete / Backspace → delete selection.
       if (ev.key === 'Delete' || ev.key === 'Backspace') {
         const sel = useStore.getState().selectedClipIds;
@@ -91,6 +133,30 @@ export function useKeyboard(): void {
     window.addEventListener('keydown', onKeyDown);
     return () => window.removeEventListener('keydown', onKeyDown);
   }, []);
+}
+
+/** Compute the bounding [in, out] frame range over the current
+ *  selection (or all clips on every track if nothing is selected),
+ *  then write it as the new play range. Out frame is exclusive in
+ *  the v2 model — we use the rightmost clip's outFrame directly. */
+function rangeToSelectionOrAll(s: ReturnType<typeof useStore.getState>) {
+  const sel = s.selectedClipIds;
+  const tracks = [...s.videoTracks, ...s.audioTracks];
+  let minIn = Infinity;
+  let maxOut = -Infinity;
+  const useSelection = sel.size > 0;
+  for (const t of tracks) {
+    for (const c of t.clips) {
+      if (useSelection && !sel.has(c.id)) continue;
+      if (c.inFrame < minIn)  minIn = c.inFrame;
+      if (c.outFrame > maxOut) maxOut = c.outFrame;
+    }
+  }
+  if (!Number.isFinite(minIn) || !Number.isFinite(maxOut)) return;
+  const newIn  = Math.max(0, minIn | 0);
+  const newOut = Math.max(newIn + 1, Math.min(maxOut | 0, s.docFrames));
+  s.setPlayRange(newIn, newOut);
+  void send({ kind: 'set-play-range', inFrame: newIn, outFrame: newOut });
 }
 
 /** Remove every clip in `ids` from its track. Tracks that empty out

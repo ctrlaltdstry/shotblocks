@@ -31,6 +31,9 @@ export type HostInbound =
   | { kind: 'om-hover';  viewportX: number; viewportY: number; items: OmItem[] }
   | { kind: 'om-drop';   viewportX: number; viewportY: number; items: OmItem[] }
   | { kind: 'om-cancel' }
+  | { kind: 'file-hover'; viewportX: number; viewportY: number; path: string }
+  | { kind: 'file-drop';  viewportX: number; viewportY: number; path: string }
+  | { kind: 'file-cancel' }
   | { kind: 'state-changed' };
 
 export type HostOutbound =
@@ -41,7 +44,13 @@ export type HostOutbound =
   | { kind: 'save-state'; json: string; objectIds: number[] }
   | { kind: 'load-state' }
   | { kind: 'undo' }
-  | { kind: 'redo' };
+  | { kind: 'redo' }
+  | { kind: 'toggle-play' }
+  | { kind: 'audio-add'; clipId: number; bytes: string }
+  | { kind: 'audio-fetch'; clipId: number }
+  | { kind: 'audio-remove'; clipId: number }
+  | { kind: 'set-play-range'; inFrame: number; outFrame: number }
+  | { kind: 'set-loop'; enabled: boolean };
 
 type Listener = (msg: HostInbound) => void;
 

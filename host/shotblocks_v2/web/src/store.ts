@@ -20,6 +20,23 @@ export interface Clip {
   state: ClipState;
   /** Per-clip lock (independent of track lock). */
   locked: boolean;
+  /** Absolute filesystem path for audio clips imported from disk.
+   *  Empty / undefined for video clips (which resolve back to a C4D
+   *  BaseObject via `objectId` instead). Used to re-decode the audio
+   *  on doc reload — the file path survives save/load via the
+   *  persistence helper's JSON blob. */
+  filePath?: string;
+  /** Multi-resolution peak pyramid — one entry per zoom level, ordered
+   *  fine → coarse. The renderer picks the level closest to the
+   *  current pixels-per-sample. Computed once at drop time by
+   *  `computePeaks` (lib/peaks.ts) and persisted through save/load so
+   *  waveforms survive doc reload even though the source binary
+   *  doesn't (see [[webview2-hides-file-paths]]). */
+  peakLevels?: { sps: number; b64: string }[];
+  /** Largest absolute peak value across all buckets at the finest
+   *  level (0..127). The waveform renderer divides by this for
+   *  auto-gain so quiet material fills the lane height. */
+  peakAbsMax?: number;
 }
 
 /** One clip captured to the timeline-local clipboard. Snapshots the
@@ -66,6 +83,17 @@ export interface State {
   docFrames: number;
   currentFrame: number;
   playing: boolean;
+  // C4D's loop range — what plays under spacebar when loop is enabled
+  // or what bounds the play head when the loop button is on. Both
+  // frames are in doc-relative coords starting at 0. C++ ships these
+  // in doc-info and on EVMSG_CHANGE; JS sends edits back via the
+  // 'set-play-range' command.
+  playRangeIn: number;
+  playRangeOut: number;
+  // Whether C4D's loop mode is on. v2 owns this independently because
+  // C4D 2026's Python API doesn't expose the native cycle button
+  // (matches Python's `_loop_enabled` in sb_canvas.py:156).
+  loopEnabled: boolean;
 
   // Optimistic scrub override. When non-null, the UI renders the
   // playhead at this frame instead of currentFrame — gives instant
@@ -92,6 +120,12 @@ export interface State {
   // and gets sent to C++ so it can drive whatever editing semantics
   // the tool implies (none wired yet).
   activeTool: ToolId;
+
+  // Audio scrubbing — when true, dragging the playhead plays short
+  // blips of audio at the scrub position. Premiere / Resolve default.
+  // Toggled via the audio-scrub icon below the dB meter in the left
+  // rail. Default on.
+  audioScrub: boolean;
 
   // Tracks. Index 0 = closest to the V/A divider (V1 / A1). New tracks
   // are added at the outer ends. Auto-create / auto-remove on clip
@@ -168,17 +202,32 @@ export interface State {
 
   // Actions
   setTick: (frame: number, fps: number, playing: boolean) => void;
-  setDocInfo: (fps: number, docFrames: number) => void;
+  setDocInfo: (fps: number, docFrames: number, playRangeIn?: number, playRangeOut?: number) => void;
+  /** Set the play range (in/out frames). Caller is responsible for
+   *  also pushing this to C++ via send({kind:'set-play-range', ...}). */
+  setPlayRange: (inFrame: number, outFrame: number) => void;
+  setLoopEnabled: (on: boolean) => void;
   setHVisible: (vMin: number, vMax: number) => void;
   setVVideoVisible: (vMin: number, vMax: number) => void;
   setVAudioVisible: (vMin: number, vMax: number) => void;
   setVaShare: (share: number) => void;
   setActiveTool: (tool: ToolId) => void;
+  setAudioScrub: (on: boolean) => void;
   setScrubFrame: (frame: number | null) => void;
 
   /** Append a clip to the named track (e.g. 'V1' or 'A2'). Returns
    *  the assigned clip id, or null if the track doesn't exist. */
   addClip: (trackId: string, clip: Omit<Clip, 'id'>) => number | null;
+
+  /** Attach the decoded peak pyramid to an existing clip. Called by
+   *  useFileDrop after the WebAudio decode completes asynchronously —
+   *  the clip appears immediately at duration-known time, peaks are
+   *  patched in when ready. No-op if the clip id doesn't exist. */
+  setClipPeaks: (
+    clipId: number,
+    peakLevels: { sps: number; b64: string }[],
+    peakAbsMax: number,
+  ) => void;
 
   setDragPreview: (preview: DragPreview | null) => void;
   setEdgeHover: (edges: Set<string>) => void;
@@ -584,6 +633,9 @@ export const useStore = create<State>((set) => ({
   docFrames: 150,
   currentFrame: 0,
   playing: false,
+  playRangeIn: 0,
+  playRangeOut: 150,
+  loopEnabled: false,
   scrubFrame: null,
   h:      { min: 0, max: 150, vMin: 0, vMax: 150 },
   // Vertical windows: range is 2× the track count so the default
@@ -593,6 +645,7 @@ export const useStore = create<State>((set) => ({
   vAudio: { min: 0, max: 2,   vMin: 0.5, vMax: 1.5 },
   vaShare: 0.5,
   activeTool: 'select',
+  audioScrub: true,
   videoTracks: [{ id: 1, name: 'Video 1', clips: [] }],
   audioTracks: [{ id: 1, name: 'Audio 1', clips: [] }],
   dragPreview: null,
@@ -613,7 +666,7 @@ export const useStore = create<State>((set) => ({
 
   setScrubFrame: (frame) => set({ scrubFrame: frame }),
 
-  setDocInfo: (fps, docFrames) => set((s) => {
+  setDocInfo: (fps, docFrames, playRangeIn, playRangeOut) => set((s) => {
     const wasFullView = s.h.vMin === s.h.min && s.h.vMax === s.h.max;
     const next: Partial<State> = {
       fps: fps > 0 ? fps : s.fps,
@@ -624,8 +677,17 @@ export const useStore = create<State>((set) => ({
     } else {
       next.h = { ...s.h, max: docFrames };
     }
+    if (typeof playRangeIn === 'number')  next.playRangeIn  = playRangeIn;
+    if (typeof playRangeOut === 'number') next.playRangeOut = playRangeOut;
     return next;
   }),
+
+  setPlayRange: (inFrame, outFrame) => set({
+    playRangeIn:  Math.max(0, Math.floor(inFrame)),
+    playRangeOut: Math.max(Math.floor(inFrame) + 1, Math.floor(outFrame)),
+  }),
+
+  setLoopEnabled: (on) => set({ loopEnabled: on }),
 
   setHVisible: (vMin, vMax) => set((s) => ({
     h: { ...s.h, vMin, vMax },
@@ -642,6 +704,7 @@ export const useStore = create<State>((set) => ({
   setVaShare: (share) => set({ vaShare: Math.max(0, Math.min(1, share)) }),
 
   setActiveTool: (tool) => set({ activeTool: tool }),
+  setAudioScrub: (on) => set({ audioScrub: on }),
 
   setDragPreview: (preview) => set({ dragPreview: preview }),
 
@@ -1209,6 +1272,22 @@ export const useStore = create<State>((set) => ({
     }
     return { edgeHover: edges };
   }),
+
+  setClipPeaks: (clipId, peakLevels, peakAbsMax) => {
+    set((s) => {
+      const patch = (tracks: Track[]) => tracks.map((t) => {
+        if (!t.clips.some((c) => c.id === clipId)) return t;
+        return {
+          ...t,
+          clips: t.clips.map((c) => c.id === clipId ? { ...c, peakLevels, peakAbsMax } : c),
+        };
+      });
+      return {
+        videoTracks: patch(s.videoTracks),
+        audioTracks: patch(s.audioTracks),
+      };
+    });
+  },
 
   addClip: (trackId, clip) => {
     const id = nextClipId++;

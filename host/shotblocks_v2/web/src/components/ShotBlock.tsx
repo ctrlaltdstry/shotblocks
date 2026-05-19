@@ -1,6 +1,7 @@
 import { useRef, type CSSProperties } from 'react';
 import { useStore, type Clip } from '../store';
 import { useClipDrag } from '../useClipDrag';
+import { WaveformCanvas } from './WaveformCanvas';
 
 /** Shot block (a clip rendered inside a Lane). Visual matrix per
  *  Figma node 173:1827: state × type × height.
@@ -110,6 +111,9 @@ export function ShotBlock({
           the bracket / selected overlays can extend 1px past its
           border (see memory clip-state-overlay-pattern). */}
       <div className="shot-block__content">
+        {side === 'audio' && clip.peakLevels && clip.peakLevels.length > 0 && (
+          <WaveformCanvas clip={clip} />
+        )}
         <div className="shot-block__label">{clip.sourceName}</div>
         <div className="shot-block__icon-wrap">
           <span className={iconClass} />

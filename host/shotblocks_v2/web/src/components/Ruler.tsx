@@ -4,6 +4,8 @@ import { useElementSize } from '../useElementSize';
 import { computeRulerLayout } from '../lib/ruler';
 import { send } from '../lib/host';
 import playheadHandleUrl from '../icons/playhead-handle.svg';
+import { RangeBar } from './RangeBar';
+import { RangeDim } from './RangeDim';
 
 /** Ruler row content: numbers + ticks + the playhead handle (which
  *  needs to be clipped to the ruler's overflow). Click + drag scrubs. */
@@ -83,6 +85,8 @@ export function Ruler() {
       onPointerUp={onPointerEnd}
       onPointerCancel={onPointerEnd}
     >
+      <RangeDim />
+      <RangeBar rulerRef={innerRef} />
       <div className="ruler__numbers">
         {layout.labels.map((lbl) => {
           const style: CSSProperties = { left: lbl.x + 'px' };

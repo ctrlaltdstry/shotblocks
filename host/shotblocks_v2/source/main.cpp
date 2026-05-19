@@ -157,6 +157,12 @@ static const Int32 BCKEY_V2_HELPER_MARKER = 1100;   // String: identifies the he
 static const Int32 BCKEY_V2_CLIPS_JSON    = 1101;   // String: JSON tracks + nextClipId
 static const Int32 BCKEY_V2_VERSION       = 1102;   // Int32: monotonic save version
 static const Int32 BCKEY_V2_CAM_LINK_BASE = 2100;   // BaseLink at BASE + objectId
+// Audio bytes per clip — base64-encoded original-format bytes (WAV /
+// MP3) keyed by BCKEY_V2_AUDIO_BASE + clipId. Written once on drop
+// (audio-add), read on demand from JS (audio-fetch), removed on clip
+// delete (audio-remove). Separate from BCKEY_V2_CLIPS_JSON so the
+// normal save-state path doesn't re-ship audio on every clip move.
+static const Int32 BCKEY_V2_AUDIO_BASE    = 3100;
 static const char  V2_HELPER_MARKER_VALUE[]  = "shotblocks_v2_helper";
 static const char  V2_HELPER_NULL_NAME[]     = "_shotblocks_v2";
 
@@ -191,6 +197,61 @@ static BaseObject* GetOrCreateV2Helper(BaseDocument* doc)
 	doc->InsertObject(helper, nullptr, nullptr);
 	GePrint("[Shotblocks/v2] created persistence helper"_s);
 	return helper;
+}
+
+
+// -----------------------------------------------------------------------------
+// Naive JSON field parsers — enough for our flat {"kind":..., "field":...}
+// command bodies. Replace with a real JSON parser when message vocabulary
+// outgrows it.
+// -----------------------------------------------------------------------------
+
+static Int32 ParseIntField(const std::string& body, const char* fieldName)
+{
+	std::string needle = std::string("\"") + fieldName + "\"";
+	auto p = body.find(needle);
+	if (p == std::string::npos) return 0;
+	p = body.find(':', p);
+	if (p == std::string::npos) return 0;
+	++p;
+	while (p < body.size() && (body[p] == ' ' || body[p] == '\t')) ++p;
+	return (Int32)std::strtol(body.c_str() + p, nullptr, 10);
+}
+
+// Parse a quoted string value for `fieldName`. Handles standard JSON
+// backslash escapes (\\ \" \n \t \r \/).
+static std::string ParseStringField(const std::string& body, const char* fieldName)
+{
+	std::string out;
+	std::string needle = std::string("\"") + fieldName + "\"";
+	auto p = body.find(needle);
+	if (p == std::string::npos) return out;
+	p = body.find(':', p);
+	if (p == std::string::npos) return out;
+	p = body.find('"', p);
+	if (p == std::string::npos) return out;
+	++p;
+	out.reserve(body.size() - p);
+	while (p < body.size() && body[p] != '"')
+	{
+		if (body[p] == '\\' && p + 1 < body.size())
+		{
+			char c = body[p + 1];
+			if      (c == 'n')  out += '\n';
+			else if (c == 't')  out += '\t';
+			else if (c == 'r')  out += '\r';
+			else if (c == '"')  out += '"';
+			else if (c == '\\') out += '\\';
+			else if (c == '/')  out += '/';
+			else                out += c;
+			p += 2;
+		}
+		else
+		{
+			out += body[p++];
+		}
+	}
+	return out;
 }
 
 
@@ -312,7 +373,14 @@ private:
 		}
 	}
 
-	static std::string Read(SOCKET s, size_t cap = 64 * 1024)
+	// 256 MB cap. Audio-add commands ship the full original audio
+	// file as base64 (WAV stays WAV — a 5-minute stereo 44.1k WAV is
+	// ~50MB raw, ~67MB base64). Save-state JSON without audio bytes
+	// is still tiny (~100KB with peaks for a few clips). The cap
+	// here is the per-request body limit, not the per-doc audio
+	// limit. Audio bytes live in the helper's BaseContainer keyed by
+	// BCKEY_V2_AUDIO_BASE + clipId, separate from the clip JSON.
+	static std::string Read(SOCKET s, size_t cap = 256 * 1024 * 1024)
 	{
 		std::string buf;
 		buf.reserve(2048);
@@ -475,6 +543,55 @@ public:
 	{
 		EnsureNavigated();
 		AnnouncePortIfReady();
+		// Advance v2-owned playback. Computes the target frame from
+		// wall-clock elapsed time since play started, so timer jitter
+		// doesn't accumulate (Python's _playback_anchor_t /
+		// _playback_anchor_frame pattern, sb_canvas_playback.py:147).
+		if (_v2Playing)
+		{
+			BaseDocument* doc = GetActiveDocument();
+			if (doc)
+			{
+				Int32 fps = doc->GetFps();
+				if (fps <= 0) fps = 30;
+				Float nowMs = GeGetMilliSeconds();
+				Float elapsedSec = (nowMs - _v2AnchorMs) / 1000.0;
+				Int32 targetFrame = _v2AnchorFrame + (Int32)(elapsedSec * fps);
+				BaseTime minT = doc->GetMinTime();
+				Int32 minFrame = minT.GetFrame(fps);
+				Int32 curFrame = doc->GetTime().GetFrame(fps) - minFrame;
+				if (targetFrame != curFrame)
+				{
+					// End of range? Wrap (loop) or stop.
+					if (targetFrame >= _v2RangeOut)
+					{
+						if (_v2LoopEnabled)
+						{
+							// Re-anchor so the next tick computes from
+							// rangeIn at a wall time corresponding to
+							// the overflow past rangeOut. Keeps long-
+							// playback drift bounded.
+							Int32 overflow = targetFrame - _v2RangeOut;
+							Float overflowSec = overflow / (Float)fps;
+							_v2AnchorMs    = nowMs - overflowSec * 1000.0;
+							_v2AnchorFrame = _v2RangeIn;
+							targetFrame    = _v2RangeIn;
+						}
+						else
+						{
+							// Stop at end-of-range. Drop timer cadence
+							// back to idle so we're not waking 30x/sec
+							// when nothing's happening.
+							targetFrame = _v2RangeOut - 1;
+							_v2Playing = false;
+							SetTimer(250);
+						}
+					}
+					doc->SetTime(BaseTime(minFrame + targetFrame, fps));
+					EventAdd();
+				}
+			}
+		}
 		PostTick();
 	}
 
@@ -509,9 +626,14 @@ public:
 		if (!overUs)
 		{
 			// Drag left our area. If we were showing a ghost, tell JS
-			// to clear it.
+			// to clear it. We don't track which kind of drag was in
+			// flight, so post both kinds of cancel — JS clears whichever
+			// ghost it had.
 			if (_hoverActive && _htmlView)
+			{
 				_htmlView->PostWebMessage("{\"kind\":\"om-cancel\"}"_s);
+				_htmlView->PostWebMessage("{\"kind\":\"file-cancel\"}"_s);
+			}
 			_hoverActive = false;
 			return 0;
 		}
@@ -519,13 +641,11 @@ public:
 		Int32 type = 0;
 		void* obj  = nullptr;
 		GetDragObject(msg, &type, &obj);
-		if (type != DRAGTYPE_ATOMARRAY || !obj)
-			return 0;
-		AtomArray* arr = static_cast<AtomArray*>(obj);
-		if (arr->GetCount() == 0)
+		if (!obj)
 			return 0;
 
 		// Coord conversion: screen → dialog-local → HtmlViewer-viewport.
+		// Same for every drag type; do it once.
 		Int32 sx = msg.GetInt32(BFM_DRAG_SCREENX);
 		Int32 sy = msg.GetInt32(BFM_DRAG_SCREENY);
 		Screen2Local(&sx, &sy);
@@ -535,6 +655,81 @@ public:
 			sx -= hvX;
 			sy -= hvY;
 		}
+
+		// File drags (Explorer / C4D content browser) take a separate
+		// path — payload is a filename string, not an AtomArray. Audio
+		// files (.wav / .mp3) land on audio lanes via HTML5 Audio for
+		// duration; everything else is silently rejected.
+		if (type == DRAGTYPE_FILES ||
+		    type == DRAGTYPE_FILENAME_OTHER ||
+		    type == DRAGTYPE_FILENAME_IMAGE ||
+		    type == DRAGTYPE_FILENAME_SCENE)
+		{
+			Filename* fn = static_cast<Filename*>(obj);
+			if (!fn) return 0;
+			String pathStr = fn->GetString();
+			// Lowercase-extension audio filter. C4D's Filename gives us
+			// the suffix but we want a case-insensitive compare.
+			String suffix = fn->GetSuffix();
+			Char* sx_c = suffix.GetCStringCopy();
+			std::string ext = sx_c ? sx_c : "";
+			if (sx_c) DeleteMem(sx_c);
+			for (auto& c : ext) c = (char)std::tolower((unsigned char)c);
+			if (ext != "wav" && ext != "mp3")
+			{
+				// Non-audio file drag — drop it. (Eventually images /
+				// scenes will route elsewhere, but for now they're not
+				// our business.)
+				if (_hoverActive && _htmlView)
+					_htmlView->PostWebMessage("{\"kind\":\"file-cancel\"}"_s);
+				_hoverActive = false;
+				return 0;
+			}
+
+			// Convert to UTF-8 + escape for JSON embedding.
+			Char* pc = pathStr.GetCStringCopy();
+			std::string pathUtf8 = pc ? pc : "";
+			if (pc) DeleteMem(pc);
+			std::string escPath;
+			escPath.reserve(pathUtf8.size() + 8);
+			for (char c : pathUtf8)
+			{
+				if      (c == '\\') escPath += "\\\\";
+				else if (c == '"')  escPath += "\\\"";
+				else if (c == '\n') escPath += "\\n";
+				else if (c == '\r') escPath += "\\r";
+				else if (c == '\t') escPath += "\\t";
+				else                escPath += c;
+			}
+
+			const char* kindStr = finished ? "file-drop" : "file-hover";
+			char head[256];
+			_snprintf_s(head, sizeof(head), _TRUNCATE,
+				"{\"kind\":\"%s\",\"viewportX\":%d,\"viewportY\":%d,\"path\":\"",
+				kindStr, (int)sx, (int)sy);
+			maxon::String payload = maxon::String(head)
+				+ maxon::String(escPath.c_str())
+				+ "\"}"_s;
+			if (_htmlView)
+				_htmlView->PostWebMessage(payload);
+
+			if (finished)
+			{
+				_hoverActive = false;
+				GePrint("[Shotblocks/v2] file-drop posted: "_s + payload);
+			}
+			else
+			{
+				_hoverActive = true;
+			}
+			return SetDragDestination(MOUSE_POINT_HAND);
+		}
+
+		if (type != DRAGTYPE_ATOMARRAY)
+			return 0;
+		AtomArray* arr = static_cast<AtomArray*>(obj);
+		if (arr->GetCount() == 0)
+			return 0;
 
 		// Build the items array. Per-item: type, name, animated-range,
 		// and (on FINISHED only) an objectId that JS keeps around to
@@ -627,6 +822,10 @@ public:
 		else if (id == EVMSG_CHANGE)
 		{
 			CheckForExternalStateChange();
+			// Also re-publish doc-info so JS picks up any
+			// out-of-band edits to the loop range (e.g. user dragged
+			// C4D's native in/out markers in the timeline header).
+			PostDocInfo();
 		}
 		else if (id == g_sb_msg_http_request)
 		{
@@ -1084,6 +1283,168 @@ private:
 			resp += "\"}";
 			return resp;
 		}
+		if (body.find("\"kind\":\"toggle-play\"") != std::string::npos)
+		{
+			// Spacebar toggles v2-owned playback. We do NOT call
+			// CallCommand(12412) because C4D's native play forward
+			// respects C4D's native cycle button, which can't be
+			// controlled from the SDK. Instead we run our own timer
+			// (see Timer()) that advances doc->SetTime per frame and
+			// honors _v2LoopEnabled + the play range.
+			//
+			// C4D's native play button still works independently —
+			// pressing it puts C4D in its own playback mode; we just
+			// receive EVMSG_TIMECHANGED and broadcast tick. v2's loop
+			// toggle has no effect on C4D-initiated playback.
+			BaseDocument* doc = GetActiveDocument();
+			if (!doc) return "{\"ok\":false,\"error\":\"no doc\"}";
+			if (_v2Playing)
+			{
+				_v2Playing = false;
+				// Drop the timer back to idle cadence.
+				SetTimer(250);
+			}
+			else
+			{
+				_v2Playing = true;
+				Int32 fps = doc->GetFps();
+				if (fps <= 0) fps = 30;
+				BaseTime minT = doc->GetMinTime();
+				Int32 minFrame = minT.GetFrame(fps);
+				Int32 curFrame = doc->GetTime().GetFrame(fps) - minFrame;
+				// If the playhead is outside the play range, snap to
+				// rangeIn before starting (Python behavior at
+				// sb_canvas_playback.py:137).
+				if (curFrame < _v2RangeIn || curFrame >= _v2RangeOut)
+				{
+					curFrame = _v2RangeIn;
+					doc->SetTime(BaseTime(minFrame + curFrame, fps));
+					EventAdd();
+				}
+				_v2AnchorMs    = GeGetMilliSeconds();
+				_v2AnchorFrame = curFrame;
+				// Bump timer to ~fps cadence so playback advances
+				// smoothly; idle cadence is 250ms.
+				Int32 period = 1000 / fps;
+				if (period < 1) period = 1;
+				SetTimer(period);
+			}
+			PostTick();
+			return "{\"ok\":true,\"kind\":\"toggle-play-ack\"}";
+		}
+		if (body.find("\"kind\":\"set-play-range\"") != std::string::npos)
+		{
+			// Cache the v2 play range in C++ memory. NOT synced to
+			// C4D's LoopMin/MaxTime — that would make C4D's own
+			// player wrap on the range, overruling v2's loop toggle.
+			// v2's playback timer reads this cache to enforce loop
+			// behavior; C4D's native play button ignores it.
+			Int32 inFrame  = ParseIntField(body, "inFrame");
+			Int32 outFrame = ParseIntField(body, "outFrame");
+			if (inFrame  < 0) inFrame  = 0;
+			if (outFrame <= inFrame) outFrame = inFrame + 1;
+			_v2RangeIn  = inFrame;
+			_v2RangeOut = outFrame;
+			return "{\"ok\":true,\"kind\":\"set-play-range-ack\"}";
+		}
+		if (body.find("\"kind\":\"set-loop\"") != std::string::npos)
+		{
+			// Cache v2's loop flag. Read by the playback timer at the
+			// end-of-range boundary to decide between wrap and stop.
+			_v2LoopEnabled = body.find("\"enabled\":true") != std::string::npos;
+			return "{\"ok\":true,\"kind\":\"set-loop-ack\"}";
+		}
+		if (body.find("\"kind\":\"audio-add\"") != std::string::npos)
+		{
+			// JS pushes the original audio bytes (base64) once at drop
+			// time. Stored in the helper's BaseContainer keyed by
+			// BCKEY_V2_AUDIO_BASE + clipId. The clip-list JSON references
+			// audio by clipId — bytes never re-ship on subsequent clip
+			// moves / trims / saves.
+			Int32 clipId = ParseIntField(body, "clipId");
+			if (clipId <= 0)
+				return "{\"ok\":false,\"error\":\"bad clipId\"}";
+			std::string bytes = ParseStringField(body, "bytes");
+			BaseDocument* doc = GetActiveDocument();
+			if (!doc) return "{\"ok\":false,\"error\":\"no doc\"}";
+			BaseObject* helper = GetOrCreateV2Helper(doc);
+			if (!helper) return "{\"ok\":false,\"error\":\"helper alloc failed\"}";
+			BaseContainer* bc = helper->GetDataInstance();
+			if (!bc) return "{\"ok\":false,\"error\":\"helper bc missing\"}";
+
+			doc->StartUndo();
+			doc->AddUndo(UNDOTYPE::CHANGE_SMALL, helper);
+			bc->SetString(BCKEY_V2_AUDIO_BASE + clipId, maxon::String(bytes.c_str()));
+			// Bump version so EVMSG_CHANGE handlers (Ctrl+Z / Ctrl+Y
+			// detection) stay in sync.
+			const Int32 newVersion = bc->GetInt32(BCKEY_V2_VERSION) + 1;
+			bc->SetInt32(BCKEY_V2_VERSION, newVersion);
+			_lastSeenVersion = newVersion;
+			doc->EndUndo();
+			EventAdd();
+			return "{\"ok\":true,\"kind\":\"audio-add-ack\"}";
+		}
+		if (body.find("\"kind\":\"audio-fetch\"") != std::string::npos)
+		{
+			// JS asks for the persisted audio bytes for one clipId.
+			// Called on doc load for each audio clip we don't already
+			// have in JS memory. Returns base64 string (possibly empty
+			// if the clip predates audio import or has no bytes stored).
+			Int32 clipId = ParseIntField(body, "clipId");
+			if (clipId <= 0)
+				return "{\"ok\":false,\"error\":\"bad clipId\"}";
+			BaseDocument* doc = GetActiveDocument();
+			if (!doc) return "{\"ok\":false,\"error\":\"no doc\"}";
+			BaseObject* helper = FindV2Helper(doc);
+			if (!helper)
+				return "{\"ok\":true,\"kind\":\"audio-fetch-ack\",\"bytes\":\"\"}";
+			BaseContainer* bc = helper->GetDataInstance();
+			if (!bc)
+				return "{\"ok\":true,\"kind\":\"audio-fetch-ack\",\"bytes\":\"\"}";
+
+			String raw = bc->GetString(BCKEY_V2_AUDIO_BASE + clipId);
+			std::string rawUtf8;
+			Char* cstr = raw.GetCStringCopy();
+			if (cstr)
+			{
+				rawUtf8 = cstr;
+				DeleteMem(cstr);
+			}
+			// The stored value is itself a base64 string (no JSON-
+			// special characters), so we can embed it verbatim. The
+			// only escape needed is the JSON-string termination.
+			std::string resp = "{\"ok\":true,\"kind\":\"audio-fetch-ack\",\"bytes\":\"";
+			resp += rawUtf8;
+			resp += "\"}";
+			return resp;
+		}
+		if (body.find("\"kind\":\"audio-remove\"") != std::string::npos)
+		{
+			// JS notifies that a clip with audio was deleted. Free the
+			// helper's storage so deleted audio doesn't ride along in
+			// the doc.
+			Int32 clipId = ParseIntField(body, "clipId");
+			if (clipId <= 0)
+				return "{\"ok\":false,\"error\":\"bad clipId\"}";
+			BaseDocument* doc = GetActiveDocument();
+			if (!doc) return "{\"ok\":false,\"error\":\"no doc\"}";
+			BaseObject* helper = FindV2Helper(doc);
+			if (!helper)
+				return "{\"ok\":true,\"kind\":\"audio-remove-ack\"}";
+			BaseContainer* bc = helper->GetDataInstance();
+			if (!bc)
+				return "{\"ok\":true,\"kind\":\"audio-remove-ack\"}";
+
+			doc->StartUndo();
+			doc->AddUndo(UNDOTYPE::CHANGE_SMALL, helper);
+			bc->RemoveData(BCKEY_V2_AUDIO_BASE + clipId);
+			const Int32 newVersion = bc->GetInt32(BCKEY_V2_VERSION) + 1;
+			bc->SetInt32(BCKEY_V2_VERSION, newVersion);
+			_lastSeenVersion = newVersion;
+			doc->EndUndo();
+			EventAdd();
+			return "{\"ok\":true,\"kind\":\"audio-remove-ack\"}";
+		}
 		if (body.find("\"kind\":\"undo\"") != std::string::npos)
 		{
 			// WebView2 swallows Ctrl+Z before C4D's menu sees it, so JS
@@ -1165,7 +1526,11 @@ private:
 		Int32 fps = doc->GetFps();
 		Int32 frame = doc->GetTime().GetFrame(fps);
 		Float nowMs = GeGetMilliSeconds();
-		bool playing = (nowMs - _lastTimeChangedTickMs) < 200.0;
+		// `playing` reflects EITHER v2-owned playback (spacebar) OR
+		// C4D-initiated playback (native play button — inferred from
+		// EVMSG_TIMECHANGED cadence). Either way audio/UI sync to it.
+		bool externalPlaying = (nowMs - _lastTimeChangedTickMs) < 200.0;
+		bool playing = _v2Playing || externalPlaying;
 
 		char buf[256];
 		_snprintf_s(buf, sizeof(buf), _TRUNCATE,
@@ -1184,15 +1549,18 @@ private:
 		Int32 fps = doc->GetFps();
 		BaseTime minT = doc->GetMinTime();
 		BaseTime maxT = doc->GetMaxTime();
-		BaseTime inT  = doc->GetLoopMinTime();
-		BaseTime outT = doc->GetLoopMaxTime();
 		Int32 docFrames = (Int32)(maxT.GetFrame(fps) - minT.GetFrame(fps));
-		Int32 inFrame   = (Int32)(inT.GetFrame(fps)  - minT.GetFrame(fps));
-		Int32 outFrame  = (Int32)(outT.GetFrame(fps) - minT.GetFrame(fps));
+		// playRange fields broadcast the v2-owned cache, not C4D's
+		// native loop bounds (which v2 deliberately doesn't touch so
+		// C4D's own play button stays independent). On first
+		// connection, default to [0, docFrames] so JS sees the full
+		// doc as "no play range defined."
+		if (_v2RangeOut > docFrames || _v2RangeOut == (1 << 30))
+			_v2RangeOut = docFrames;
 		char buf[256];
 		_snprintf_s(buf, sizeof(buf), _TRUNCATE,
 			"{\"kind\":\"doc-info\",\"fps\":%d,\"docFrames\":%d,\"playRangeIn\":%d,\"playRangeOut\":%d}",
-			(int)fps, (int)docFrames, (int)inFrame, (int)outFrame);
+			(int)fps, (int)docFrames, (int)_v2RangeIn, (int)_v2RangeOut);
 		_htmlView->PostWebMessage(maxon::String(buf));
 	}
 
@@ -1239,6 +1607,19 @@ private:
 	// back/forward to a different version, in which case we tell JS
 	// to reload (push notification → state-changed message).
 	Int32                _lastSeenVersion{0};
+	// v2-owned playback. Spacebar starts/stops this. While
+	// _v2Playing is true, the dialog Timer ticks at fps cadence and
+	// advances doc->SetTime(frame+1, fps), honoring _v2LoopEnabled
+	// and the [_v2RangeIn, _v2RangeOut) play range. Mirrors Python's
+	// _toggle_playback / _playback_tick (sb_canvas_playback.py).
+	// C4D's native play button still works independently — that
+	// path doesn't set _v2Playing, so the loop logic doesn't apply.
+	Bool                 _v2Playing{false};
+	Float                _v2AnchorMs{0.0};   // wall-clock anchor at play start
+	Int32                _v2AnchorFrame{0};  // doc frame at play start
+	Int32                _v2RangeIn{0};
+	Int32                _v2RangeOut{1 << 30};
+	Bool                 _v2LoopEnabled{false};
 };
 
 

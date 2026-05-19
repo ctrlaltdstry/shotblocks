@@ -12,7 +12,7 @@ export function useHost(): void {
           useStore.getState().setTick(msg.frame, msg.fps, msg.playing);
           break;
         case 'doc-info':
-          useStore.getState().setDocInfo(msg.fps, msg.docFrames);
+          useStore.getState().setDocInfo(msg.fps, msg.docFrames, msg.playRangeIn, msg.playRangeOut);
           break;
         // om-drop handled in round 5
       }

@@ -5,6 +5,9 @@ import './App.css';
 import logoUrl from './icons/logo.svg';
 import { useHost } from './useHost';
 import { useOmDrop } from './useOmDrop';
+import { useFileDrop } from './useFileDrop';
+import { useAudioPlayback } from './useAudioPlayback';
+import { send } from './lib/host';
 import { useActiveClipRouter } from './useActiveClipRouter';
 import { usePersistence } from './usePersistence';
 import { useKeyboard } from './useKeyboard';
@@ -22,6 +25,7 @@ import { DropGhost } from './components/DropGhost';
 import { MarqueeOverlay } from './components/MarqueeOverlay';
 import { CutLineOverlay } from './components/CutLineOverlay';
 import { ContextMenu } from './components/ContextMenu';
+import { RangeDim } from './components/RangeDim';
 import { SpawnGhostLane } from './components/SpawnGhostLane';
 import { useMarquee } from './useMarquee';
 import { DebugOverlay } from './DebugOverlay';
@@ -54,6 +58,45 @@ function Timecode() {
   const frame = useStore((s) => s.currentFrame);
   const fps = useStore((s) => s.fps);
   return <div className="topbar__timecode">{formatTimecode(frame, fps)}</div>;
+}
+
+/** Loop toggle in the utilities strip. Drives C4D's loop preview
+ *  mode via JS→C++ 'set-loop'. Grey when off, primary-highlight
+ *  blue when on. Matches the standard utilities-strip styling. */
+function LoopToggle() {
+  const on = useStore((s) => s.loopEnabled);
+  return (
+    <div
+      className={'utilstrip__icon' + (on ? ' is-active' : '')}
+      title={on ? 'Loop: on' : 'Loop: off'}
+      onClick={() => {
+        const next = !useStore.getState().loopEnabled;
+        useStore.getState().setLoopEnabled(next);
+        // Fire-and-forget; C++ will EVMSG_CHANGE → state-changed →
+        // doc-info round-trip if anything else cares.
+        void send({ kind: 'set-loop', enabled: next });
+      }}
+    >
+      <span className="icon icon--loop" style={{ '--icon-w': '16px', '--icon-h': '16px' } as React.CSSProperties} />
+    </div>
+  );
+}
+
+/** Audio-scrub toggle. Sits below the dB meter in the left rail.
+ *  Same visual treatment as the top utilities strip (grey-24 when
+ *  off, primary-highlight blue when on, grey-50 on hover). */
+function AudioScrubToggle() {
+  const on = useStore((s) => s.audioScrub);
+  const set = useStore((s) => s.setAudioScrub);
+  return (
+    <div
+      className={'rail__scrub-toggle utilstrip__icon' + (on ? ' is-active' : '')}
+      title={on ? 'Audio scrub: on' : 'Audio scrub: off'}
+      onClick={() => set(!on)}
+    >
+      <span className="icon icon--audio-scrub" style={{ '--icon-w': '14px', '--icon-h': '16px' } as React.CSSProperties} />
+    </div>
+  );
 }
 
 /** Bottom horizontal scrollbar — pans/zooms the visible time window. */
@@ -499,6 +542,8 @@ function usePageZoomSuppress() {
 function App() {
   useHost();
   useOmDrop();
+  useFileDrop();
+  useAudioPlayback();
   useActiveClipRouter();
   usePersistence();
   useKeyboard();
@@ -550,6 +595,7 @@ function App() {
 
         {/* row 1, col 2 — utilities strip */}
         <div className="utilstrip">
+          <LoopToggle />
           <div className="utilstrip__icon" title="Snap">
             <span className="icon icon--snap" style={{ '--icon-w': '14px', '--icon-h': '14px' } as React.CSSProperties} />
           </div>
@@ -570,7 +616,7 @@ function App() {
         </div>
         <div className="ruler-row__gutter-cap" />
 
-        {/* row 2, col 1 — tool palette + dB meter */}
+        {/* row 2, col 1 — tool palette + dB meter + audio-scrub toggle */}
         <div className="rail">
           <ToolPalette />
           <div className="rail__meter-wrap">
@@ -582,16 +628,11 @@ function App() {
                 </div>
               </div>
               <div className="rail__meter-bars">
-                <div className="rail__meter-bars__pair">
-                  <div className="rail__meter-bar" />
-                  <div className="rail__meter-bar" />
-                </div>
-                <div className="rail__meter-bars__lr">
-                  <span>L</span><span>R</span>
-                </div>
+                <div className="rail__meter-bar" />
               </div>
             </div>
           </div>
+          <AudioScrubToggle />
         </div>
 
         {/* row 2, col 2 — track headers (rendered from store) */}
@@ -603,6 +644,11 @@ function App() {
         {/* row 2, col 3 — stage (lanes, rendered from store) */}
         <div className="stage">
           <div className="stage__edge-shadow" />
+          {/* Play-range dim: black-30% overlay outside [in, out]. Sits
+              above the lane backgrounds + clips but BELOW the playhead
+              (z:5). pointer-events:none lets clicks/scrub/drag still
+              reach the underlying elements. */}
+          <RangeDim />
           <div
             className={'lanes-area' + (activeTool === 'razor' ? ' is-tool-razor' : '')}
             id="lanes-area"
