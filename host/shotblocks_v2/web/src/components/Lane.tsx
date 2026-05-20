@@ -1,4 +1,4 @@
-import { useRef, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { useStore, magneticSnap, SNAP_PIXEL_RADIUS } from '../store';
 import type { Track } from '../store';
 import { ShotBlock } from './ShotBlock';
@@ -359,9 +359,23 @@ export function Lane({ track, side }: { track: Track; side: 'video' | 'audio' })
     try { ev.currentTarget.releasePointerCapture(ev.pointerId); } catch { /* noop */ }
   }
 
-  // Cursor: ew-resize for single-edge trim, col-resize for rolling edit.
+  // Mirror roll-edit hover into the store so useToolCursor (global)
+  // can force the roll cursor through the C++ host — needed for the
+  // post-drag stale-cursor case. Only the seam-owning lane is ever
+  // 'roll'; off-seam lanes are 'default' and set false (idempotent).
+  useEffect(() => {
+    if (cursorMode === 'roll') {
+      useStore.getState().setRollEditActive(true);
+      return () => useStore.getState().setRollEditActive(false);
+    }
+  }, [cursorMode]);
+
+  // Cursor: ew-resize for single-edge trim; the custom roll-edit
+  // cursor (data-URI, matching the C++ roll.cur) for a rolling edit.
+  const ROLL_CURSOR =
+    'url("data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAACAAAAAgCAYAAABzenr0AAACOElEQVR4nO1WPYsTURQ99zIzJOTDLFgEkigGEdRSsp1r7MQ+/gOxEFH8wiosg1VSKrNotcoWrm4KswpW/oWgEtDOHyA2CQlxlXFPfCNhcSZ+TARlDgzz4M7cc9575973gAQJEvyDEAA3AXT5FpFgfKPRaMjC2dPpdJ6Eg8FgxxDPjnMLFwCgQjLf9/1AQDBW1fIiiQ8CyKrqgQgB/CYDIFYhWQBXyuXyCwBrqnooTAAAxu7zWxG5ZP79Iyw7jrPuuu6b0Wj0mSSWZZ0IEyAi09hkMvnSbDZfAXgI4OTvEO8HcKtWq73s9/sffQNDeCpiBb7HiF6v94E5WCEAluayfssznfWjdrvd50z8GQSEEQK6swII5vA87102m90QkeVIAblczt6d/d1Op/PejxnMCeBOoVCwQgXYts0av53JZJ57nvc2rhVotVp9x3G2RcSN7BX5fN4WkdN0O4Bt7h/3cY+ArQgBW7MC6B/jAcbWTG57nhVsVT0K4JqIbFIIHc2ZGKefixAwjY3H4x3XdV87jvMMwBOakDmLxeJc8inq9bpYlrVPRM7QE0xaKpXYBx6r6kpEI2IVbJqe8ZR7LiJnU6nUkjlDfhlcjSMALpuaXg1q/UcCGBOR1d2G9ADARVU9XK1Ww033kxCaU0SOsR3P64SqyrPiuDFb/Kej6ffd4XD4KRAQjE1s4aiYJe7uedbjPoTCwKW9AOAegOsArooIx+f/1n2AFcKGVeGbD/fdNLHF34gSJPjv8BWapcIsthuGngAAAABJRU5ErkJggg==") 16 16, col-resize';
   const cursor = cursorMode === 'trim' ? 'ew-resize'
-              : cursorMode === 'roll' ? 'col-resize'
+              : cursorMode === 'roll' ? ROLL_CURSOR
               : undefined;
 
   return (

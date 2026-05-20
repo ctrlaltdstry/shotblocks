@@ -51,7 +51,7 @@ export type HostOutbound =
   | { kind: 'audio-remove'; clipId: number }
   | { kind: 'set-play-range'; inFrame: number; outFrame: number }
   | { kind: 'set-loop'; enabled: boolean }
-  | { kind: 'set-cursor-mode'; mode: 'slip' | 'default' };
+  | { kind: 'set-cursor-mode'; mode: 'slip' | 'razor' | 'select' | 'av-split' | 'roll' | 'play-range' | 'default' };
 
 type Listener = (msg: HostInbound) => void;
 

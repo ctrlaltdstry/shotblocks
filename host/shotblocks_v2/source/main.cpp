@@ -986,20 +986,39 @@ private:
 		}
 		if (body.find("\"kind\":\"set-cursor-mode\"") != std::string::npos)
 		{
-			// JS tells us which cursor to force. The dialog-window
+			// JS tells us which tool cursor to force. The dialog-window
 			// WM_SETCURSOR subclass reads _cursorMode on every move.
-			// 1 = force slip cursor; 0 = let C4D/WebView2 decide.
-			const int m = body.find("\"mode\":\"slip\"") != std::string::npos ? 1 : 0;
+			// Body: {"kind":"set-cursor-mode","mode":"slip"|"razor"|...}.
+			int m = CURSOR_DEFAULT;
+			if (body.find("\"mode\":\"slip\"") != std::string::npos)
+				m = CURSOR_SLIP;
+			else if (body.find("\"mode\":\"razor\"") != std::string::npos)
+				m = CURSOR_RAZOR;
+			else if (body.find("\"mode\":\"select\"") != std::string::npos)
+				m = CURSOR_SELECT;
+			else if (body.find("\"mode\":\"av-split\"") != std::string::npos)
+				m = CURSOR_AV_SPLIT;
+			else if (body.find("\"mode\":\"roll\"") != std::string::npos)
+				m = CURSOR_ROLL;
+			else if (body.find("\"mode\":\"play-range\"") != std::string::npos)
+				m = CURSOR_PLAY_RANGE;
 			_cursorMode.store(m);
+			{
+				char b[64];
+				_snprintf_s(b, sizeof(b), _TRUNCATE,
+					"[Shotblocks/v2] set-cursor-mode -> %d", m);
+				GePrint(maxon::String(b));
+			}
 			// Apply immediately (WM_SETCURSOR only fires on movement),
 			// and drive a fast Win32 timer that keeps re-asserting the
-			// slip cursor so WebView2's own resets never show. Kill
-			// the timer when slip mode ends.
+			// cursor so WebView2's own resets never show. Kill the
+			// timer when we return to no-override.
 			if (_cursorSubclassed)
 			{
-				if (m == 1)
+				if (m != CURSOR_DEFAULT)
 				{
-					if (_slipCursor) SetCursor(_slipCursor);
+					HCURSOR c = CurrentForcedCursor();
+					if (c) SetCursor(c);
 					// ::SetTimer — the Win32 one. Unqualified SetTimer
 					// resolves to GeDialog::SetTimer (different sig).
 					::SetTimer(_cursorSubclassed, kCursorTimerId, 16, nullptr);
@@ -1610,14 +1629,42 @@ private:
 	// WM_SETCURSOR handler sets the slip cursor and returns TRUE,
 	// winning over both C4D and WebView2.
 	//
-	// `_cursorMode` is set by JS (`set-cursor-mode`): 1 = force slip
-	// cursor, 0 = let C4D/WebView2 decide. Atomic — HTTP worker
-	// thread writes, UI thread's subclass proc reads.
+	// `_cursorMode` is set by JS (`set-cursor-mode`): a tool-cursor id
+	// to force, or 0 = let C4D/WebView2 decide. Atomic — HTTP worker
+	// thread writes, UI thread's subclass proc reads. Mode ids match
+	// CursorMode below.
+	enum CursorMode {
+		CURSOR_DEFAULT    = 0,
+		CURSOR_SLIP       = 1,
+		CURSOR_RAZOR      = 2,
+		CURSOR_SELECT     = 3,
+		CURSOR_AV_SPLIT   = 4,
+		CURSOR_ROLL       = 5,
+		CURSOR_PLAY_RANGE = 6,
+	};
+
+	// Load one multi-resolution .cur from <plugin>/web/cursors/.
+	// LoadCursorFromFileW picks the DPI-appropriate image out of the
+	// 32/48/64 set; LoadImage+LR_DEFAULTSIZE would force 32px.
+	HCURSOR LoadCursorFile(const wchar_t* pluginDir, const wchar_t* file)
+	{
+		wchar_t curPath[MAX_PATH + 64];
+		swprintf_s(curPath, MAX_PATH + 64, L"%sweb\\cursors\\%s", pluginDir, file);
+		HCURSOR c = LoadCursorFromFileW(curPath);
+		if (!c)
+		{
+			char u8[MAX_PATH + 64] = {0};
+			WideCharToMultiByte(CP_UTF8, 0, curPath, -1, u8, sizeof(u8), nullptr, nullptr);
+			GePrint(maxon::String("[Shotblocks/v2] cursor failed to load: ") + maxon::String(u8));
+		}
+		return c;
+	}
 
 	void LoadCursors()
 	{
-		if (_slipCursor)
+		if (_cursorsLoaded)
 			return;
+		_cursorsLoaded = true;
 		HMODULE hMod = nullptr;
 		GetModuleHandleExW(
 			GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS |
@@ -1628,14 +1675,33 @@ private:
 		wchar_t* lastSlash = wcsrchr(path, L'\\');
 		if (lastSlash)
 			*(lastSlash + 1) = 0;
-		wchar_t curPath[MAX_PATH + 64];
-		swprintf_s(curPath, MAX_PATH + 64, L"%sweb\\cursors\\slip.cur", path);
-		// LoadCursorFromFileW picks the DPI-appropriate image out of a
-		// multi-resolution .cur (32 / 48 / 64). LoadImage+LR_DEFAULTSIZE
-		// would force the 32px metric and waste the larger sizes.
-		_slipCursor = LoadCursorFromFileW(curPath);
-		if (!_slipCursor)
-			GePrint("[Shotblocks/v2] slip.cur failed to load"_s);
+		_slipCursor    = LoadCursorFile(path, L"slip.cur");
+		_razorCursor   = LoadCursorFile(path, L"razor.cur");
+		_selectCursor  = LoadCursorFile(path, L"select.cur");
+		_avSplitCursor   = LoadCursorFile(path, L"av-split.cur");
+		_rollCursor      = LoadCursorFile(path, L"roll.cur");
+		_playRangeCursor = LoadCursorFile(path, L"play-range.cur");
+		char b[192];
+		_snprintf_s(b, sizeof(b), _TRUNCATE,
+			"[Shotblocks/v2] cursors loaded: slip=%d razor=%d select=%d avsplit=%d roll=%d playrange=%d",
+			_slipCursor ? 1 : 0, _razorCursor ? 1 : 0, _selectCursor ? 1 : 0,
+			_avSplitCursor ? 1 : 0, _rollCursor ? 1 : 0, _playRangeCursor ? 1 : 0);
+		GePrint(maxon::String(b));
+	}
+
+	// The cursor currently forced by JS, or null for "no override".
+	HCURSOR CurrentForcedCursor()
+	{
+		switch (_cursorMode.load())
+		{
+			case CURSOR_SLIP:     return _slipCursor;
+			case CURSOR_RAZOR:    return _razorCursor;
+			case CURSOR_SELECT:   return _selectCursor;
+			case CURSOR_AV_SPLIT:   return _avSplitCursor;
+			case CURSOR_ROLL:       return _rollCursor;
+			case CURSOR_PLAY_RANGE: return _playRangeCursor;
+			default:                return nullptr;
+		}
 	}
 
 	// Win32 timer id used (on the C4D dialog window) to re-assert the
@@ -1648,20 +1714,41 @@ private:
 		UINT_PTR /*id*/, DWORD_PTR refData)
 	{
 		auto* self = reinterpret_cast<ShotblocksV2Dialog*>(refData);
-		if (self && self->_cursorMode.load() == 1 && self->_slipCursor)
+		if (self)
 		{
-			// While slip mode is on, re-assert the slip cursor on
-			// WM_SETCURSOR (mouse moved) AND on our fast WM_TIMER
-			// (pointer still — WebView2 resets the cursor on its own
-			// events; the timer overwrites it back before the reset
-			// is visible).
-			if (msg == WM_SETCURSOR)
+			HCURSOR forced = self->CurrentForcedCursor();
+			if (forced)
 			{
-				SetCursor(self->_slipCursor);
-				return TRUE; // consumed — beats C4D + WebView2
+				// While a tool-cursor mode is on, re-assert it on
+				// WM_SETCURSOR (mouse moved) AND on our fast WM_TIMER
+				// (pointer still — WebView2 resets the cursor on its
+				// own events; the timer overwrites it back before the
+				// reset is visible).
+				// Only force the cursor over the window's CLIENT area.
+				// At the window borders / corner the hit-test code is
+				// HTLEFT / HTBOTTOMRIGHT / etc. — leave those alone so
+				// the OS resize cursor still shows. lp's low word is
+				// the hit-test code on WM_SETCURSOR.
+				if (msg == WM_SETCURSOR && LOWORD(lp) == HTCLIENT)
+				{
+					SetCursor(forced);
+					return TRUE; // consumed — beats C4D + WebView2
+				}
+				if (msg == WM_TIMER && wp == kCursorTimerId)
+				{
+					// The fast timer re-asserts the cursor only when
+					// the pointer is genuinely over the client area —
+					// not parked on a resize border.
+					POINT pt;
+					if (GetCursorPos(&pt))
+					{
+						LRESULT ht = SendMessageW(hwnd, WM_NCHITTEST, 0,
+							MAKELPARAM(pt.x, pt.y));
+						if (ht == HTCLIENT)
+							SetCursor(forced);
+					}
+				}
 			}
-			if (msg == WM_TIMER && wp == kCursorTimerId)
-				SetCursor(self->_slipCursor);
 		}
 		if (msg == WM_NCDESTROY)
 		{
@@ -1707,8 +1794,14 @@ private:
 	std::string          _activeTool{"select"};
 
 	// Cursor ownership — see the cursor block above.
+	bool                 _cursorsLoaded{false};
 	HCURSOR              _slipCursor{nullptr};
-	std::atomic<int>     _cursorMode{0};
+	HCURSOR              _razorCursor{nullptr};
+	HCURSOR              _selectCursor{nullptr};
+	HCURSOR              _avSplitCursor{nullptr};
+	HCURSOR              _rollCursor{nullptr};
+	HCURSOR              _playRangeCursor{nullptr};
+	std::atomic<int>     _cursorMode{0};   // CursorMode id; 0 = no override
 	HWND                 _cursorSubclassed{nullptr};
 
 	// OM-drop camera registry. Each dragged BaseObject is assigned a

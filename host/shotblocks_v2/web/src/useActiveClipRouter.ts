@@ -1,4 +1,4 @@
-import { useEffect } from 'react';
+import { useEffect, useRef } from 'react';
 import { useStore, type Clip } from './store';
 import { send } from './lib/host';
 
@@ -41,9 +41,18 @@ export function useActiveClipRouter(): void {
   const currentFrame = useStore((s) => s.scrubFrame ?? s.currentFrame);
   const videoTracks = useStore((s) => s.videoTracks);
 
+  // Last objectId pushed to C++. Without this, the effect fires
+  // `set-active-camera` on EVERY playback tick (currentFrame changes
+  // each frame) — ~27 HTTP round-trips/sec that saturate the C++
+  // main-thread dispatch and starve audio playback. Only send when
+  // the active camera actually changes.
+  const lastObjectId = useRef<number | null>(null);
+
   useEffect(() => {
     const active = activeClipAt(currentFrame, videoTracks);
     const objectId = active && active.clip.objectId > 0 ? active.clip.objectId : 0;
+    if (objectId === lastObjectId.current) return;
+    lastObjectId.current = objectId;
     void send({ kind: 'set-active-camera', objectId });
   }, [currentFrame, videoTracks]);
 }

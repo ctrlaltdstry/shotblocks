@@ -14,7 +14,7 @@
 //   node scripts/make-cursor.mjs Cursors/Slip\ Cursor.png \
 //     host/shotblocks_v2/web/public/cursors/slip.cur
 import { readFileSync, writeFileSync } from 'node:fs';
-import { inflateSync } from 'node:zlib';
+import { inflateSync, deflateSync } from 'node:zlib';
 
 const [srcPath, outPath, hotspotArg] = process.argv.slice(2);
 if (!srcPath || !outPath) {
@@ -156,8 +156,25 @@ function buildImage(rgba, N) {
 // ---- main ----------------------------------------------------------
 const { width, height, rgba } = decodePng(readFileSync(srcPath));
 
+// Hotspot as a 0..1 fraction of the image.
+//   "center"  (default) — image centre. Use for symmetric cursors.
+//   "tip"               — auto-detect the arrow tip: the first
+//                         opaque pixel scanning top-down, left-right.
+//                         Use for pointer-style cursors.
+//   "x,y"               — explicit fraction.
 let hx = 0.5, hy = 0.5;
-if (hotspotArg && hotspotArg !== 'center') {
+if (hotspotArg === 'tip') {
+  let found = false;
+  for (let y = 0; y < height && !found; y++) {
+    for (let x = 0; x < width && !found; x++) {
+      if (rgba[(y * width + x) * 4 + 3] > 10) {
+        hx = x / width;
+        hy = y / height;
+        found = true;
+      }
+    }
+  }
+} else if (hotspotArg && hotspotArg !== 'center') {
   const [a, b] = hotspotArg.split(',').map(Number);
   if (Number.isFinite(a) && Number.isFinite(b)) { hx = a; hy = b; }
 }
@@ -189,4 +206,52 @@ const entries = images.map(({ size, hotX, hotY, image }) => {
 });
 
 writeFileSync(outPath, Buffer.concat([dir, ...entries, ...images.map((i) => i.image)]));
-console.log(`wrote ${outPath} — source ${width}x${height}, sizes ${SIZES.join('/')}, hotspot ${hx},${hy}`);
+
+// ---- 32px PNG for the CSS data-URI cursor --------------------------
+// The two-layer cursor model needs the SAME image as a CSS data-URI
+// (see feedback memory tool-cursor-pattern). Encode the 32px
+// downscale as a PNG and write a sidecar `<out>.cssurl.txt` holding
+// the ready-to-paste `cursor:` value — so a cursor iteration is just
+// this one command, no separate base64 step.
+function pngCRC(b) {
+  let c = ~0;
+  for (let i = 0; i < b.length; i++) {
+    c ^= b[i];
+    for (let k = 0; k < 8; k++) c = (c >>> 1) ^ (0xEDB88320 & -(c & 1));
+  }
+  return ~c >>> 0;
+}
+function pngChunk(type, data) {
+  const len = Buffer.alloc(4); len.writeUInt32BE(data.length);
+  const t = Buffer.from(type);
+  const cr = Buffer.alloc(4); cr.writeUInt32BE(pngCRC(Buffer.concat([t, data])));
+  return Buffer.concat([len, t, data, cr]);
+}
+function encodePng32(rgba32) {
+  const N = 32;
+  const ihdr = Buffer.alloc(13);
+  ihdr.writeUInt32BE(N, 0); ihdr.writeUInt32BE(N, 4);
+  ihdr[8] = 8; ihdr[9] = 6; // 8-bit RGBA
+  const rows = Buffer.alloc(N * (N * 4 + 1));
+  for (let y = 0; y < N; y++) {
+    rows[y * (N * 4 + 1)] = 0; // no filter
+    rgba32.copy(rows, y * (N * 4 + 1) + 1, y * N * 4, (y + 1) * N * 4);
+  }
+  return Buffer.concat([
+    Buffer.from([137, 80, 78, 71, 13, 10, 26, 10]),
+    pngChunk('IHDR', ihdr),
+    pngChunk('IDAT', deflateSync(rows)),
+    pngChunk('IEND', Buffer.alloc(0)),
+  ]);
+}
+
+const rgba32 = downscale(rgba, width, height, 32);
+const cssHotX = Math.round(hx * 32);
+const cssHotY = Math.round(hy * 32);
+const dataUri = 'data:image/png;base64,' + encodePng32(rgba32).toString('base64');
+const cssValue = `cursor: url("${dataUri}") ${cssHotX} ${cssHotY}, default;`;
+writeFileSync(outPath + '.cssurl.txt', cssValue + '\n');
+
+console.log(`wrote ${outPath} — source ${width}x${height}, sizes ${SIZES.join('/')}`);
+console.log(`  hotspot fraction ${hx.toFixed(3)},${hy.toFixed(3)}  ->  CSS hotspot: ${cssHotX} ${cssHotY}`);
+console.log(`  CSS data-URI value written to ${outPath}.cssurl.txt`);

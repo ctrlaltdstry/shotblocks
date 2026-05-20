@@ -196,6 +196,17 @@ export interface State {
   // state when the slip ends, which jams the cursor.
   slipDragging: boolean;
 
+  // True while the pointer is in a roll-edit seam zone OR a roll
+  // drag is in progress. Lane mirrors its `cursorMode === 'roll'`
+  // into this so useToolCursor (global) can force the roll cursor
+  // via the C++ host.
+  rollEditActive: boolean;
+
+  // True while a play-range handle is being dragged. RangeBar sets
+  // it so useToolCursor keeps the play-range cursor for the whole
+  // drag even if the pointer strays off the small chevron handle.
+  rangeHandleDragging: boolean;
+
   // Spawn-zone hint shown while dragging. Non-null when resolveLane
   // resolved to a `spawn` target on the current pointermove. The
   // SpawnGhostLane renders a faded outline where V<max+1> / A<max+1>
@@ -296,6 +307,8 @@ export interface State {
   setRazorHoverX: (x: number | null, clipBand?: { top: number; bottom: number } | null) => void;
   setDragClip: (drag: { clipId: number; fromTrackId: string } | null) => void;
   setSlipDragging: (on: boolean) => void;
+  setRollEditActive: (on: boolean) => void;
+  setRangeHandleDragging: (on: boolean) => void;
   setSpawnGhost: (ghost: { side: 'video' | 'audio'; trackId: string } | null) => void;
   /** Update the selection. additive=false replaces with just `clipId`
    *  (or clears, if null). additive=true toggles `clipId` in the set
@@ -753,6 +766,8 @@ export const useStore = create<State>((set) => ({
   dragPreview: null,
   dragClip: null,
   slipDragging: false,
+  rollEditActive: false,
+  rangeHandleDragging: false,
   spawnGhost: null,
   selectedClipIds: new Set<number>(),
   marquee: null,
@@ -825,6 +840,8 @@ export const useStore = create<State>((set) => ({
 
   setDragClip: (drag) => set({ dragClip: drag }),
   setSlipDragging: (on) => set({ slipDragging: on }),
+  setRollEditActive: (on) => set((s) => (s.rollEditActive === on ? s : { rollEditActive: on })),
+  setRangeHandleDragging: (on) => set((s) => (s.rangeHandleDragging === on ? s : { rangeHandleDragging: on })),
   setSpawnGhost: (ghost) => set((s) => {
     const a = s.spawnGhost;
     if (a === ghost) return s;
@@ -1137,8 +1154,21 @@ export const useStore = create<State>((set) => ({
         return {
           ...t,
           clips: t.clips.map((c) => {
+            // Left clip: only outFrame moves — its media-window head
+            // is unchanged, so its waveform stays put.
             if (c.id === leftClipId)  return { ...c, outFrame: seam };
-            if (c.id === rightClipId) return { ...c, inFrame:  seam };
+            if (c.id === rightClipId) {
+              // Right clip: inFrame moves by `delta`. For audio, the
+              // media-window head must slide by the SAME delta so the
+              // waveform reveals a different slice instead of
+              // rescaling (same rule as a left-edge trim).
+              const next: typeof c = { ...c, inFrame: seam };
+              if (side === 'audio') {
+                const delta = seam - c.inFrame;
+                next.mediaOffsetFrames = (c.mediaOffsetFrames ?? 0) + delta;
+              }
+              return next;
+            }
             return c;
           }),
         };

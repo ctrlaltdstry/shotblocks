@@ -47,7 +47,6 @@
   background: var(--color-grey-10);
   border-bottom: 1px solid var(--color-grey-16);
   display: flex; align-items: center;
-  padding: 0 0 0 3px;
   color: var(--color-grey-50);
   font-size: 11px;
 }
@@ -56,6 +55,15 @@
   display: flex; align-items: center; justify-content: center;
   cursor: pointer;
   flex: 0 0 auto;
+}
+/* The utilities strip lives above the track-headers column, so its
+   total width is capped at --headers-w (200px). Five 48px icons
+   (240px) would overflow and clip the last one (Settings). Inside
+   the strip, narrow the icons so all five fit within 200px. (The
+   48px width still applies to .utilstrip__icon used elsewhere — e.g.
+   the rail audio-scrub toggle.) */
+.utilstrip .utilstrip__icon {
+  width: 40px;
 }
 .utilstrip__icon .icon { background-color: var(--color-grey-24); }
 .utilstrip__icon:hover .icon { background-color: var(--color-grey-50); }
@@ -106,6 +114,10 @@
   width: 18.58px;
   height: 16px;
   display: block;
+  /* Visual only. It must NOT be pointer-grabbable: the handle's
+     `left` updates every playback frame, and a moving grabbable
+     element under the cursor generated stray scrub events that
+     starved audio. Scrubbing is owned by the ruler-row. */
   pointer-events: none;
   transform: translateX(-50%);
   z-index: 6;
@@ -143,18 +155,39 @@
    above the ruler ticks/numbers. Pointer-events transparent so the
    user can still click+drag the ruler to scrub the playhead even
    when a play range is active. */
+/* The blue range tint fills the full ruler height as a VISUAL band,
+   but only its TOP grab-strip is pointer-interactive (drag = move the
+   whole range). The lower part is click-through so the playhead can
+   still be scrubbed inside the range — no gesture conflict, the two
+   live in separate vertical zones. */
 .range-bar__middle {
   position: absolute;
   top: 0; bottom: 0;
   background: rgba(0, 122, 255, 0.10);
-  pointer-events: none;
+  pointer-events: none;          /* visual fill — scrub passes through */
   z-index: 3;
 }
+.range-bar__grab {
+  position: absolute;
+  top: 0;
+  height: 9px;                   /* top grab-strip — drag to move range */
+  pointer-events: auto;
+  z-index: 4;
+}
+/* In/out chevron handles — the blue bars at each end. They get the
+   play-range cursor (data-URI; matches the C++ play-range.cur).
+   .body prefix + !important raise specificity above
+   .body.is-tool-select * (also !important) so the play-range cursor
+   wins over the select cursor on the handles. 16 16 hotspot matches
+   the .cur. */
 .range-bar__handle {
   position: absolute;
   top: 0; bottom: 0;
-  cursor: ew-resize;
   z-index: 4;
+}
+.body .range-bar__handle,
+.body .range-bar__handle * {
+  cursor: url("data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAACAAAAAgCAYAAABzenr0AAAB00lEQVR4nO2Uz2sTQRTHv+/N7lyyC1pLIGRpUCwecgwpvXgqePBvaaEUCj0luHpKToJssaf+EGqFHJJUzKn/QmjLQnvrHyAeE4LKmgcTWUIL7lpPzgeGHd6b92vm7QMsFovFkp0KgMItcpEF/zKwB2AzCIIBgN1SqaRSOtnvGd3GHQnmI0kS+dS11vthGF6ORqMfAHpKqYXf0ZVaFNlkMvnZaDTOARwCeH4f8R8S0U69Xj+L4/hbYpBgzLxsKpUl+95MPxwOv4oNgG3xkatqIlrRWn9st9uxVJakKBaLX25b6TNiE0XRded5HwCsZErA930XwLtOp3OT/CXiQ3wBcP44Add1fSJ6UygUPkdRdJX3BlqtVqy17hPRa6kryyXIDawBeA+gL+8p75ruAQDHRHQEQNZxugekX0wP9Iho1/hyMz2D53laKVUlImmkT5KIdLhUZppw1XGcJ8z8GMCqyMbj8fcwDC+01qfGZmua3LPMwWfUajVyHOcBEb0gorcAuuVyeWCcl2fnmFn2J2YOdM2bvxRbAJQr+BwOMz81Q+Zg6vSVUupRSi8zoSn/PxGtK6WWc1d9F81mUyrxmbnKzJW5ScjMvASgaprtXqq2WCyW/4Nft/MZIWVHLAMAAAAASUVORK5CYII=") 16 16, ew-resize !important;
 }
 .range-bar__handle img {
   display: block;
@@ -361,7 +394,15 @@
   box-sizing: content-box;
   border-bottom: 1px solid var(--color-grey-16);
 }
-.stack__divider.is-grabbable { cursor: ns-resize; }
+/* V/A splitter cursor — the AV-split glyph. Shown whenever the
+   pointer is over the draggable divider, regardless of the active
+   tool. The `.body` prefix + !important raise specificity above the
+   `.body.is-tool-select *` rule (which is also !important) so the
+   splitter cursor wins over the select cursor. `16 16` hotspot
+   matches the .cur (the divider drags vertically — symmetric). */
+.body .stack__divider.is-grabbable {
+  cursor: url("data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAACAAAAAgCAYAAABzenr0AAACBUlEQVR4nO1WTYsTQRB9ValpyMcsEUECiYoBQdGDCFnwqHgR2eP8BG8KorCI4ATmmIMgyBx1l0VwD1kk7mFP/oXgSkBv/gDxEkiIH7QpnYGwDmiMPad50DTNTPd7/aq6uoECBQr8O9YBPE763HG8Vqu96Pf7H40xLwGcyI05CAIG8CCO4w/WWtvr9UYAHgIg5+TWWu2udjqdN7PZ7LsK0F7HzHzFuYB5zNcA7AyHw092AaPR6LMxZtvzvDWX5Grx3TAMD20Goig6BHDPZSjarVbrILX+KKbT6Vf9zsxnXQm4BGAPwCBt9ldSDBbaHhFdXpkpCAK1cfPI4r+1DAFZbXPpsHie5+vk8Xj8Jcvuv4XO13XK5fJyycnMTQBb/8mBLRE5uWQQoA7cAvCciHb06AHQirf/BwH7yX8/5xDRM2bWdWrLCiAR8UXktIicEZE2gA3N8slk8i3Lbj0dzWbzgIg2mFn/bzPzqWQzKx9NIqILuqsoit5lCQjD8G2y84urkmUiScw7xpiBVr5Fcq2M82P6iohuVyoV34mAbrerNmqReZp1FxDRE7Xd9aXkEdFNALt6C6qAOI7f65iZb9TrdXFJnqIO4L6GQt8D1Wr1tRYbETmWB7mCmPnc/BESA1DyuFQqnc/lPZCi0WhoKK4T0SMiuub7vpcbeYqEVDM+l7gXKOAMPwCD52PosFijWAAAAABJRU5ErkJggg==") 16 16, ns-resize !important;
+}
 /* Hover state: lights up ALL splitters together via body class so the
    V/A seam reads as one continuous handle, not three disconnected
    segments. CSS-level :hover would only match the one under the
@@ -492,19 +533,36 @@ body.va-splitter-hover .stack__divider.is-grabbable,
   display: flex; flex-direction: column;
   min-height: 0;
 }
-/* Razor tool cursor: razor SVG sized to match the tool-palette icon
-   (14x11) and rotated 45deg via an outer <g transform>. Wrapped in a
-   slightly larger SVG canvas so the rotated diagonal isn't clipped.
-   Thin black stroke keeps it visible on light + dark backgrounds.
-   Hotspot is at the rotated blade tip — bottom-left of the canvas,
-   so the cut frame matches where the user sees the blade land.
-   Falls back to crosshair if the SVG fails to load. */
-.lanes-area.is-tool-razor,
-.lanes-area.is-tool-razor .lane,
-.lanes-area.is-tool-razor .shot-block {
-  cursor:
-    url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='20' height='20' viewBox='0 0 20 20'><g transform='translate(10 10) rotate(45) translate(-7 -5.5)'><path d='M13.5 10C13.7761 10 14 10.2239 14 10.5C14 10.7761 13.7761 11 13.5 11H0.5C0.223861 11 5.64633e-06 10.7761 0 10.5C2.32771e-08 10.2239 0.223858 10 0.5 10H13.5ZM12 0C13.1046 0 14 0.895431 14 2V7C14 8.10457 13.1046 9 12 9H2L1.7959 8.98926C0.787223 8.887 0 8.03565 0 7V2C0 0.895431 0.895431 0 2 0H12ZM2 1C1.44772 1 1 1.44772 1 2V4H2.5C2.77614 4 3 4.22386 3 4.5C3 4.77614 2.77614 5 2.5 5H1V7C1 7.55228 1.44772 8 2 8H12C12.5523 8 13 7.55228 13 7V5H11.5C11.2239 4.99999 11 4.77614 11 4.5C11 4.22387 11.2239 4.00001 11.5 4H13V2C13 1.44772 12.5523 1 12 1H2ZM7.5 3C7.77613 3 7.99999 3.22387 8 3.5V5.5C8 5.77614 7.77614 6 7.5 6C7.22386 6 7 5.77614 7 5.5V3.5C7.00001 3.22387 7.22387 3 7.5 3Z' fill='white' stroke='black' stroke-width='0.4'/></g></svg>") 10 18,
-    crosshair;
+/* Razor tool cursor. Two layers must AGREE or the cursor flickers:
+   the C++ host answers WM_SETCURSOR on the C4D dialog window, but
+   WebView2's render process still applies the CSS cursor on its own
+   WM_SETCURSOR cycle — if CSS said `grab` and C++ said blade they'd
+   race per mouse-move. So CSS shows the SAME blade image (the 32px
+   blade PNG inlined as a data-URI — WebView2 won't load a cursor
+   from a file:// url, but data-URIs work; this matches the slip
+   cursor's approach). C++ ownership is still needed for the
+   stale-after-drag case; CSS alone wouldn't survive a drag. */
+.lanes-area.is-tool-razor .shot-block,
+.lanes-area.is-tool-razor .shot-block * {
+  cursor: url("data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAACAAAAAgCAYAAABzenr0AAABkElEQVR4nO2VMUsCYRjH/xA8NEhT5HKQtxikH0DuAwRHuMWBm1/gPkKzQ+BggwStQlAO1pJcEFiQN+QgUbdkIESWRVBwN3RkPaFwXWqi3kVw//Udfr/n+b/vHRAkSJDxIgJYA7ACgPyGK9FoVMtms5eqqp4D2Aaw4Bc8FYvFjlqtltnpplAoXPslkQKwX6vVHjuu+CHxNXkmk7lwb8APiYQTms/nDUVRztwCXknMAFjXNO3WCTJN0+4nMG0JmYhK3HulUrkbBOTYtv3uhcQGg3nlkiQdD5q6Xq8/iaJYdp87JObHFUjE4/Eyd88SyWTy1A1pNpuvgiAcVqvVh35yuVzuCoA6yRakYRKWZb0ZhvE8qJpGo/ECYHMSgV8lnOHKnE+0WCze8CWeVGBkCe6992R1Xb8PhUJ7ABanITCyBJ/xv6ILX54WfGQJnpyIdr2A95WQZfmk3W5bvTvg1eRDJYjoIBKJlAFsAVjyGv5DIp1O6wBW/QJ/kwiHwyUi2vn86gl/IcCZAzD7V/AgQf5/PgDKt0GJmp4PQwAAAABJRU5ErkJggg=="), crosshair;
+}
+
+/* Select tool cursor — the general pointer over the WHOLE timeline
+   body: ruler, lanes, clips, track headers, scrollbars — everything.
+   While the Select tool is active this one arrow is shown uniformly,
+   including over clips, while dragging a clip, scrubbing the
+   playhead, and over the scrollbars / track headers (which otherwise
+   show grab / resize cursors). Same two-layer model as the razor
+   cursor: CSS data-URI here + C++ WM_SETCURSOR ownership. !important
+   beats `.shot-block { cursor: grab }`, the ruler's inline ew-resize,
+   the scrollbars' grab / resize cursors, and `body.is-clip-dragging`.
+   useToolCursor.ts matches the SAME surface (the whole `.body`). */
+.body.is-tool-select,
+.body.is-tool-select * {
+  /* The `10 10` after the url() is the hotspot (the arrow tip) in the
+     32px image — it MUST match the .cur's embedded hotspot or the
+     cursor feels offset from the hit-point. */
+  cursor: url("data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAACAAAAAgCAYAAABzenr0AAABNUlEQVR4nO2Tr2+DUBSFKxATCMTExAR/AqICOTlROYlAIJAVFZNzFRg8giYzTSYm+BMQCARicmJiAol4AoH4lksoyX65AtnyTnKT58637jl3tdLS0tL6CwKugR1gLwWwreuapmkAMmADGHMC2E3TdKZp4vs+RVEIyDtwD1zNBZGJuTxlHMchjmOUUi3wDNxODbDJ83wEOI1sJQxDqqqSrbwNXbmcAsAQg/V6/Q3iNK7rcjgcaNtWtnI8e2mBhyRJfgUwDKOH2O/3dF0nG9meG6Avo2VZn4w9zyPLMrkScZUsoskuBXgKgmA0lzfwAtxNkv0PADdlWY4A8nMxn9z4C8SrlFEyV0oJgDU3wC5N075wkvms5gOApZTqoki6RjQ7wADxOJzaZikAW+4cuFgEQEtL69/oA2tzHuichUJaAAAAAElFTkSuQmCC") 10 10, default !important;
 }
 
 /* Slip tool cursor. Slip only acts on AUDIO clips (it slides the media
@@ -919,6 +977,14 @@ body.is-clip-dragging .lane {
 }
 .shot-block.is-edge-left  .shot-block__bracket--left  { opacity: 1; }
 .shot-block.is-edge-right .shot-block__bracket--right { opacity: 1; }
+
+/* Audio clips are light green — a 30% WHITE bracket fill washes out
+   against them. Use a dark fill on audio so the hover DARKENS the
+   edge instead of lightening it. The yellow border + white dots
+   still read fine on the darkened fill. */
+.shot-block.is-audio .shot-block__bracket {
+  background: rgba(0, 0, 0, 0.38);
+}
 
 /* Selected-outline overlay — child-div pattern matching the bracket.
    1px white border at inset:-1px so it sits exactly on top of the

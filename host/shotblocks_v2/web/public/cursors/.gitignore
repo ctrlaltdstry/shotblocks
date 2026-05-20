@@ -1,0 +1,4 @@
+# Regenerable paste-source artifacts from scripts/make-cursor.mjs —
+# the CSS data-URI value is already inlined into App.css. The .cur
+# files themselves ARE committed (they deploy with the plugin).
+*.cssurl.txt

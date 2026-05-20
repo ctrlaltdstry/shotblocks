@@ -470,10 +470,14 @@ export function useClipDrag(
       if (el) {
         if (snappedDy !== prevTargetDy) {
           gsap.killTweensOf(d, 'animatedDy');
+          // Floaty glide between lane rows — the clip eases smoothly
+          // into the target lane rather than snapping. 0.38s with a
+          // soft ease.out reads as intentional smoothness (the cursor
+          // hotspot is correct, so the lag isn't mistaken for a bug).
           gsap.to(d, {
             animatedDy: snappedDy,
-            duration: 0.30,
-            ease: 'power2.out',
+            duration: 0.38,
+            ease: 'power3.out',
             onUpdate: writePos,
           });
         } else {

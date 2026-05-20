@@ -13,7 +13,7 @@ import { usePersistence } from './usePersistence';
 import { useKeyboard } from './useKeyboard';
 import { useAltRightZoom } from './useAltRightZoom';
 import { useMmbPan } from './useMmbPan';
-import { useSlipCursor } from './useSlipCursor';
+import { useToolCursor } from './useToolCursor';
 import { useStore } from './store';
 import { Ruler } from './components/Ruler';
 import { Playhead } from './components/Playhead';
@@ -573,7 +573,7 @@ function App() {
   useDragRecovery();
   useAltRightZoom();
   useMmbPan();
-  useSlipCursor();
+  useToolCursor();
   const lanesAreaRef = useRef<HTMLDivElement | null>(null);
   useMarquee(lanesAreaRef);
   const headersStackRef = useRef<HTMLDivElement | null>(null);
@@ -609,7 +609,7 @@ function App() {
         <Timecode />
       </div>
 
-      <div className="body">
+      <div className={'body' + (activeTool === 'select' ? ' is-tool-select' : '')}>
         {/* row 1, col 1 — logo */}
         <div className="logo">
           <img className="logo__mark" src={logoUrl} alt="Shotblocks" />
@@ -672,7 +672,8 @@ function App() {
           <div
             className={'lanes-area'
               + (activeTool === 'razor' ? ' is-tool-razor' : '')
-              + (activeTool === 'slip' ? ' is-tool-slip' : '')}
+              + (activeTool === 'slip' ? ' is-tool-slip' : '')
+              + (activeTool === 'select' ? ' is-tool-select' : '')}
             id="lanes-area"
             ref={lanesAreaRef}
             onContextMenu={(ev) => {

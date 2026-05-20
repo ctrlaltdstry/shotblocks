@@ -346,6 +346,54 @@ See memory `v2-c4d-nav-gestures`.
   consumed by the C++ playback timer.
 - Memories: `v2-play-range`, `v2-playback-owned`, `no-c4d-cycle-api`.
 
+## Round 13–14 additions (snap, audio media-window, slip, cursors)
+
+### Snap (Round 13)
+- **Snap toggle** in the utilities strip — gates magnetic snap on
+  clip body / trim / roll drags. Default OFF (mirrors Python).
+- Yellow **snap-indicator lines** during a snapped drag.
+- **Playhead scrub** snaps to clip edges when Snap is on.
+- **Razor snaps to the playhead**; the razor cut-line has a two-tier
+  look — faint full-height line + a brighter segment over the
+  hovered clip.
+
+### Audio media-window model (Round 13)
+- An audio clip is a **fixed window onto its media**, not a container
+  that rescales. Clip fields: `mediaDurationFrames`,
+  `mediaOffsetFrames`, `mediaId`.
+- Cut / trim / roll / slip reveal a different slice of the SAME
+  waveform — no rescaling. `splitClip`, `resizeClip`, `rollEdit` all
+  carry the media-window correctly (audio only).
+- Audio bytes + decoded buffer are keyed by `mediaId` (not clipId),
+  so split halves share one media with no re-upload / re-decode.
+- `useAudioPlayback` offsets the buffer by `mediaOffsetFrames`.
+- Load-time backfill: pre-media-window audio clips get sane defaults.
+
+### Slip tool (Round 13)
+- 4th palette tool (the mislabeled "range" slot — it was always the
+  `|<->|` slip glyph). Drag an audio clip body to slide the media
+  under a fixed-position clip. Live preview via `slipPreview.ts`
+  (imperative canvas redraw, no React re-render).
+
+### Tool cursors (Round 14) — see memory `tool-cursor-pattern`
+- Custom cursors for **slip, razor, select, av-split, roll,
+  play-range**. Each is a multi-resolution `.cur`
+  (`web/public/cursors/`, 32/48/64) generated from a PNG by
+  `scripts/make-cursor.mjs`.
+- **Two-layer model, both required:** a CSS data-URI cursor (in
+  App.css, must show the SAME image) + C++ `WM_SETCURSOR` ownership.
+  C++ subclasses the C4D dialog window, re-asserts the cursor on a
+  fast Win32 timer — works around WebView2 not repainting CSS
+  cursors after a drag. JS `useToolCursor` sends `set-cursor-mode`.
+- The C++ handler gates on `HTCLIENT` so window-resize cursors at
+  the dialog border still work.
+
+### Range bar (Round 14)
+- The blue play-range tint is a VISUAL fill (`pointer-events:none`,
+  scrub passes through). A separate top **9px grab-strip**
+  (`.range-bar__grab`) drags the whole range left/right. Vertical
+  zones — no conflict with playhead scrub inside the range.
+
 ## What does NOT work yet
 
 - **Real shot library / shot-creation flow** (currently every clip
@@ -364,6 +412,12 @@ See memory `v2-c4d-nav-gestures`.
   mid-drag. `useDragRecovery` papers over the user-visible symptom
   (stuck class, stuck inline styles) but the underlying listener
   teardown still happens. Solo replace drag isn't affected.
+- **Cursor flickers during playback** — UNFIXED. The select cursor
+  flickers as the playhead progresses. Pre-existing (not caused by
+  the Round-14 cursor work). Suspect: `useToolCursor`'s
+  `MutationObserver` on `body` class re-evaluating each frame, or
+  synthetic pointermoves from the playhead line sweeping under a
+  stationary cursor. Not yet diagnosed.
 
 ## Stack
 

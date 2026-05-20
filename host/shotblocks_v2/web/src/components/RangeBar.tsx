@@ -51,6 +51,9 @@ export function RangeBar({ rulerRef }: { rulerRef: React.RefObject<HTMLDivElemen
         startIn: playRangeIn,
         startOut: playRangeOut,
       };
+      // Hold the play-range cursor for the whole drag — the pointer
+      // can leave the small chevron handle's box mid-drag.
+      useStore.getState().setRangeHandleDragging(true);
       function move(mv: PointerEvent) {
         const d = dragRef.current;
         if (!d) return;
@@ -65,6 +68,7 @@ export function RangeBar({ rulerRef }: { rulerRef: React.RefObject<HTMLDivElemen
       }
       function up() {
         dragRef.current = null;
+        useStore.getState().setRangeHandleDragging(false);
         window.removeEventListener('pointermove', move);
         window.removeEventListener('pointerup', up);
         window.removeEventListener('pointercancel', up);
@@ -73,6 +77,56 @@ export function RangeBar({ rulerRef }: { rulerRef: React.RefObject<HTMLDivElemen
       window.addEventListener('pointerup', up);
       window.addEventListener('pointercancel', up);
     };
+  }
+
+  /** Press on the blue range tint. Drag (past a 3px threshold) slides
+   *  the WHOLE range — in + out together, length preserved, clamped
+   *  to doc bounds. A sub-threshold press is treated as a click and
+   *  scrubs the playhead to that frame (so the tint still works as a
+   *  scrub surface). Ports Python `_drag_range_body`. */
+  function onMiddlePointerDown(ev: React.PointerEvent<HTMLDivElement>) {
+    if (ev.button !== 0) return;
+    ev.stopPropagation();
+    ev.preventDefault();
+    const startClientX = ev.clientX;
+    const startIn = playRangeIn;
+    const startOut = playRangeOut;
+    const length = startOut - startIn;
+    let maxAbsDx = 0;
+    const THRESHOLD_PX = 3;
+
+    function move(mv: PointerEvent) {
+      const dx = mv.clientX - startClientX;
+      if (Math.abs(dx) > maxAbsDx) maxAbsDx = Math.abs(dx);
+      if (maxAbsDx < THRESHOLD_PX) return; // still a click — don't shift
+      const px = pxPerFrame();
+      if (px <= 0) return;
+      let delta = Math.round(dx / px);
+      // Clamp so the (length-preserving) range stays inside the doc.
+      const minIn = 0;
+      const maxIn = Math.max(0, docFrames - length);
+      const newIn = Math.max(minIn, Math.min(maxIn, startIn + delta));
+      delta = newIn - startIn;
+      commit(newIn, newIn + length);
+    }
+    function up(upEv: PointerEvent) {
+      window.removeEventListener('pointermove', move);
+      window.removeEventListener('pointerup', up);
+      window.removeEventListener('pointercancel', up);
+      if (maxAbsDx >= THRESHOLD_PX) return; // was a drag — already committed
+      // Sub-threshold press → click: scrub the playhead to this frame.
+      const rect = rulerRef.current?.getBoundingClientRect();
+      if (!rect) return;
+      const x = Math.max(0, Math.min(rect.width, upEv.clientX - rect.left));
+      const px = pxPerFrame();
+      if (px <= 0) return;
+      const frame = Math.max(0, Math.min(docFrames, Math.round(h.vMin + x / px)));
+      useStore.getState().setScrubFrame(frame);
+      void send({ kind: 'seek', frame });
+    }
+    window.addEventListener('pointermove', move);
+    window.addEventListener('pointerup', up);
+    window.addEventListener('pointercancel', up);
   }
 
   const px = pxPerFrame();
@@ -131,16 +185,25 @@ export function RangeBar({ rulerRef }: { rulerRef: React.RefObject<HTMLDivElemen
 
   return (
     <>
-      {/* Translucent blue tint middle. Purely visual — clicks pass
-          through to the underlying ruler so the user can still scrub
-          the playhead while a range is active. To re-position the
-          range, drag a handle, press I/O, or use the right-click
-          range-to-selection / clear-range menu. Hidden when range
-          covers the full doc. */}
+      {/* Blue tint — VISUAL fill only (pointer-events:none), so the
+          playhead can still be scrubbed anywhere inside the range.
+          Hidden when range == full doc. */}
       {!rangeIsFullDoc && (
         <div
           className="range-bar__middle"
           style={middleStyle}
+        />
+      )}
+      {/* Range grab-strip — the top 9px band, draggable to slide the
+          whole range left/right (in + out together). Separate
+          vertical zone from the scrub area so the two never
+          conflict. */}
+      {!rangeIsFullDoc && (
+        <div
+          className="range-bar__grab"
+          style={middleStyle}
+          onPointerDown={onMiddlePointerDown}
+          title="Drag to move the play range"
         />
       )}
       {/* In handle — chevron points left, blue bar at inner edge. */}
