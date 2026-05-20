@@ -13,6 +13,7 @@ import { usePersistence } from './usePersistence';
 import { useKeyboard } from './useKeyboard';
 import { useAltRightZoom } from './useAltRightZoom';
 import { useMmbPan } from './useMmbPan';
+import { useSlipCursor } from './useSlipCursor';
 import { useStore } from './store';
 import { Ruler } from './components/Ruler';
 import { Playhead } from './components/Playhead';
@@ -24,6 +25,7 @@ import { ToolPalette } from './components/ToolPalette';
 import { DropGhost } from './components/DropGhost';
 import { MarqueeOverlay } from './components/MarqueeOverlay';
 import { CutLineOverlay } from './components/CutLineOverlay';
+import { SnapIndicators } from './components/SnapIndicators';
 import { ContextMenu } from './components/ContextMenu';
 import { RangeDim } from './components/RangeDim';
 import { SpawnGhostLane } from './components/SpawnGhostLane';
@@ -78,6 +80,24 @@ function LoopToggle() {
       }}
     >
       <span className="icon icon--loop" style={{ '--icon-w': '16px', '--icon-h': '16px' } as React.CSSProperties} />
+    </div>
+  );
+}
+
+/** Snap toggle in the utilities strip. Magnetic snap during clip
+ *  body/trim/roll drags is gated on this flag. Default OFF, mirroring
+ *  Python's `_snap_enabled = False` (sb_canvas.py:420). Shift held
+ *  during a drag overrides this toggle (ripple mode beats snap, per
+ *  Python `_qualifier_mode`). */
+function SnapToggle() {
+  const on = useStore((s) => s.snapEnabled);
+  return (
+    <div
+      className={'utilstrip__icon' + (on ? ' is-active' : '')}
+      title={on ? 'Snap: on' : 'Snap: off'}
+      onClick={() => useStore.getState().setSnapEnabled(!useStore.getState().snapEnabled)}
+    >
+      <span className="icon icon--snap" style={{ '--icon-w': '14px', '--icon-h': '14px' } as React.CSSProperties} />
     </div>
   );
 }
@@ -459,6 +479,7 @@ function useDragRecovery() {
       const s = useStore.getState();
       if (s.dragClip != null) s.setDragClip(null);
       if (s.spawnGhost != null) s.setSpawnGhost(null);
+      if (s.snapIndicatorFrames.length > 0) s.setSnapIndicatorFrames([]);
       // Wipe inline drag styles defensively in case useClipDrag's
       // closure cleanup never ran.
       const stuck = document.querySelector<HTMLElement>('.shot-block.is-dragging');
@@ -552,6 +573,7 @@ function App() {
   useDragRecovery();
   useAltRightZoom();
   useMmbPan();
+  useSlipCursor();
   const lanesAreaRef = useRef<HTMLDivElement | null>(null);
   useMarquee(lanesAreaRef);
   const headersStackRef = useRef<HTMLDivElement | null>(null);
@@ -596,9 +618,7 @@ function App() {
         {/* row 1, col 2 — utilities strip */}
         <div className="utilstrip">
           <LoopToggle />
-          <div className="utilstrip__icon" title="Snap">
-            <span className="icon icon--snap" style={{ '--icon-w': '14px', '--icon-h': '14px' } as React.CSSProperties} />
-          </div>
+          <SnapToggle />
           <div className="utilstrip__icon" title="Beat Detection">
             <span className="icon icon--beat-detection" style={{ '--icon-w': '13px', '--icon-h': '13px' } as React.CSSProperties} />
           </div>
@@ -650,7 +670,9 @@ function App() {
               reach the underlying elements. */}
           <RangeDim />
           <div
-            className={'lanes-area' + (activeTool === 'razor' ? ' is-tool-razor' : '')}
+            className={'lanes-area'
+              + (activeTool === 'razor' ? ' is-tool-razor' : '')
+              + (activeTool === 'slip' ? ' is-tool-slip' : '')}
             id="lanes-area"
             ref={lanesAreaRef}
             onContextMenu={(ev) => {
@@ -686,6 +708,11 @@ function App() {
             stage (row 2), column 3, via CSS grid placement. Rendered
             only when activeTool === 'razor' && pointer is on a clip. */}
         <CutLineOverlay />
+
+        {/* Yellow magnetic-snap indicator lines — drawn at every edit
+            point the in-flight drag is currently magnetized to. Same
+            grid-span pattern as CutLineOverlay. */}
+        <SnapIndicators />
 
         {/* Right-click context menu — viewport-positioned, renders only
             while state.contextMenu is non-null. */}

@@ -50,7 +50,8 @@ export type HostOutbound =
   | { kind: 'audio-fetch'; clipId: number }
   | { kind: 'audio-remove'; clipId: number }
   | { kind: 'set-play-range'; inFrame: number; outFrame: number }
-  | { kind: 'set-loop'; enabled: boolean };
+  | { kind: 'set-loop'; enabled: boolean }
+  | { kind: 'set-cursor-mode'; mode: 'slip' | 'default' };
 
 type Listener = (msg: HostInbound) => void;
 

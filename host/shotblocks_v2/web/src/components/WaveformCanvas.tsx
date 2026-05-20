@@ -1,6 +1,7 @@
 import { useEffect, useRef } from 'react';
 import { pickLevel } from '../lib/peaks';
 import { useStore, type Clip } from '../store';
+import { registerWaveformRedraw, getSlipPreviewOffset } from '../lib/slipPreview';
 
 /** Renders an audio clip's waveform as a filled min/max envelope.
  *
@@ -29,13 +30,23 @@ export function WaveformCanvas({ clip }: { clip: Clip }) {
   const hMax = useStore((s) => s.h.vMax);
 
   const rafIdRef = useRef<number | null>(null);
+  // Always points at the CURRENT render's doFullRedraw. The mount
+  // effect's ResizeObserver callback is created once and frozen; if
+  // it called doFullRedraw directly it would forever use the FIRST
+  // render's stale `clip` prop. Routing every redraw through this ref
+  // means RO-triggered redraws (resize after a split / trim) use the
+  // latest `clip`. This is the fix for "whole waveform crammed into
+  // the clip after a cut" — the stale closure paired an old
+  // clip.outFrame with the freshly-resized DOM box.
+  const redrawRef = useRef<() => void>(() => {});
 
-  // Re-layout / redraw on peaks change (pyramid attached), zoom, or
-  // clip frame-range change (trim).
+  // Re-layout / redraw on peaks change (pyramid attached), zoom,
+  // clip frame-range change (trim), or media-window change (slip).
   useEffect(() => {
     scheduleLayoutAndDraw();
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [clip.peakLevels, hMin, hMax, clip.inFrame, clip.outFrame]);
+  }, [clip.peakLevels, hMin, hMax, clip.inFrame, clip.outFrame,
+      clip.mediaOffsetFrames, clip.mediaDurationFrames]);
 
   useEffect(() => {
     const canvas = canvasRef.current;
@@ -50,12 +61,19 @@ export function WaveformCanvas({ clip }: { clip: Clip }) {
     const laneEl = clipEl.closest('.lane') as HTMLElement | null;
     if (laneEl) ro.observe(laneEl);
     scheduleLayoutAndDraw();
+    // Register an imperative redraw so a slip drag can repaint THIS
+    // clip's waveform without a React re-render (which would break
+    // the WebView2 cursor). The slip preview module calls this.
+    const unregister = registerWaveformRedraw(clip.id, () => {
+      redrawRef.current();
+    });
     return () => {
+      unregister();
       ro.disconnect();
       if (rafIdRef.current != null) cancelAnimationFrame(rafIdRef.current);
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
+  }, [clip.id]);
 
   /** Cheap pass — repositions the canvas via CSS so it stays glued to
    *  the visible portion of the clip during drags. No bitmap work. */
@@ -78,11 +96,18 @@ export function WaveformCanvas({ clip }: { clip: Clip }) {
     return { leftPx, visW, clipFullW: clipRect.width };
   }
 
+  // Keep the redraw ref pointed at THIS render's doFullRedraw, so any
+  // queued frame (incl. one scheduled by the frozen RO callback) runs
+  // the latest closure with the current `clip`.
+  redrawRef.current = doFullRedraw;
+
   function scheduleLayoutAndDraw() {
-    if (rafIdRef.current != null) return;
+    // Cancel any pending frame and reschedule — at most one pending,
+    // and it always runs the latest doFullRedraw via redrawRef.
+    if (rafIdRef.current != null) cancelAnimationFrame(rafIdRef.current);
     rafIdRef.current = requestAnimationFrame(() => {
       rafIdRef.current = null;
-      doFullRedraw();
+      redrawRef.current();
     });
   }
 
@@ -124,17 +149,37 @@ export function WaveformCanvas({ clip }: { clip: Clip }) {
     ctx.clearRect(0, 0, w, h);
     if (!clip.peakLevels || clip.peakLevels.length === 0) return;
 
-    // The pyramid maps the whole file across the clip's full CSS width
-    // (1:1 — clip.inFrame..outFrame corresponds to sample 0..length,
-    // until we add a media-offset concept for trims). Pick the level
-    // whose bucket width is ~1 CSS pixel at the current zoom.
-    // cssPxPerSample = clipFullW / (totalSamples). Total samples is
-    // bucketCount(finestLevel) * finestLevel.sps; use that as the
-    // canonical length, which matches what we computed at decode.
+    // MEDIA-WINDOW MAPPING. The clip is a window onto a fixed media
+    // timeline. `clipFullW` is the clip's VISIBLE width in CSS px, and
+    // it covers `clipDurationFrames` doc-frames. The peak pyramid maps
+    // across the WHOLE media (`mediaDurationFrames`), not the clip —
+    // so cutting / trimming a clip reveals a different part of the
+    // same waveform instead of rescaling the whole thing.
+    //
+    // mediaOffsetFrames = how far into the media the clip's left edge
+    // sits. We compute a media-space pixel scale, then offset every
+    // bucket X back by the window's start so the visible slice lands
+    // correctly under the clip box.
+    const clipDurationFrames = Math.max(1, clip.outFrame - clip.inFrame);
+    const mediaDurationFrames = Math.max(clipDurationFrames, clip.mediaDurationFrames ?? clipDurationFrames);
+    // During a slip drag the live offset comes from the slip-preview
+    // module (no store commit → no React re-render → cursor stays).
+    // Outside a drag it falls back to the committed store value.
+    const slipPreview = getSlipPreviewOffset(clip.id);
+    const mediaOffsetFrames = slipPreview != null ? slipPreview : (clip.mediaOffsetFrames ?? 0);
+    // CSS px per doc-frame is fixed by the clip's own visible mapping;
+    // the media just extends that scale across its full length.
+    const cssPxPerFrame = clipFullW / clipDurationFrames;
+    const mediaFullW = mediaDurationFrames * cssPxPerFrame;
+    // Pixel offset of the visible window's left edge within the media.
+    const windowLeftPx = mediaOffsetFrames * cssPxPerFrame;
+
+    // The pyramid maps the whole file across `mediaFullW`. Pick the
+    // level whose bucket width is ~1 CSS pixel at the current zoom.
     const finest = [...clip.peakLevels].sort((a, b) => a.sps - b.sps)[0];
     const finestPeaks = atobLen(finest.b64) / 2;
     const totalSamples = finestPeaks * finest.sps;
-    const cssPxPerSample = clipFullW / Math.max(1, totalSamples);
+    const cssPxPerSample = mediaFullW / Math.max(1, totalSamples);
     const picked = pickLevel(clip.peakLevels, cssPxPerSample);
     if (!picked) return;
 
@@ -163,10 +208,12 @@ export function WaveformCanvas({ clip }: { clip: Clip }) {
     // and valleys curve smoothly between them. Same shape Premiere /
     // Logic / Audition draw at high zoom.
     //
-    // Visible bucket range: derive from the canvas's CSS-space extent
-    // mapped back to bucket indices.
-    const leftCssX  = visibleLeftCssPx;
-    const rightCssX = visibleLeftCssPx + visibleCssW;
+    // Visible bucket range: the canvas's CSS-space extent is in
+    // CLIP space; bucket positions are in MEDIA space. Shift the
+    // visible window by `windowLeftPx` to get the media-space span,
+    // then map to bucket indices.
+    const leftCssX  = visibleLeftCssPx + windowLeftPx;
+    const rightCssX = visibleLeftCssPx + windowLeftPx + visibleCssW;
     const firstBucket = Math.max(0, Math.floor(leftCssX * bucketsPerCssPx));
     const lastBucket  = Math.min(bucketCount - 1, Math.ceil(rightCssX * bucketsPerCssPx));
     if (lastBucket < firstBucket) return;
@@ -181,11 +228,13 @@ export function WaveformCanvas({ clip }: { clip: Clip }) {
     const backingPxPerCssPx = w / visibleCssW;
     for (let i = 0; i < n; i++) {
       const b = firstBucket + i;
-      // bucket center in CSS-x within the clip
-      const cssCx = (b + 0.5) / bucketsPerCssPx;
+      // bucket center in MEDIA-space CSS-x
+      const cssCxMedia = (b + 0.5) / bucketsPerCssPx;
+      // → CLIP-space CSS-x (subtract the window's media offset)
+      const cssCxClip = cssCxMedia - windowLeftPx;
       // → backing-x within the canvas (subtract the canvas's CSS-left
       // offset into the clip, then scale by DPR)
-      xs[i] = (cssCx - visibleLeftCssPx) * backingPxPerCssPx;
+      xs[i] = (cssCxClip - visibleLeftCssPx) * backingPxPerCssPx;
       const lo = peaks[b * 2];
       const hi = peaks[b * 2 + 1];
       tys[i] = mid - ampToY(hi);

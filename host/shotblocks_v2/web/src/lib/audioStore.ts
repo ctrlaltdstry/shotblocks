@@ -1,20 +1,26 @@
 // Per-session audio binary store. Lives in JS module memory (NOT in
 // the Zustand store, because Blobs aren't structured-cloneable cheaply
-// and we don't want them in undo history). Populated by:
+// and we don't want them in undo history).
 //
-//   - useFileDrop on import → addAudio(clipId, blob)
+// KEYED BY `mediaId`, not clipId. A clip is a window onto a piece of
+// audio media; splitting a clip produces two clips sharing one media.
+// Keying by mediaId means split halves transparently share the same
+// blob + decoded buffer — no re-upload, no re-decode. Populated by:
+//
+//   - useFileDrop on import → addAudio(mediaId, blob)
 //   - usePersistence on doc load → audio-fetch from C++ → addAudio
 //
 // Drained by:
 //
-//   - WebAudio playback layer → getAudioBuffer(clipId) decodes on
+//   - WebAudio playback layer → getAudioBuffer(mediaId) decodes on
 //     demand and caches the decoded AudioBuffer alongside the blob.
-//   - clip delete → removeAudio(clipId) (also fires audio-remove to C++).
+//   - clip delete → removeAudio(mediaId) — fired only when the LAST
+//     clip referencing that media is gone (caller's responsibility).
 //
-// The C++ side owns persistence: when we add audio for a clip, we push
-// the base64-encoded bytes via 'audio-add' so the bytes ride along
-// with the doc through save/load. The bytes are stored ONCE per clip
-// (not per save-state event), keeping the auto-save loop cheap.
+// The C++ side owns persistence: when we add audio we push the
+// base64-encoded bytes via 'audio-add' so they ride along with the
+// doc through save/load. The wire field is still named `clipId` for
+// C++ compatibility, but the value passed is the mediaId.
 
 import { send } from './host';
 
@@ -30,30 +36,30 @@ interface AudioEntry {
 
 const entries = new Map<number, AudioEntry>();
 
-/** Add a blob for `clipId` and push it to C++ for persistence.
- *  Idempotent — re-adding the same clipId replaces both in-memory
+/** Add a blob for `mediaId` and push it to C++ for persistence.
+ *  Idempotent — re-adding the same mediaId replaces both in-memory
  *  blob and the persisted copy. */
-export async function addAudio(clipId: number, blob: Blob): Promise<void> {
-  entries.set(clipId, { blob });
+export async function addAudio(mediaId: number, blob: Blob): Promise<void> {
+  entries.set(mediaId, { blob });
   // Base64-encode + push to C++. Chunked to avoid blowing call-stack
-  // limits on multi-MB inputs.
+  // limits on multi-MB inputs. Wire field is `clipId` for C++ compat.
   const buf = await blob.arrayBuffer();
   const b64 = arrayBufferToBase64(buf);
-  await send({ kind: 'audio-add', clipId, bytes: b64 });
+  await send({ kind: 'audio-add', clipId: mediaId, bytes: b64 });
 }
 
-/** Lookup the raw blob for a clipId, or null if we don't have one. */
-export function getBlob(clipId: number): Blob | null {
-  return entries.get(clipId)?.blob ?? null;
+/** Lookup the raw blob for a mediaId, or null if we don't have one. */
+export function getBlob(mediaId: number): Blob | null {
+  return entries.get(mediaId)?.blob ?? null;
 }
 
 /** Get the decoded AudioBuffer, decoding on first call. Returns null
- *  if we don't have audio for this clipId or decode fails. */
+ *  if we don't have audio for this mediaId or decode fails. */
 export async function getAudioBuffer(
-  clipId: number,
+  mediaId: number,
   ctx: AudioContext,
 ): Promise<AudioBuffer | null> {
-  const e = entries.get(clipId);
+  const e = entries.get(mediaId);
   if (!e) return null;
   if (e.decoded) return e.decoded;
   if (e.decodePromise) return e.decodePromise;
@@ -64,7 +70,7 @@ export async function getAudioBuffer(
       e.decoded = buf;
       return buf;
     } catch (err) {
-      console.warn('[audioStore] decode failed for clip', clipId, err);
+      console.warn('[audioStore] decode failed for media', mediaId, err);
       return null;
     } finally {
       e.decodePromise = undefined;
@@ -74,32 +80,34 @@ export async function getAudioBuffer(
   return p;
 }
 
-/** Notify C++ to remove the audio binary for `clipId` from the doc
- *  helper, and drop our in-memory entry. */
-export async function removeAudio(clipId: number): Promise<void> {
-  entries.delete(clipId);
-  await send({ kind: 'audio-remove', clipId });
+/** Notify C++ to remove the audio binary for `mediaId` from the doc
+ *  helper, and drop our in-memory entry. Caller must only invoke this
+ *  once NO clip references the media any more (a split leaves
+ *  multiple clips sharing one mediaId). */
+export async function removeAudio(mediaId: number): Promise<void> {
+  entries.delete(mediaId);
+  await send({ kind: 'audio-remove', clipId: mediaId });
 }
 
-/** True if we have a Blob in memory for this clipId. */
-export function hasAudio(clipId: number): boolean {
-  return entries.has(clipId);
+/** True if we have a Blob in memory for this mediaId. */
+export function hasAudio(mediaId: number): boolean {
+  return entries.has(mediaId);
 }
 
-/** Pull audio bytes for `clipId` from C++ (called on doc load when
- *  the persisted clip references audio we don't have in memory yet).
+/** Pull audio bytes for `mediaId` from C++ (called on doc load when
+ *  a persisted clip references media we don't have in memory yet).
  *  Returns true on success, false if no bytes are stored. */
-export async function fetchAudio(clipId: number): Promise<boolean> {
-  const ack = await send({ kind: 'audio-fetch', clipId }) as
+export async function fetchAudio(mediaId: number): Promise<boolean> {
+  const ack = await send({ kind: 'audio-fetch', clipId: mediaId }) as
     | { ok?: boolean; bytes?: string } | undefined;
   if (!ack || !ack.ok || !ack.bytes) return false;
   const bytes = base64ToBlob(ack.bytes);
-  entries.set(clipId, { blob: bytes });
+  entries.set(mediaId, { blob: bytes });
   return true;
 }
 
-/** Iterate all known clipIds (for cleanup / introspection). */
-export function knownClipIds(): number[] {
+/** Iterate all known mediaIds (for cleanup / introspection). */
+export function knownMediaIds(): number[] {
   return Array.from(entries.keys());
 }
 

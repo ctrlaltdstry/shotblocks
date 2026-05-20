@@ -62,7 +62,10 @@
 #include <thread>
 #include <unordered_map>
 
+#include <commctrl.h>  // SetWindowSubclass — for the dialog WM_SETCURSOR hook
+
 #pragma comment(lib, "Ws2_32.lib")
+#pragma comment(lib, "Comctl32.lib")
 
 using namespace cinema;
 
@@ -543,6 +546,7 @@ public:
 	{
 		EnsureNavigated();
 		AnnouncePortIfReady();
+		EnsureCursorSubclass();
 		// Advance v2-owned playback. Computes the target frame from
 		// wall-clock elapsed time since play started, so timer jitter
 		// doesn't accumulate (Python's _playback_anchor_t /
@@ -979,6 +983,33 @@ private:
 			PostDocInfo();
 			PostTick();
 			return "{\"ok\":true,\"kind\":\"pong\"}";
+		}
+		if (body.find("\"kind\":\"set-cursor-mode\"") != std::string::npos)
+		{
+			// JS tells us which cursor to force. The dialog-window
+			// WM_SETCURSOR subclass reads _cursorMode on every move.
+			// 1 = force slip cursor; 0 = let C4D/WebView2 decide.
+			const int m = body.find("\"mode\":\"slip\"") != std::string::npos ? 1 : 0;
+			_cursorMode.store(m);
+			// Apply immediately (WM_SETCURSOR only fires on movement),
+			// and drive a fast Win32 timer that keeps re-asserting the
+			// slip cursor so WebView2's own resets never show. Kill
+			// the timer when slip mode ends.
+			if (_cursorSubclassed)
+			{
+				if (m == 1)
+				{
+					if (_slipCursor) SetCursor(_slipCursor);
+					// ::SetTimer — the Win32 one. Unqualified SetTimer
+					// resolves to GeDialog::SetTimer (different sig).
+					::SetTimer(_cursorSubclassed, kCursorTimerId, 16, nullptr);
+				}
+				else
+				{
+					::KillTimer(_cursorSubclassed, kCursorTimerId);
+				}
+			}
+			return "{\"ok\":true,\"kind\":\"set-cursor-mode-ack\"}";
 		}
 		if (body.find("\"kind\":\"tool\"") != std::string::npos)
 		{
@@ -1568,6 +1599,97 @@ private:
 	// address inside the DLL.
 	static void DispatchHttpStatic() {}
 
+	// --- Cursor ownership -------------------------------------------
+	// The slip cursor wouldn't persist after a drag. WebView2's render
+	// window is cross-process (can't subclass), and DOM/JS cursor
+	// pokes don't drive the native cursor. The remaining suspect:
+	// C4D's own dialog window handles WM_SETCURSOR for its region (the
+	// HtmlViewerCustomGui is a child inside the C4D dialog) and resets
+	// the cursor on every move. C4D's dialog HWND IS in our process,
+	// so we CAN subclass it. When the slip cursor mode is on, our
+	// WM_SETCURSOR handler sets the slip cursor and returns TRUE,
+	// winning over both C4D and WebView2.
+	//
+	// `_cursorMode` is set by JS (`set-cursor-mode`): 1 = force slip
+	// cursor, 0 = let C4D/WebView2 decide. Atomic — HTTP worker
+	// thread writes, UI thread's subclass proc reads.
+
+	void LoadCursors()
+	{
+		if (_slipCursor)
+			return;
+		HMODULE hMod = nullptr;
+		GetModuleHandleExW(
+			GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS |
+			GET_MODULE_HANDLE_EX_FLAG_UNCHANGED_REFCOUNT,
+			(LPCWSTR)&ShotblocksV2Dialog::DispatchHttpStatic, &hMod);
+		wchar_t path[MAX_PATH] = {0};
+		GetModuleFileNameW(hMod, path, MAX_PATH);
+		wchar_t* lastSlash = wcsrchr(path, L'\\');
+		if (lastSlash)
+			*(lastSlash + 1) = 0;
+		wchar_t curPath[MAX_PATH + 64];
+		swprintf_s(curPath, MAX_PATH + 64, L"%sweb\\cursors\\slip.cur", path);
+		// LoadCursorFromFileW picks the DPI-appropriate image out of a
+		// multi-resolution .cur (32 / 48 / 64). LoadImage+LR_DEFAULTSIZE
+		// would force the 32px metric and waste the larger sizes.
+		_slipCursor = LoadCursorFromFileW(curPath);
+		if (!_slipCursor)
+			GePrint("[Shotblocks/v2] slip.cur failed to load"_s);
+	}
+
+	// Win32 timer id used (on the C4D dialog window) to re-assert the
+	// slip cursor fast enough that WebView2's own cursor resets don't
+	// produce a visible flicker.
+	static const UINT_PTR kCursorTimerId = 0x5B1C;
+
+	static LRESULT CALLBACK CursorSubclassProc(
+		HWND hwnd, UINT msg, WPARAM wp, LPARAM lp,
+		UINT_PTR /*id*/, DWORD_PTR refData)
+	{
+		auto* self = reinterpret_cast<ShotblocksV2Dialog*>(refData);
+		if (self && self->_cursorMode.load() == 1 && self->_slipCursor)
+		{
+			// While slip mode is on, re-assert the slip cursor on
+			// WM_SETCURSOR (mouse moved) AND on our fast WM_TIMER
+			// (pointer still — WebView2 resets the cursor on its own
+			// events; the timer overwrites it back before the reset
+			// is visible).
+			if (msg == WM_SETCURSOR)
+			{
+				SetCursor(self->_slipCursor);
+				return TRUE; // consumed — beats C4D + WebView2
+			}
+			if (msg == WM_TIMER && wp == kCursorTimerId)
+				SetCursor(self->_slipCursor);
+		}
+		if (msg == WM_NCDESTROY)
+		{
+			RemoveWindowSubclass(hwnd, &CursorSubclassProc, 1);
+			if (self && self->_cursorSubclassed == hwnd)
+				self->_cursorSubclassed = nullptr;
+		}
+		return DefSubclassProc(hwnd, msg, wp, lp);
+	}
+
+	// Subclass the C4D dialog window for WM_SETCURSOR. Called from
+	// Timer() — cheap no-op once installed.
+	void EnsureCursorSubclass()
+	{
+		if (_cursorSubclassed)
+			return;
+		HWND dlg = static_cast<HWND>(GetWindowHandle());
+		if (!dlg)
+			return;
+		LoadCursors();
+		if (SetWindowSubclass(dlg, &CursorSubclassProc, 1,
+			reinterpret_cast<DWORD_PTR>(this)))
+		{
+			_cursorSubclassed = dlg;
+			GePrint("[Shotblocks/v2] cursor subclass installed on C4D dialog"_s);
+		}
+	}
+
 private:
 	HtmlViewerCustomGui* _htmlView;
 	bool                 _navigated;
@@ -1583,6 +1705,11 @@ private:
 	std::deque<HttpRequest>      _queue;
 
 	std::string          _activeTool{"select"};
+
+	// Cursor ownership — see the cursor block above.
+	HCURSOR              _slipCursor{nullptr};
+	std::atomic<int>     _cursorMode{0};
+	HWND                 _cursorSubclassed{nullptr};
 
 	// OM-drop camera registry. Each dragged BaseObject is assigned a
 	// session-unique objectId; that id is sent to JS in the om-drop

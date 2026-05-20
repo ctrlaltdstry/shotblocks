@@ -13,7 +13,7 @@ const TOOLS: ToolDef[] = [
   { id: 'select', title: 'Select', iconClass: 'icon--select', iconStyle: { '--icon-w': '14px', '--icon-h': '14px' } as CSSProperties },
   { id: 'razor',  title: 'Razor',  iconClass: 'icon--razor',  iconStyle: { '--icon-w': '14px', '--icon-h': '14px', '--icon-rot': '45deg' } as CSSProperties },
   { id: 'pen',    title: 'Pen',    iconClass: 'icon--pen',    iconStyle: { '--icon-w': '14px', '--icon-h': '14px' } as CSSProperties },
-  { id: 'range',  title: 'Range',  iconClass: 'icon--range',  iconStyle: { '--icon-w': '15px', '--icon-h': '12px' } as CSSProperties },
+  { id: 'slip',   title: 'Slip',   iconClass: 'icon--slip',   iconStyle: { '--icon-w': '15px', '--icon-h': '12px' } as CSSProperties },
 ];
 
 /** Tool palette in the left rail. Click sets the active tool locally

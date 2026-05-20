@@ -1,5 +1,5 @@
 import { useRef, type CSSProperties } from 'react';
-import { useStore, type Clip } from '../store';
+import { useStore, SNAP_PIXEL_RADIUS, type Clip } from '../store';
 import { useClipDrag } from '../useClipDrag';
 import { WaveformCanvas } from './WaveformCanvas';
 
@@ -45,9 +45,30 @@ export function ShotBlock({
   // store so the App-level CutLineOverlay can render a vertical line
   // spanning ruler + lanes-area. Lets the user see exactly which
   // frame they'll cut on, on every track. Pointer-leave clears.
+  //
+  // When Snap is on (Shift suppresses), the preview line pulls to the
+  // playhead within SNAP_PIXEL_RADIUS so the visual matches where the
+  // cut will actually land — see the razor-snap branch in useClipDrag.
   function onRazorPointerMove(ev: React.PointerEvent<HTMLDivElement>) {
-    if (useStore.getState().activeTool !== 'razor') return;
-    useStore.getState().setRazorHoverX(ev.clientX);
+    const s = useStore.getState();
+    if (s.activeTool !== 'razor') return;
+    let hoverX = ev.clientX;
+    if (s.snapEnabled && !ev.shiftKey) {
+      const laneEl = ev.currentTarget.closest('.lane') as HTMLElement | null;
+      if (laneEl) {
+        const r = laneEl.getBoundingClientRect();
+        const span = Math.max(1, s.h.vMax - s.h.vMin);
+        const pxPerFrame = r.width / span;
+        const playhead = s.scrubFrame ?? s.currentFrame;
+        const playheadX = r.left + (playhead - s.h.vMin) * pxPerFrame;
+        if (Math.abs(ev.clientX - playheadX) <= SNAP_PIXEL_RADIUS) hoverX = playheadX;
+      }
+    }
+    // Publish the hovered clip's vertical extent so the cut-line
+    // overlay can brighten just the segment over this clip — the
+    // part of the line that will actually slice.
+    const blockRect = ev.currentTarget.getBoundingClientRect();
+    s.setRazorHoverX(hoverX, { top: blockRect.top, bottom: blockRect.bottom });
   }
   function onRazorPointerLeave() {
     if (useStore.getState().razorHoverX != null) {

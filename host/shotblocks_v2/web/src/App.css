@@ -507,6 +507,32 @@ body.va-splitter-hover .stack__divider.is-grabbable,
     crosshair;
 }
 
+/* Slip tool cursor. Slip only acts on AUDIO clips (it slides the media
+   window), so the slip cursor shows on audio shot-blocks; elsewhere
+   under the Slip tool the cursor stays default. The glyph is the
+   tool-slip SVG (the |<->| arrows), white-filled + thin black stroke
+   for contrast on the green audio body. Centered in a 24x24 canvas
+   (glyph is 16x13, offset by (4, 5.5)); hotspot at canvas center
+   since slip is a symmetric horizontal drag. Falls back to ew-resize.
+   Defined once as a custom property so the hover rule and the
+   during-drag body rule (.is-slipping) share one definition. */
+:root {
+  --slip-cursor:
+    url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='24' height='24' viewBox='0 0 24 24'><g transform='translate(4 5.5)'><path d='M15.5 0C15.7761 0 16 0.223858 16 0.5V12.5C16 12.7761 15.7761 13 15.5 13C15.2239 13 15 12.7761 15 12.5V7.04883C14.9271 7.15985 14.8308 7.25972 14.709 7.33887L11.5449 9.39355C10.9213 9.79864 10.1089 9.40466 10.0098 8.7002L10 8.55469V7H6V8.55469L5.99023 8.7002C5.89771 9.35782 5.18388 9.74482 4.58203 9.46387L4.45508 9.39355L1.29102 7.33887C1.16916 7.25972 1.07294 7.15985 1 7.04883V12.5C1 12.7761 0.776142 13 0.5 13C0.223858 13 0 12.7761 0 12.5V0.5C0 0.223858 0.223858 0 0.5 0C0.776142 0 1 0.223858 1 0.5V5.9502C1.07289 5.83945 1.16941 5.74012 1.29102 5.66113L4.45508 3.60645C5.12035 3.17434 6 3.65203 6 4.44531V6H10V4.44531L10.0098 4.2998C10.1023 3.64218 10.8161 3.25518 11.418 3.53613L11.5449 3.60645L14.709 5.66113C14.8306 5.74012 14.9271 5.83945 15 5.9502V0.5C15 0.223858 15.2239 0 15.5 0ZM1.83594 6.5L5 8.55469V4.44531L1.83594 6.5ZM11 8.55469L14.1641 6.5L11 4.44531V8.55469Z' fill='white' stroke='black' stroke-width='0.5'/></g></svg>") 12 12,
+    ew-resize;
+}
+/* Slip cursor is set on the LANE (data-side=audio), not the
+   shot-block. The shot-block + its waveform canvas re-render on every
+   slipClip commit during a slip drag; WebView2 loses cursor tracking
+   when the element it latched onto re-renders mid-gesture. The .lane
+   element is stable through a slip (never re-renders), so anchoring
+   the cursor there keeps WebView2's cursor target fixed. `* `
+   propagates it to the shot-block / content / canvas children. */
+.lanes-area.is-tool-slip .lane[data-side="audio"],
+.lanes-area.is-tool-slip .lane[data-side="audio"] * {
+  cursor: var(--slip-cursor);
+}
+
 /* Razor cut-line preview overlay. Spans ruler row (row 1) through
    stage (row 2), in the timeline column (col 3). pointer-events: none
    so it never blocks editing. Inner .cut-line is a 1px vertical
@@ -524,10 +550,50 @@ body.va-splitter-hover .stack__divider.is-grabbable,
   top: 0;
   bottom: 0;
   width: 1px;
-  background: rgba(255, 255, 255, 0.45);
+  /* Faint white — a frame reference across the whole timeline. The
+     segment over the hovered clip gets the brighter .cut-line__active
+     treatment on top, so this base line stays understated. */
+  background: rgba(255, 255, 255, 0.3);
   /* The line sits centered on the cursor X — shift back by 0.5px
      so a 1px line reads as exactly under the cursor instead of
      half a pixel to the right of it. */
+  margin-left: -0.5px;
+}
+/* The slice segment — the part of the cut line over the hovered
+   clip, i.e. where the razor will actually cut. Brighter + thicker
+   yellow (#ffd60a, the razor/snap accent) with a soft glow so the
+   user's eye lands on the target clip. */
+.cut-line__active {
+  position: absolute;
+  width: 3px;
+  margin-left: -1.5px;
+  background: #ffd60a;
+  box-shadow: 0 0 6px 1px rgba(255, 214, 10, 0.7);
+  border-radius: 1px;
+}
+
+/* Magnetic-snap indicator lines — drawn during a clip body/trim/roll
+   drag at every edit point the snapped clip aligned with. Spans
+   ruler + stage like the razor cut line so the user sees the snap
+   target on every track at once. Yellow #ffd60a mirrors Python's
+   COL_SNAP_INDICATOR. */
+.snap-indicators-overlay {
+  grid-column: 3;
+  grid-row: 1 / span 2;
+  position: relative;
+  pointer-events: none;
+  /* Above the playhead (z:5) so a snap-to-playhead "wins" the
+     vertical-line slot visually, matching Python (sb_canvas.py:1633:
+     "drawn after the playhead so a snap-to-playhead overrides the
+     playhead line visually"). */
+  z-index: 51;
+}
+.snap-indicator-line {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  width: 1px;
+  background: #ffd60a;
   margin-left: -0.5px;
 }
 .lane {

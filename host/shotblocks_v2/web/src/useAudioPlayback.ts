@@ -128,9 +128,12 @@ export function useAudioPlayback(): void {
     for (const t of s.audioTracks) {
       for (const clip of t.clips) {
         if (frame < clip.inFrame || frame >= clip.outFrame) continue;
-        const buf = await getAudioBuffer(clip.id, ctx);
+        const mediaId = clip.mediaId ?? clip.id;
+        const buf = await getAudioBuffer(mediaId, ctx);
         if (!buf) continue;
-        const offset = (frame - clip.inFrame) * fpsInv;
+        // Buffer is the whole media; window starts mediaOffsetFrames in.
+        const mediaOffsetFrames = clip.mediaOffsetFrames ?? 0;
+        const offset = (mediaOffsetFrames + (frame - clip.inFrame)) * fpsInv;
         const duration = Math.min(SCRUB_BLIP_SEC, buf.duration - offset);
         if (duration <= 0) continue;
         const node = ctx.createBufferSource();
@@ -187,7 +190,9 @@ export function useAudioPlayback(): void {
       // Skip clips that end before the play start (no future audio).
       if (clip.outFrame <= frame) continue;
 
-      const buf = await getAudioBuffer(clip.id, ctx);
+      // Audio is keyed by mediaId — split halves share one media.
+      const mediaId = clip.mediaId ?? clip.id;
+      const buf = await getAudioBuffer(mediaId, ctx);
       if (!buf) continue;
 
       // Bail if playback already stopped while we were decoding.
@@ -203,12 +208,21 @@ export function useAudioPlayback(): void {
       //             head is mid-clip, when == startCtxTime (start now,
       //             with an offset).
       //   offset  = seconds into the source buffer to start from.
+      //             The buffer is the WHOLE media file; the clip is a
+      //             window starting `mediaOffsetFrames` into it. So
+      //             the buffer position for doc-frame `frame` is
+      //             mediaOffsetFrames + (frame - inFrame). Without the
+      //             mediaOffset term, every clip plays from the file's
+      //             start — which is why audio dropped after the
+      //             first cut (the 2nd clip replayed the intro, or
+      //             ran past the buffer end).
       //   duration = how much of the buffer to play (clamped to clip
       //             out-frame and to the buffer's own length).
       const fpsInv = 1 / fps;
+      const mediaOffsetFrames = clip.mediaOffsetFrames ?? 0;
       const framesIntoClip = Math.max(0, frame - clip.inFrame);
       const when   = startCtxTime + Math.max(0, (clip.inFrame - frame) * fpsInv);
-      const offset = framesIntoClip * fpsInv;
+      const offset = (mediaOffsetFrames + framesIntoClip) * fpsInv;
       const remainingFrames = clip.outFrame - Math.max(frame, clip.inFrame);
       const duration = Math.min(remainingFrames * fpsInv, buf.duration - offset);
       if (duration <= 0) continue;

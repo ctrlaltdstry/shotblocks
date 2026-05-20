@@ -1,5 +1,5 @@
 import { useRef, type CSSProperties } from 'react';
-import { useStore } from '../store';
+import { useStore, magneticSnap, SNAP_PIXEL_RADIUS } from '../store';
 import { useElementSize } from '../useElementSize';
 import { computeRulerLayout } from '../lib/ruler';
 import { send } from '../lib/host';
@@ -48,8 +48,36 @@ export function Ruler() {
     const f = Math.round(h.vMin + (x / rect.width) * visibleSpan);
     return Math.max(0, Math.min(docFrames, f));
   }
+  /** Magnetically pull a raw scrub frame to nearby clip edit points
+   *  when the Snap toggle is on (Shift held suppresses it, matching
+   *  the body/trim-drag inversion). Edit points are every clip's
+   *  in/out across BOTH sides — Python's `_drag_playhead` snaps the
+   *  playhead to shot ins/outs + audio edges (sb_canvas_drag.py:549).
+   *  The playhead is the moving thing, so it isn't its own target.
+   *  Publishes the yellow indicator lines as a side effect. */
+  function snapScrub(rawFrame: number, shiftKey: boolean): number {
+    const s = useStore.getState();
+    if (!s.snapEnabled || shiftKey) {
+      s.setSnapIndicatorFrames([]);
+      return rawFrame;
+    }
+    const editPoints: number[] = [];
+    for (const t of s.videoTracks) {
+      for (const c of t.clips) editPoints.push(c.inFrame, c.outFrame);
+    }
+    for (const t of s.audioTracks) {
+      for (const c of t.clips) editPoints.push(c.inFrame, c.outFrame);
+    }
+    const snapFrames = Math.max(1, SNAP_PIXEL_RADIUS / Math.max(0.0001, pxPerFrame));
+    // duration=0 → snap the single playhead frame directly to the
+    // nearest edit point, no "other edge" to also align.
+    const snap = magneticSnap(rawFrame, 0, editPoints, snapFrames);
+    s.setSnapIndicatorFrames(snap.targets);
+    return snap.inFrame;
+  }
   function seek(clientX: number, ev: React.PointerEvent) {
-    const f = frameFromClientX(clientX);
+    const raw = frameFromClientX(clientX);
+    const f = Math.max(0, Math.min(docFrames, snapScrub(raw, ev.shiftKey)));
     // Always update the optimistic preview — even when we skip the
     // outbound send, the local playhead must follow the cursor.
     setScrubFrame(f);
@@ -72,6 +100,7 @@ export function Ruler() {
     if (!drag.current.active) return;
     drag.current.active = false;
     setScrubFrame(null);
+    useStore.getState().setSnapIndicatorFrames([]);
     try { ev.currentTarget.releasePointerCapture(ev.pointerId); } catch { /* noop */ }
   }
 

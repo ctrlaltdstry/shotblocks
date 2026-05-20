@@ -1,6 +1,7 @@
 import { useEffect, useRef, type RefObject } from 'react';
 import { gsap } from 'gsap';
-import { useStore, magneticSnap, type Clip } from './store';
+import { useStore, magneticSnap, SNAP_PIXEL_RADIUS, type Clip } from './store';
+import { setSlipPreview, clearSlipPreview } from './lib/slipPreview';
 
 /** Pixel slop before a pointerdown becomes a real drag. Below this we
  *  treat it as a click (selection, later). */
@@ -24,12 +25,6 @@ function clipWidthEdgeZone(clipWidthPx: number): number {
     Math.floor(clipWidthPx / 2),
   );
 }
-
-/** Pixel radius for magnetic clip-edge snap during drag. Mirrors the
- *  legacy Python SNAP_PIXEL_RADIUS (sb_canvas.py:229 = 8px). Converted
- *  to a per-call frame count via the current pxPerFrame so snap feel
- *  stays constant across zoom levels. */
-const SNAP_PIXEL_RADIUS = 8;
 
 interface DragRef {
   active: boolean;
@@ -239,6 +234,7 @@ export function useClipDrag(
 
       useStore.getState().setDragClip(null);
       useStore.getState().setSpawnGhost(null);
+      useStore.getState().setSnapIndicatorFrames([]);
       // Body `.is-clip-dragging` class is mirrored from dragClip
       // state by useDragRecovery — no manual remove needed here.
 
@@ -346,8 +342,14 @@ export function useClipDrag(
         }
       }
       editPoints.push(state.scrubFrame ?? state.currentFrame);
-      const snapFrames = Math.max(1, SNAP_PIXEL_RADIUS / d.pxPerFrame);
-      const snappedIn = Math.max(0, magneticSnap(rawInFrame, duration, editPoints, snapFrames));
+      // Snap gating: off if the toggle is off, OR if ripple mode is
+      // active (Shift overrides snap per Python `_qualifier_mode`,
+      // sb_canvas.py:344). snapFrames=0 short-circuits magneticSnap.
+      const snapActive = state.snapEnabled && !d.rippleMode;
+      const snapFrames = snapActive ? Math.max(1, SNAP_PIXEL_RADIUS / d.pxPerFrame) : 0;
+      const snap = magneticSnap(rawInFrame, duration, editPoints, snapFrames);
+      const snappedIn = Math.max(0, snap.inFrame);
+      state.setSnapIndicatorFrames(snap.targets);
       d.previewTrackId = target.trackId;
       d.previewInFrame = snappedIn;
 
@@ -512,7 +514,19 @@ export function useClipDrag(
         const span = Math.max(1, liveStore.h.vMax - liveStore.h.vMin);
         const pxPerFrame = laneRect.width / span;
         if (pxPerFrame <= 0) return;
-        const cursorFrame = Math.round(liveStore.h.vMin + (ev.clientX - laneRect.left) / pxPerFrame);
+        let cursorFrame = Math.round(liveStore.h.vMin + (ev.clientX - laneRect.left) / pxPerFrame);
+        // Razor snap: pull the cut to the playhead frame only — clip
+        // edges are already cuts so they're not useful targets. Lets
+        // the user park the playhead inside a clip and cut exactly
+        // there. Gated on the Snap toggle; Shift suppresses (matches
+        // the body/trim/scrub-drag inversion).
+        if (liveStore.snapEnabled && !ev.shiftKey) {
+          const playhead = liveStore.scrubFrame ?? liveStore.currentFrame;
+          const snapFrames = Math.max(1, SNAP_PIXEL_RADIUS / pxPerFrame);
+          if (Math.abs(cursorFrame - playhead) <= snapFrames) {
+            cursorFrame = playhead;
+          }
+        }
         useStore.getState().splitClip(clip.id, trackId, cursorFrame);
         ev.preventDefault();
         ev.stopPropagation();
@@ -523,6 +537,21 @@ export function useClipDrag(
       const xInClip = ev.clientX - rect.left;
       const edgeReserve = clipWidthEdgeZone(rect.width);
       if (xInClip < edgeReserve || xInClip > rect.width - edgeReserve) return;
+
+      // Slip gesture: when the Slip tool is active OR Ctrl is held, a
+      // body drag on an AUDIO clip slides the media window under the
+      // (fixed-position) clip instead of moving the clip. Ports
+      // Python's slip branch (sb_canvas.py:2917, _drag_audio_slip).
+      // Edge-zone drags already returned above, so trim still works
+      // while the Slip tool is active.
+      {
+        const st = useStore.getState();
+        const slipActive = side === 'audio' && (st.activeTool === 'slip' || ev.ctrlKey || ev.metaKey);
+        if (slipActive) {
+          startSlipDrag(ev);
+          return;
+        }
+      }
 
       // Select on pointer-down so the clip enters the selected visual
       // immediately — the drag (if any) continues with the clip already
@@ -590,6 +619,82 @@ export function useClipDrag(
       window.addEventListener('pointerup', onUp);
       window.addEventListener('pointercancel', onCancel);
       window.addEventListener('keydown', onKey);
+    }
+
+    // ---- Slip drag (audio only) -------------------------------------
+    // Self-contained: own pointer listeners, no transform, commits
+    // live to the store via slipClip. The clip does NOT move on the
+    // timeline — only mediaOffsetFrames changes, so the waveform
+    // slides under a fixed clip box. Direction follows Python /
+    // Premiere: drag RIGHT → media moves backward → earlier audio
+    // plays under the clip → mediaOffsetFrames DECREASES
+    // (sb_canvas_audio.py:1788).
+    function startSlipDrag(downEv: PointerEvent) {
+      const laneEl = el!.closest('.lane') as HTMLElement | null;
+      if (!laneEl) return;
+      const laneRect = laneEl.getBoundingClientRect();
+      const st0 = useStore.getState();
+      const span = Math.max(1, st0.h.vMax - st0.h.vMin);
+      const pxPerFrame = laneRect.width / span;
+      if (pxPerFrame <= 0) return;
+
+      // Snapshot the clip's starting offset + media bounds from the
+      // live store so the preview can clamp the same way slipClip does.
+      let startOffset = 0;
+      let clipDur = 1;
+      let mediaDur = 1;
+      for (const t of st0.audioTracks) {
+        const c = t.clips.find((cc) => cc.id === clip.id);
+        if (c) {
+          startOffset = c.mediaOffsetFrames ?? 0;
+          clipDur = Math.max(1, c.outFrame - c.inFrame);
+          mediaDur = c.mediaDurationFrames ?? clipDur;
+          break;
+        }
+      }
+      const maxOffset = Math.max(0, mediaDur - clipDur);
+      const startClientX = downEv.clientX;
+      const pointerId = downEv.pointerId;
+      // Flag the slip so the Lane stops running edge-hover detection
+      // for the duration.
+      useStore.getState().setSlipDragging(true);
+
+      // CRITICAL: during the drag we do NOT commit to the store —
+      // committing per move re-renders the audio clip + WaveformCanvas,
+      // and that React re-render is what makes WebView2 drop the
+      // native cursor mid-gesture (proven by diagnosis). Instead we
+      // push the in-flight offset to the slip-preview module, which
+      // repaints the waveform IMPERATIVELY (no React). The real
+      // slipClip commit happens once, on release.
+      function previewAt(ev: PointerEvent): number {
+        const dxFrames = Math.round((ev.clientX - startClientX) / pxPerFrame);
+        // Drag right → earlier audio → offset decreases. Clamp to the
+        // legal window range, same as slipClip.
+        const want = startOffset - dxFrames;
+        return Math.max(0, Math.min(maxOffset, want));
+      }
+      function onSlipMove(ev: PointerEvent) {
+        if (ev.pointerId !== pointerId) return;
+        setSlipPreview(clip.id, previewAt(ev));
+      }
+      function endSlip(ev: PointerEvent) {
+        if (ev.pointerId !== pointerId) return;
+        window.removeEventListener('pointermove', onSlipMove);
+        window.removeEventListener('pointerup', endSlip);
+        window.removeEventListener('pointercancel', endSlip);
+        // Commit the final offset to the store, clear the preview.
+        const finalOffset = previewAt(ev);
+        useStore.getState().slipClip(clip.id, trackId, finalOffset);
+        clearSlipPreview();
+        useStore.getState().setSlipDragging(false);
+        // Cursor: the C++ host owns it (WM_SETCURSOR subclass on the
+        // C4D dialog window). useSlipCursor keeps the host's cursor
+        // mode in sync with tool + pointer position — nothing to do
+        // here.
+      }
+      window.addEventListener('pointermove', onSlipMove);
+      window.addEventListener('pointerup', endSlip);
+      window.addEventListener('pointercancel', endSlip);
     }
 
     el.addEventListener('pointerdown', onDown);

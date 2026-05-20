@@ -35,6 +35,14 @@ interface SavedClip {
   filePath?: string;
   peakLevels?: { sps: number; b64: string }[];
   peakAbsMax?: number;
+  // Media-window: must persist so cuts / trims / slips survive
+  // reload. Without these a reloaded split clip would rescale its
+  // waveform again (mediaOffsetFrames lost → defaults to 0).
+  mediaDurationFrames?: number;
+  mediaOffsetFrames?: number;
+  // Stable audio-media key. Persisted so split halves still resolve
+  // to the same C++-stored audio bytes after reload.
+  mediaId?: number;
 }
 interface SavedTrack {
   id: number;
@@ -90,16 +98,25 @@ export function usePersistence(): void {
       // mutation creates new track / clip arrays.
       if (s.videoTracks === prev.videoTracks && s.audioTracks === prev.audioTracks) return;
 
-      // Detect audio clip deletions so we can free the persisted
-      // bytes. Audio lives in C++'s helper container keyed by
-      // BCKEY_V2_AUDIO_BASE + clipId; if we leave it there after the
-      // clip is gone, the doc carries dead bytes forever.
-      const prevAudioIds = new Set<number>();
-      for (const t of prev.audioTracks) for (const c of t.clips) prevAudioIds.add(c.id);
-      const nowAudioIds = new Set<number>();
-      for (const t of s.audioTracks) for (const c of t.clips) nowAudioIds.add(c.id);
-      for (const id of prevAudioIds) {
-        if (!nowAudioIds.has(id)) void removeAudio(id);
+      // Detect audio MEDIA that is no longer referenced by any clip,
+      // and free the persisted bytes. Audio lives in C++'s helper
+      // keyed by mediaId; leaving it there after the last referencing
+      // clip is gone leaks dead bytes into the doc.
+      //
+      // Keyed by mediaId, NOT clipId: a split produces several clips
+      // sharing one media. We must only remove the bytes once EVERY
+      // clip with that mediaId is gone — otherwise cutting a clip and
+      // deleting one half would silence the other half.
+      const prevMediaIds = new Set<number>();
+      for (const t of prev.audioTracks) {
+        for (const c of t.clips) prevMediaIds.add(c.mediaId ?? c.id);
+      }
+      const nowMediaIds = new Set<number>();
+      for (const t of s.audioTracks) {
+        for (const c of t.clips) nowMediaIds.add(c.mediaId ?? c.id);
+      }
+      for (const mediaId of prevMediaIds) {
+        if (!nowMediaIds.has(mediaId)) void removeAudio(mediaId);
       }
 
       if (skipNextSave.current) {
@@ -139,37 +156,58 @@ async function loadFromHost(skipNextSave: React.MutableRefObject<boolean>) {
         filePath: c.filePath,
         peakLevels: c.peakLevels,
         peakAbsMax: c.peakAbsMax,
+        mediaDurationFrames: c.mediaDurationFrames,
+        mediaOffsetFrames: c.mediaOffsetFrames,
       })),
     }));
     const audioTracks: Track[] = parsed.audioTracks.map((t) => ({
       id: t.id,
       name: t.name,
-      clips: t.clips.map((c) => ({
-        id: c.id,
-        inFrame: c.inFrame,
-        outFrame: c.outFrame,
-        sourceName: c.sourceName,
-        sourceType: c.sourceType,
-        objectId: c.objectId,
-        state: c.state as Track['clips'][number]['state'],
-        locked: !!c.locked,
-        filePath: c.filePath,
-        peakLevels: c.peakLevels,
-        peakAbsMax: c.peakAbsMax,
-      })),
+      clips: t.clips.map((c) => {
+        // Media-window backfill: audio clips saved before the
+        // media-window model have no mediaDuration/mediaOffset. A
+        // never-edited clip's full timeline span IS its media span,
+        // starting at media frame 0. Backfilling here makes every
+        // audio clip well-formed before any cut / trim / slip — so
+        // splitClip etc. never see undefined fields.
+        const clipDur = c.outFrame - c.inFrame;
+        return {
+          id: c.id,
+          inFrame: c.inFrame,
+          outFrame: c.outFrame,
+          sourceName: c.sourceName,
+          sourceType: c.sourceType,
+          objectId: c.objectId,
+          state: c.state as Track['clips'][number]['state'],
+          locked: !!c.locked,
+          filePath: c.filePath,
+          peakLevels: c.peakLevels,
+          peakAbsMax: c.peakAbsMax,
+          mediaDurationFrames: c.mediaDurationFrames ?? clipDur,
+          mediaOffsetFrames: c.mediaOffsetFrames ?? 0,
+          // Backfill mediaId: pre-media-window scenes keyed audio
+          // bytes in the C++ helper by the (then-unsplit) clipId, so
+          // the clip's own id IS the correct media key for old data.
+          mediaId: c.mediaId ?? c.id,
+        };
+      }),
     }));
     skipNextSave.current = true;
     setNextClipId(Math.max(1, parsed.nextClipId | 0));
     useStore.setState({ videoTracks, audioTracks });
 
-    // Fetch persisted audio binaries for any audio clips we don't
-    // already have in memory. Each fetch is async + independent; we
-    // don't block the load on them (the clips render fine before
-    // playback is requested; useAudioPlayback will await per-clip).
+    // Fetch persisted audio binaries for any audio MEDIA we don't
+    // already have in memory. Keyed by mediaId so split halves
+    // (which share one media) only trigger a single fetch. Each
+    // fetch is async + independent; we don't block the load on them.
+    const seenMedia = new Set<number>();
     for (const t of audioTracks) {
       for (const c of t.clips) {
-        if (!hasAudio(c.id)) {
-          void fetchAudio(c.id);
+        const mediaId = c.mediaId ?? c.id;
+        if (seenMedia.has(mediaId)) continue;
+        seenMedia.add(mediaId);
+        if (!hasAudio(mediaId)) {
+          void fetchAudio(mediaId);
         }
       }
     }
@@ -197,6 +235,8 @@ function saveToHost() {
         filePath: c.filePath,
         peakLevels: c.peakLevels,
         peakAbsMax: c.peakAbsMax,
+        mediaDurationFrames: c.mediaDurationFrames,
+        mediaOffsetFrames: c.mediaOffsetFrames,
       })),
     })),
     audioTracks: s.audioTracks.map((t) => ({
@@ -214,6 +254,9 @@ function saveToHost() {
         filePath: c.filePath,
         peakLevels: c.peakLevels,
         peakAbsMax: c.peakAbsMax,
+        mediaDurationFrames: c.mediaDurationFrames,
+        mediaOffsetFrames: c.mediaOffsetFrames,
+        mediaId: c.mediaId,
       })),
     })),
     nextClipId: getNextClipId(),

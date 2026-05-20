@@ -1,6 +1,13 @@
 import { create } from 'zustand';
 
-export type ToolId = 'select' | 'razor' | 'pen' | 'range';
+/** Magnetic-snap pull distance in screen pixels. Mirrors Python's
+ *  SNAP_PIXEL_RADIUS = 8 (sb_canvas.py:229). Shared by every snap
+ *  gesture — clip body drag, trim, roll, playhead scrub, razor — so
+ *  they all feel identical. Callers convert to a frame count via the
+ *  current pxPerFrame. */
+export const SNAP_PIXEL_RADIUS = 8;
+
+export type ToolId = 'select' | 'razor' | 'pen' | 'slip';
 export type ClipState = 'unselected' | 'selected' | 'orphaned' | 'orphaned-selected' | 'locked';
 
 export interface Clip {
@@ -37,6 +44,32 @@ export interface Clip {
    *  level (0..127). The waveform renderer divides by this for
    *  auto-gain so quiet material fills the lane height. */
   peakAbsMax?: number;
+  /** AUDIO MEDIA-WINDOW MODEL. An audio clip is a *window* onto a
+   *  fixed media timeline, not a container that rescales its content.
+   *
+   *  `mediaDurationFrames` — the source file's full length in doc
+   *  frames. The peak pyramid maps across THIS span, not the clip's
+   *  visible width.
+   *
+   *  `mediaOffsetFrames` — how many doc-frames into the media the
+   *  clip's `inFrame` sits. 0 = clip head is media head. Left-trim
+   *  increases it (head slides into the media); split carries it to
+   *  the right half; the slip tool slides it freely.
+   *
+   *  The renderer shows the media slice [mediaOffsetFrames,
+   *  mediaOffsetFrames + (outFrame - inFrame)] — so cutting / trimming
+   *  reveals a different part of the same waveform instead of
+   *  rescaling it. Mirrors Python's `trim_start_audio_frames`
+   *  (sb_audio_track.py:78). Undefined on video clips. */
+  mediaDurationFrames?: number;
+  mediaOffsetFrames?: number;
+  /** Stable identifier for the underlying audio media. The audio
+   *  blob (audioStore) and the persisted bytes (C++ helper) are keyed
+   *  by THIS, not by `id` — so when a clip is split, both halves
+   *  share the same media and the audio is neither re-uploaded nor
+   *  re-decoded. Set once on import; carried verbatim to both halves
+   *  of every split via the object spread. Undefined on video. */
+  mediaId?: number;
 }
 
 /** One clip captured to the timeline-local clipboard. Snapshots the
@@ -127,6 +160,20 @@ export interface State {
   // rail. Default on.
   audioScrub: boolean;
 
+  // Snap-to-edge toggle (utilities strip "Snap" button). When OFF,
+  // body/trim/roll drags are free of magnetic pull. When ON, they
+  // snap to nearby edit points within SNAP_PIXEL_RADIUS px. Shift
+  // (ripple) overrides snap regardless of this flag, matching
+  // Python's `_qualifier_mode` (sb_canvas.py:344). Default OFF to
+  // mirror Python's `_snap_enabled = False`.
+  snapEnabled: boolean;
+
+  // Frame numbers a currently-in-flight drag has snapped to. Drives
+  // the yellow vertical indicator lines (SnapIndicators overlay).
+  // Empty when no drag is active or the drag is outside the snap
+  // radius. Cleared on pointer-end.
+  snapIndicatorFrames: number[];
+
   // Tracks. Index 0 = closest to the V/A divider (V1 / A1). New tracks
   // are added at the outer ends. Auto-create / auto-remove on clip
   // drag rather than via explicit UI buttons (see memory
@@ -142,6 +189,12 @@ export interface State {
   // class on the source ShotBlock (z-index lift + grabbing cursor) and
   // lets the drag-from-clip path coexist with OM-drop's dragPreview.
   dragClip: { clipId: number; fromTrackId: string } | null;
+
+  // True while a slip drag is in progress. The Lane's edge-hover
+  // detection checks this and pauses — otherwise it keeps running
+  // during the slip and leaves `cursorMode`/`is-edge-*` in a stuck
+  // state when the slip ends, which jams the cursor.
+  slipDragging: boolean;
 
   // Spawn-zone hint shown while dragging. Non-null when resolveLane
   // resolved to a `spawn` target on the current pointermove. The
@@ -169,6 +222,13 @@ export interface State {
   // on a clip, or razor tool not active). Set by ShotBlock
   // pointermove, cleared by pointerleave.
   razorHoverX: number | null;
+
+  // Vertical extent (viewport-relative px) of the clip the razor is
+  // currently hovering. The cut-line overlay paints a brighter/
+  // thicker segment between these Y values — the part of the line
+  // that will actually slice — while the rest stays faint. Null when
+  // no clip is hovered. Published alongside razorHoverX by ShotBlock.
+  razorHoverClipBand: { top: number; bottom: number } | null;
 
   // Per-clip edge hover. Keyed as `${clipId}:left` / `${clipId}:right`.
   // The Lane computes this on pointermove — when the cursor is at a
@@ -213,6 +273,8 @@ export interface State {
   setVaShare: (share: number) => void;
   setActiveTool: (tool: ToolId) => void;
   setAudioScrub: (on: boolean) => void;
+  setSnapEnabled: (on: boolean) => void;
+  setSnapIndicatorFrames: (frames: number[]) => void;
   setScrubFrame: (frame: number | null) => void;
 
   /** Append a clip to the named track (e.g. 'V1' or 'A2'). Returns
@@ -231,8 +293,9 @@ export interface State {
 
   setDragPreview: (preview: DragPreview | null) => void;
   setEdgeHover: (edges: Set<string>) => void;
-  setRazorHoverX: (x: number | null) => void;
+  setRazorHoverX: (x: number | null, clipBand?: { top: number; bottom: number } | null) => void;
   setDragClip: (drag: { clipId: number; fromTrackId: string } | null) => void;
+  setSlipDragging: (on: boolean) => void;
   setSpawnGhost: (ghost: { side: 'video' | 'audio'; trackId: string } | null) => void;
   /** Update the selection. additive=false replaces with just `clipId`
    *  (or clears, if null). additive=true toggles `clipId` in the set
@@ -297,6 +360,19 @@ export interface State {
     wantFrame: number,
     mode?: 'replace' | 'ripple',
   ) => { inFrame: number; outFrame: number } | null;
+
+  /** Slip an audio clip: slide the media window underneath it without
+   *  moving the clip on the timeline. `inFrame`/`outFrame` are
+   *  untouched; `mediaOffsetFrames` is set to `wantOffset`, clamped to
+   *  [0, mediaDurationFrames - clipDuration] so the window stays
+   *  fully inside the source. Mirrors Python `_drag_audio_slip`
+   *  (sb_canvas_audio.py:1742). No-op on video clips or clips with no
+   *  media-window data. Returns the clamped offset, or null. */
+  slipClip: (
+    clipId: number,
+    trackId: string,
+    wantOffset: number,
+  ) => { mediaOffsetFrames: number } | null;
 
   /** Rolling edit at a seam. `leftClipId` and `rightClipId` are two
    *  adjacent clips on the same track where leftClip.outFrame ==
@@ -375,6 +451,13 @@ export interface State {
 let nextClipId = 1;
 export function getNextClipId(): number { return nextClipId; }
 export function setNextClipId(n: number): void { nextClipId = n; }
+
+/** Mint a fresh id from the shared monotonic counter. Used for both
+ *  clip ids and media ids — drawing from one counter guarantees a
+ *  media id never collides with a clip id, which matters because the
+ *  C++ helper keys audio bytes by `BCKEY_V2_AUDIO_BASE + <number>`
+ *  and that number is the media id. */
+export function mintId(): number { return nextClipId++; }
 
 /** Place a new clip on the timeline without overlapping existing clips.
  *  Used by the OM-drop path (new clips coming in from C++), which still
@@ -486,14 +569,20 @@ export function findFreeSlot(
  *  `editPoints` is the set of magnet targets (other clips' inFrame and
  *  outFrame on the destination track, plus optional extras like the
  *  playhead and cross-track edges). Mirrors Python's
- *  `_magnetic_snap_position` in sb_shot_model.py. */
+ *  `_magnetic_snap_position` in sb_shot_model.py.
+ *
+ *  Returns `{ inFrame, targets }`. `targets` is the edit point(s) the
+ *  snapped clip's left/right edge landed on — used by the canvas to
+ *  draw yellow snap-indicator lines. Empty when no snap occurred. */
 export function magneticSnap(
   desiredInFrame: number,
   duration: number,
   editPoints: number[],
   snapFrames: number,
-): number {
-  if (!editPoints.length || snapFrames <= 0) return desiredInFrame;
+): { inFrame: number; targets: number[] } {
+  if (!editPoints.length || snapFrames <= 0) {
+    return { inFrame: desiredInFrame, targets: [] };
+  }
   const desiredOutFrame = desiredInFrame + duration;
   let best: { inFrame: number; dist: number } | null = null;
   for (const p of editPoints) {
@@ -508,7 +597,18 @@ export function magneticSnap(
       best = { inFrame: p - duration, dist: dRight };
     }
   }
-  return best ? best.inFrame : desiredInFrame;
+  if (!best) return { inFrame: desiredInFrame, targets: [] };
+  // Report every edit point the snapped clip's left OR right edge
+  // lands on, so the canvas can draw an indicator at each. Mirrors
+  // Python `_magnetic_snap_position` (sb_shot_model.py:184).
+  const snappedIn  = best.inFrame;
+  const snappedOut = snappedIn + duration;
+  const targets: number[] = [];
+  if (editPoints.includes(snappedIn)) targets.push(snappedIn);
+  if (snappedOut !== snappedIn && editPoints.includes(snappedOut)) {
+    targets.push(snappedOut);
+  }
+  return { inFrame: snappedIn, targets };
 }
 
 /** Apply Python's "ripple" overlap resolution to a track's clip list.
@@ -646,15 +746,19 @@ export const useStore = create<State>((set) => ({
   vaShare: 0.5,
   activeTool: 'select',
   audioScrub: true,
+  snapEnabled: false,
+  snapIndicatorFrames: [],
   videoTracks: [{ id: 1, name: 'Video 1', clips: [] }],
   audioTracks: [{ id: 1, name: 'Audio 1', clips: [] }],
   dragPreview: null,
   dragClip: null,
+  slipDragging: false,
   spawnGhost: null,
   selectedClipIds: new Set<number>(),
   marquee: null,
   edgeHover: new Set<string>(),
   razorHoverX: null,
+  razorHoverClipBand: null,
   clipboard: [],
   contextMenu: null,
 
@@ -705,10 +809,22 @@ export const useStore = create<State>((set) => ({
 
   setActiveTool: (tool) => set({ activeTool: tool }),
   setAudioScrub: (on) => set({ audioScrub: on }),
+  setSnapEnabled: (on) => set({ snapEnabled: on }),
+  setSnapIndicatorFrames: (frames) => set((s) => {
+    // Reference-equality skip — pointermove fires every frame at a
+    // rate of hundreds per second; if the indicator set didn't
+    // change, avoid waking subscribers (SnapIndicators re-renders).
+    if (s.snapIndicatorFrames.length === frames.length &&
+        s.snapIndicatorFrames.every((v, i) => v === frames[i])) {
+      return {};
+    }
+    return { snapIndicatorFrames: frames };
+  }),
 
   setDragPreview: (preview) => set({ dragPreview: preview }),
 
   setDragClip: (drag) => set({ dragClip: drag }),
+  setSlipDragging: (on) => set({ slipDragging: on }),
   setSpawnGhost: (ghost) => set((s) => {
     const a = s.spawnGhost;
     if (a === ghost) return s;
@@ -832,6 +948,19 @@ export const useStore = create<State>((set) => ({
       }
       const target = { id: clipId, inFrame: newIn, outFrame: newOut };
       const resized: Clip = { ...clip, inFrame: newIn, outFrame: newOut };
+      // Media-window (audio only): a left-edge trim slides the
+      // window's head into the media by the same delta inFrame moved,
+      // so the waveform under the clip stays put — we just reveal
+      // less / more of the head. A right-edge trim only moves
+      // outFrame; the window start is unchanged. We establish both
+      // fields even if the parent lacked them (un-migrated old clip).
+      if (side === 'audio') {
+        const parentOffset = clip.mediaOffsetFrames ?? 0;
+        resized.mediaDurationFrames = clip.mediaDurationFrames ?? (clip.outFrame - clip.inFrame);
+        resized.mediaOffsetFrames = edge === 'left'
+          ? parentOffset + (newIn - clip.inFrame)
+          : parentOffset;
+      }
       const resolve = mode === 'ripple' ? rippleAround : replaceOverlap;
       const next = tracks.map((t, i) => {
         if (i !== trackIdx) return t;
@@ -841,6 +970,44 @@ export const useStore = create<State>((set) => ({
       });
       result = { inFrame: newIn, outFrame: newOut };
       return side === 'video' ? { videoTracks: next } : { audioTracks: next };
+    });
+    return result;
+  },
+
+  slipClip: (clipId, trackId, wantOffset) => {
+    // Slip only applies to audio (it slides the media window). Video
+    // clips have no media-window — bail.
+    if (!trackId.startsWith('A')) return null;
+    const trackNum = parseInt(trackId.slice(1), 10);
+    let result: { mediaOffsetFrames: number } | null = null;
+    set((s) => {
+      const trackIdx = s.audioTracks.findIndex((t) => t.id === trackNum);
+      if (trackIdx < 0) return s;
+      const clip = s.audioTracks[trackIdx].clips.find((c) => c.id === clipId);
+      if (!clip) return s;
+      if (clip.locked || clip.state === 'locked') return s;
+      const clipDur = clip.outFrame - clip.inFrame;
+      const mediaDur = clip.mediaDurationFrames ?? clipDur;
+      // The window [offset, offset + clipDur] must stay inside the
+      // media [0, mediaDur]. Clamp accordingly — a slip past either
+      // end just stalls, mirroring Python's hard clamp
+      // (sb_canvas_audio.py:1790-1793).
+      const maxOffset = Math.max(0, mediaDur - clipDur);
+      const clamped = Math.max(0, Math.min(maxOffset, Math.round(wantOffset)));
+      if (clamped === (clip.mediaOffsetFrames ?? 0)) {
+        result = { mediaOffsetFrames: clamped };
+        return s;
+      }
+      const next = s.audioTracks.map((t, i) => {
+        if (i !== trackIdx) return t;
+        return {
+          ...t,
+          clips: t.clips.map((c) =>
+            c.id === clipId ? { ...c, mediaOffsetFrames: clamped } : c),
+        };
+      });
+      result = { mediaOffsetFrames: clamped };
+      return { audioTracks: next };
     });
     return result;
   },
@@ -1006,6 +1173,22 @@ export const useStore = create<State>((set) => ({
       const rightId = nextClipId++;
       const left: Clip = { ...clip, outFrame: f };
       const right: Clip = { ...clip, id: rightId, inFrame: f };
+      // Media-window: split is only meaningful for audio clips (they
+      // carry a waveform). For audio, the left half keeps the
+      // parent's window start; the right half's window starts
+      // (f - inFrame) frames deeper into the media — so both halves
+      // keep showing their original slice instead of rescaling.
+      // We establish BOTH fields even when the parent lacks them
+      // (un-migrated old clip): a never-edited clip's full span IS
+      // its media span at offset 0. Video clips: left untouched.
+      if (side === 'audio') {
+        const parentOffset = clip.mediaOffsetFrames ?? 0;
+        const parentMediaDur = clip.mediaDurationFrames ?? (clip.outFrame - clip.inFrame);
+        left.mediaOffsetFrames = parentOffset;
+        left.mediaDurationFrames = parentMediaDur;
+        right.mediaOffsetFrames = parentOffset + (f - clip.inFrame);
+        right.mediaDurationFrames = parentMediaDur;
+      }
       const next = tracks.map((t, i) => {
         if (i !== trackIdx) return t;
         return {
@@ -1024,7 +1207,15 @@ export const useStore = create<State>((set) => ({
     return newRightId;
   },
 
-  setRazorHoverX: (x) => set((s) => (s.razorHoverX === x ? s : { razorHoverX: x })),
+  setRazorHoverX: (x, clipBand = null) => set((s) => {
+    const bandSame =
+      (s.razorHoverClipBand == null && clipBand == null) ||
+      (s.razorHoverClipBand != null && clipBand != null &&
+        s.razorHoverClipBand.top === clipBand.top &&
+        s.razorHoverClipBand.bottom === clipBand.bottom);
+    if (s.razorHoverX === x && bandSame) return s;
+    return { razorHoverX: x, razorHoverClipBand: clipBand };
+  }),
 
   copyClips: (clipIds) => {
     if (clipIds.size === 0) return;

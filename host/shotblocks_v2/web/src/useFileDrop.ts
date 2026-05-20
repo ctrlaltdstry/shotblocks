@@ -1,5 +1,5 @@
 import { useEffect } from 'react';
-import { useStore, type DragPreview } from './store';
+import { useStore, mintId, type DragPreview } from './store';
 import { computePeaks } from './lib/peaks';
 import { addAudio } from './lib/audioStore';
 
@@ -147,6 +147,9 @@ export function useFileDrop(): void {
         const durationFrames = Number.isFinite(seconds) && seconds > 0
           ? Math.max(1, Math.round(seconds * fps))
           : FALLBACK_DURATION_FRAMES;
+        // Mint the media id up front so the audio blob can be keyed by
+        // it; both halves of any future split share this id.
+        const mediaId = mintId();
         const newId = useStore.getState().addClip(lane.trackId, {
           inFrame: lane.inFrame,
           outFrame: lane.inFrame + durationFrames,
@@ -159,15 +162,22 @@ export function useFileDrop(): void {
           // carry the visual representation across save/load even
           // though the source binary doesn't.
           filePath: '',
+          // Media-window: a fresh import covers the whole file, so the
+          // clip's full duration IS the media duration and the window
+          // starts at media frame 0. Cut/trim/slip later move the
+          // window within this fixed media span.
+          mediaDurationFrames: durationFrames,
+          mediaOffsetFrames: 0,
+          mediaId,
         });
         // Decode + summarize in parallel so the clip appears
         // immediately and the waveform fills in once decode finishes
         // (~200-400ms for a 5-min file).
         if (newId != null) {
-          // Push the binary to the audio store + C++ helper so it
-          // rides along with the doc save. Awaited so the bytes are
-          // safely persisted before any subsequent save-state.
-          void addAudio(newId, file);
+          // Push the binary to the audio store + C++ helper keyed by
+          // mediaId (not clipId) so it rides along with the doc save
+          // and split halves can share it.
+          void addAudio(mediaId, file);
           computePeaks(file).then((result) => {
             if (!result) return;
             useStore.getState().setClipPeaks(

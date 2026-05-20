@@ -1,5 +1,5 @@
 import { useRef, useState } from 'react';
-import { useStore, magneticSnap } from '../store';
+import { useStore, magneticSnap, SNAP_PIXEL_RADIUS } from '../store';
 import type { Track } from '../store';
 import { ShotBlock } from './ShotBlock';
 import { useElementSize } from '../useElementSize';
@@ -29,11 +29,6 @@ const THIN_THRESHOLD_PX = 32;
  *  below. */
 const EDGE_PX = 24;
 
-/** Pixel radius for magnetic snap during trim drag. Mirrors Python's
- *  SNAP_PIXEL_RADIUS = 8 (sb_canvas.py:229) — same value the clip body
- *  drag uses, kept consistent so trim and drag feel the same. */
-const SNAP_PIXEL_RADIUS = 8;
-
 export function Lane({ track, side }: { track: Track; side: 'video' | 'audio' }) {
   const laneRef = useRef<HTMLDivElement | null>(null);
   const { height: laneHeight } = useElementSize(laneRef);
@@ -41,6 +36,7 @@ export function Lane({ track, side }: { track: Track; side: 'video' | 'audio' })
   const setEdgeHover = useStore((s) => s.setEdgeHover);
   const setSelectedClip = useStore((s) => s.setSelectedClip);
   const resizeClip = useStore((s) => s.resizeClip);
+  const setSnapIndicatorFrames = useStore((s) => s.setSnapIndicatorFrames);
   const [cursorMode, setCursorMode] = useState<CursorMode>('default');
   const visibleSpan = Math.max(1, h.vMax - h.vMin);
   const thin = laneHeight > 0 && laneHeight < THIN_THRESHOLD_PX;
@@ -84,6 +80,15 @@ export function Lane({ track, side }: { track: Track; side: 'video' | 'audio' })
     }
     if (rollRef.current && rollRef.current.active) {
       onRollPointerMove(ev);
+      return;
+    }
+    // While a slip drag is in progress, do NOT run edge-hover
+    // detection. It would set cursorMode='trim' + an inline cursor on
+    // the lane and is-edge-* on the clip; when the slip ends those
+    // are left stuck, jamming the cursor for the whole lane. Keep the
+    // lane in default cursor mode and clear any edge-hover.
+    if (useStore.getState().slipDragging) {
+      if (cursorMode !== 'default') setCursorMode('default');
       return;
     }
     const rect = ev.currentTarget.getBoundingClientRect();
@@ -290,16 +295,22 @@ export function Lane({ track, side }: { track: Track; side: 'video' | 'audio' })
       }
     }
     editPoints.push(state.scrubFrame ?? state.currentFrame);
-    const snapFrames = Math.max(1, SNAP_PIXEL_RADIUS / t.pxPerFrame);
+    // Snap gating: off when the Snap toggle is off, OR when Shift is
+    // held (ripple overrides snap regardless of toggle, per Python
+    // `_qualifier_mode` sb_canvas.py:344). snapFrames=0 short-circuits
+    // magneticSnap to a no-op.
+    const snapActive = state.snapEnabled && !ev.shiftKey;
+    const snapFrames = snapActive ? Math.max(1, SNAP_PIXEL_RADIUS / t.pxPerFrame) : 0;
     // For a single-edge snap, snap the edge's want-frame directly to
     // the nearest edit point; treat duration as 0 so magneticSnap
     // doesn't try to also snap the OTHER edge.
-    const snappedWant = magneticSnap(rawWant, 0, editPoints, snapFrames);
+    const snap = magneticSnap(rawWant, 0, editPoints, snapFrames);
+    setSnapIndicatorFrames(snap.targets);
     // Shift held during trim → ripple mode (push same-track neighbors
     // aside instead of overwriting them). Live: tapping Shift mid-drag
     // toggles the mode in real time, mirroring Premiere/Resolve.
     const mode = ev.shiftKey ? 'ripple' : 'replace';
-    resizeClip(t.clipId, trackId, t.edge, snappedWant, mode);
+    resizeClip(t.clipId, trackId, t.edge, snap.inFrame, mode);
   }
 
   function onTrimPointerEnd(ev: React.PointerEvent<HTMLDivElement>) {
@@ -307,6 +318,7 @@ export function Lane({ track, side }: { track: Track; side: 'video' | 'audio' })
     if (!t || !t.active) return;
     t.active = false;
     trimRef.current = null;
+    setSnapIndicatorFrames([]);
     try { ev.currentTarget.releasePointerCapture(ev.pointerId); } catch { /* noop */ }
   }
 
@@ -330,9 +342,12 @@ export function Lane({ track, side }: { track: Track; side: 'video' | 'audio' })
       }
     }
     editPoints.push(state.scrubFrame ?? state.currentFrame);
-    const snapFrames = Math.max(1, SNAP_PIXEL_RADIUS / r.pxPerFrame);
-    const snappedSeam = magneticSnap(rawSeam, 0, editPoints, snapFrames);
-    rollEdit(r.leftClipId, r.rightClipId, trackId, snappedSeam);
+    // Same gating as trim — Snap toggle off OR Shift held → no snap.
+    const snapActive = state.snapEnabled && !ev.shiftKey;
+    const snapFrames = snapActive ? Math.max(1, SNAP_PIXEL_RADIUS / r.pxPerFrame) : 0;
+    const snap = magneticSnap(rawSeam, 0, editPoints, snapFrames);
+    setSnapIndicatorFrames(snap.targets);
+    rollEdit(r.leftClipId, r.rightClipId, trackId, snap.inFrame);
   }
 
   function onRollPointerEnd(ev: React.PointerEvent<HTMLDivElement>) {
@@ -340,6 +355,7 @@ export function Lane({ track, side }: { track: Track; side: 'video' | 'audio' })
     if (!r || !r.active) return;
     r.active = false;
     rollRef.current = null;
+    setSnapIndicatorFrames([]);
     try { ev.currentTarget.releasePointerCapture(ev.pointerId); } catch { /* noop */ }
   }
 
