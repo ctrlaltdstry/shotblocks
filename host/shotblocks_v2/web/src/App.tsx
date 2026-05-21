@@ -28,6 +28,7 @@ import { MarqueeOverlay } from './components/MarqueeOverlay';
 import { CutLineOverlay } from './components/CutLineOverlay';
 import { SnapIndicators } from './components/SnapIndicators';
 import { BeatGrid } from './components/BeatGrid';
+import { BeatDotsOverlay } from './components/BeatDotsOverlay';
 import { ContextMenu } from './components/ContextMenu';
 import { RangeDim } from './components/RangeDim';
 import { SpawnGhostLane } from './components/SpawnGhostLane';
@@ -776,6 +777,9 @@ function App() {
             <DropGhost lanesAreaRef={lanesAreaRef} />
             <MarqueeOverlay />
           </div>
+          {/* Beat-grid connector dots — stage-level overlay ABOVE the
+              clips (the grid LINES are behind them). */}
+          <BeatDotsOverlay />
           {/* Playhead lives at the .stage level (sibling of lanes-area)
               rather than INSIDE lanes-area, so it isn't blocked by the
               per-lane stacking contexts that `transform: translateY(...)`

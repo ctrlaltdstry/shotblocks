@@ -717,6 +717,16 @@ body.va-splitter-hover .stack__divider.is-grabbable,
   z-index: 0;
   overflow: hidden;
 }
+/* The connector dots — a separate overlay ABOVE the clips (z:4, under
+   the playhead at z:5) so the dots paint on top of the opaque clip
+   bodies. The grid LINES stay behind, at z:0. */
+.beat-dots-overlay {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  z-index: 4;
+  overflow: hidden;
+}
 .beat-grid-line {
   position: absolute;
   top: 0;
@@ -748,30 +758,30 @@ body.va-splitter-hover .stack__divider.is-grabbable,
   z-index: 1;
 }
 
-/* Beat-grid connector dots — small circles on an audio clip's BOTTOM
-   edge, one per bar downbeat. They link the clip to the beat-grid
-   lines running behind it (Final Cut Pro model). Bottom edge keeps
-   them clear of the track name + the V/A splitter bar. Sit just
-   inside the edge so the lane's overflow:hidden doesn't clip them. */
-.beat-dots {
-  position: absolute;
-  bottom: 0; left: 0; right: 0;
-  height: 0;
-  pointer-events: none;
-  z-index: 6;
-}
+/* Beat-grid connector dot — one per (LOD-surviving) bar line, drawn
+   by BeatDotsOverlay at the bar line's exact X. `left`/`top` are set
+   inline (`top` = audio region's BOTTOM edge); the transform centres
+   horizontally and pulls the dot up so it sits inset inside the clip
+   above the bottom edge. */
 .beat-dot {
   position: absolute;
-  bottom: 0;
-  width: 5px;
-  height: 5px;
-  margin-left: -2.5px;
+  width: 6px;
+  height: 6px;
   border-radius: 50%;
   background: var(--color-beat-grid);
   box-shadow: 0 0 0 1.5px rgba(0, 0, 0, 0.35);
-  /* Centre the dot ON the clip's bottom edge — half above, half
-     below — so it reads as hovering on the edge, not inset. */
-  transform: translateY(50%);
+  transform: translate(-50%, -11px);
+  z-index: 6;
+}
+/* Song-part dot — FCP-style hollow ring: dark centre, light outline.
+   Distinguishes the structural markers from the solid bar dots. */
+.beat-dot--songpart {
+  background: var(--color-grey-10);
+  border: 1.5px solid var(--color-beat-grid);
+  /* Slightly larger so the ring reads clearly. */
+  width: 8px;
+  height: 8px;
+  transform: translate(-50%, -12px);
 }
 .lane {
   flex: 0 0 var(--track-h);
