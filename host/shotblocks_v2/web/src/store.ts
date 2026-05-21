@@ -679,8 +679,16 @@ export function audioPeakDocFrames(state: State): number[] {
  *  (every 4th beat, 4/4 assumption) or an interim beat. Used by the
  *  BeatGrid overlay to draw the FCP-style two-tier grid: solid lines
  *  for bars, dashed for interim beats. Bar parity uses the grid's
- *  `barOffset` so the downbeats stay locked to the tracked beat 0. */
-export function audioBeatLines(state: State): { frame: number; isBar: boolean }[] {
+ *  `barOffset` so the downbeats stay locked to the tracked beat 0.
+ *
+ *  `inFrameOverride` lets a caller substitute a clip's live position
+ *  for its committed `inFrame` — used while a clip is being dragged
+ *  (it moves via CSS transform, no store commit) so its beat lines
+ *  travel with it instead of jumping on release. */
+export function audioBeatLines(
+  state: State,
+  inFrameOverride?: Map<number, number>,
+): { frame: number; isBar: boolean }[] {
   const out: { frame: number; isBar: boolean }[] = [];
   const fps = state.fps > 0 ? state.fps : 30;
   for (const t of state.audioTracks) {
@@ -688,12 +696,14 @@ export function audioBeatLines(state: State): { frame: number; isBar: boolean }[
       const peaks = c.audioPeaks;
       const sr = c.audioPeaksSampleRate;
       if (!peaks || !peaks.length || !sr || sr <= 0) continue;
+      const inFrame = inFrameOverride?.get(c.id) ?? c.inFrame;
+      const outFrame = inFrame + (c.outFrame - c.inFrame);
       const offset = c.mediaOffsetFrames ?? 0;
       const barOffset = c.audioBeatGrid?.barOffset ?? 0;
       const fpr = fps / sr;
       for (let i = 0; i < peaks.length; i++) {
-        const docFrame = c.inFrame + (peaks[i] * fpr - offset);
-        if (docFrame >= c.inFrame && docFrame <= c.outFrame) {
+        const docFrame = inFrame + (peaks[i] * fpr - offset);
+        if (docFrame >= inFrame && docFrame <= outFrame) {
           out.push({ frame: docFrame, isBar: (i - barOffset) % 4 === 0 });
         }
       }
@@ -704,8 +714,12 @@ export function audioBeatLines(state: State): { frame: number; isBar: boolean }[
 
 /** Song-part boundary positions as DOC frames, across all audio
  *  clips. The FCP "heavy line" tier — big structural transitions.
- *  Same media-space→doc-frame mapping as the beats. */
-export function audioSongPartLines(state: State): number[] {
+ *  Same media-space→doc-frame mapping as the beats. `inFrameOverride`
+ *  substitutes a clip's live drag position (see `audioBeatLines`). */
+export function audioSongPartLines(
+  state: State,
+  inFrameOverride?: Map<number, number>,
+): number[] {
   const out: number[] = [];
   const fps = state.fps > 0 ? state.fps : 30;
   for (const t of state.audioTracks) {
@@ -713,11 +727,13 @@ export function audioSongPartLines(state: State): number[] {
       const parts = c.audioSongParts;
       const sr = c.audioPeaksSampleRate;
       if (!parts || !parts.length || !sr || sr <= 0) continue;
+      const inFrame = inFrameOverride?.get(c.id) ?? c.inFrame;
+      const outFrame = inFrame + (c.outFrame - c.inFrame);
       const offset = c.mediaOffsetFrames ?? 0;
       const fpr = fps / sr;
       for (let i = 0; i < parts.length; i++) {
-        const docFrame = c.inFrame + (parts[i] * fpr - offset);
-        if (docFrame >= c.inFrame && docFrame <= c.outFrame) {
+        const docFrame = inFrame + (parts[i] * fpr - offset);
+        if (docFrame >= inFrame && docFrame <= outFrame) {
           out.push(docFrame);
         }
       }
@@ -1110,10 +1126,28 @@ export const useStore = create<State>((set) => ({
       if (!clip) return s;
       let newIn = clip.inFrame;
       let newOut = clip.outFrame;
+      // Audio clips are a fixed window onto their media — trimming
+      // can only REVEAL media that exists, never stretch past it.
+      // The visible window [mediaOffset, mediaOffset + clipDuration]
+      // must stay inside [0, mediaDurationFrames]:
+      //   - left edge can't move earlier than `mediaOffset` frames
+      //     before the current head (that's media frame 0).
+      //   - right edge can't move past the media's tail.
+      let minIn = 0;
+      let maxOut = Infinity;
+      if (side === 'audio') {
+        const mediaOffset = clip.mediaOffsetFrames ?? 0;
+        const clipDur = clip.outFrame - clip.inFrame;
+        const mediaDur = clip.mediaDurationFrames ?? clipDur;
+        minIn = clip.inFrame - mediaOffset;
+        maxOut = clip.inFrame - mediaOffset + mediaDur;
+      }
       if (edge === 'left') {
-        newIn = Math.max(0, Math.min(wantFrame, clip.outFrame - MIN_CLIP_FRAMES));
+        newIn = Math.max(minIn,
+          Math.max(0, Math.min(wantFrame, clip.outFrame - MIN_CLIP_FRAMES)));
       } else {
-        newOut = Math.max(clip.inFrame + MIN_CLIP_FRAMES, wantFrame);
+        newOut = Math.min(maxOut,
+          Math.max(clip.inFrame + MIN_CLIP_FRAMES, wantFrame));
       }
       if (newIn === clip.inFrame && newOut === clip.outFrame) {
         result = { inFrame: newIn, outFrame: newOut };

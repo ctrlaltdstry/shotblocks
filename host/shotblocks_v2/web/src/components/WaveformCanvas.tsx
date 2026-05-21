@@ -215,7 +215,9 @@ export function WaveformCanvas({ clip }: { clip: Clip }) {
 
     const absMax = clip.peakAbsMax && clip.peakAbsMax > 0 ? clip.peakAbsMax : 127;
     const DB_FLOOR = -60;
-    const halfH = h * 0.45;
+    // The waveform spans the middle 60% of the clip height — 20%
+    // padding top + bottom — so it never reaches the clip edges.
+    const halfH = h * 0.30;
     function ampToY(v: number): number {
       const aLin = Math.abs(v) / absMax;
       if (aLin <= 0) return 0;

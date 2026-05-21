@@ -742,10 +742,9 @@ body.va-splitter-hover .stack__divider.is-grabbable,
 }
 .beat-grid-line.is-songpart {
   /* Song part — the heaviest tier (FCP's structural transitions).
-     2px, drawn over the bar/interim lines. Audio-track green so it
-     reads as belonging to the music. */
+     2px, drawn over the bar/interim lines. */
   background-image: none;
-  background-color: var(--color-timeline-audio);
+  background-color: rgba(255, 255, 255, 0.7);
   width: 2px;
   margin-left: -1px;
   z-index: 1;

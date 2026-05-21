@@ -59,11 +59,16 @@ export function computeBarStride(state: State, width: number): number {
 
 /** Compute the LOD-resolved beat-grid layout for the current zoom.
  *  `width` is the overlay's pixel width; the visible frame window is
- *  read from `state.h`. */
-export function computeBeatGridLayout(state: State, width: number): BeatGridLayout {
+ *  read from `state.h`. `inFrameOverride` substitutes a clip's live
+ *  drag position so its lines travel with it mid-drag. */
+export function computeBeatGridLayout(
+  state: State,
+  width: number,
+  inFrameOverride?: Map<number, number>,
+): BeatGridLayout {
   const h = state.h;
-  const lines = audioBeatLines(state);
-  const songPartFrames = audioSongPartLines(state);
+  const lines = audioBeatLines(state, inFrameOverride);
+  const songPartFrames = audioSongPartLines(state, inFrameOverride);
 
   const visibleSpan = Math.max(1, h.vMax - h.vMin);
   const pxPerFrame = width / visibleSpan;
