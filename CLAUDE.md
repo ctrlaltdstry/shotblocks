@@ -79,7 +79,14 @@ The current `src/` is a flatter `sb_*` module convention rather than the package
 
 ## Commits
 
-Trunk-based on `main`, one commit per milestone. Subject format: `<task-id>: <imperative summary>` (e.g. `v3: cross-track magnetic snap + multi-track lanes`), or topic prefixes `chore:` / `docs:` / `refactor:` for non-task work. Don't commit unless explicitly asked. See `.agent/context/version-control.md` for the full policy and what not to commit.
+Trunk-based on `main`. **One commit per atomic, verified feature or fix** — not one per milestone. An atomic commit is the smallest change that is *complete and leaves the code building and working*; it may touch several files (the Inspector panel = store flags + component + wiring + CSS in one commit) but it is one whole change, never a half-built state.
+
+- **Verify before committing.** A v2 change is only real after a deploy + C4D restart confirms it works. Don't commit unverified work.
+- **One change per commit.** If the subject needs "and" (`add Inspector and fix waveform`), it's two commits. A bug found while building a feature is committed separately, before the feature.
+- **The test:** if you `git checkout` to a commit, the app must build and run. If it wouldn't, the commit is too granular — keep working.
+- A "round" (`round 15`) is a mental milestone unit, not a commit unit — a round is several commits.
+
+Subject format: `<task-id>: <imperative summary>` (one sentence, no "and"), or topic prefixes `chore:` / `docs:` / `refactor:` for non-task work. Don't commit unless explicitly asked. See `.agent/context/version-control.md` for the full policy and what not to commit.
 
 ## Licensing
 
