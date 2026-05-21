@@ -1,18 +1,18 @@
 import { useRef } from 'react';
-import { useStore, audioBeatLines } from '../store';
+import { useStore, audioBeatLines, audioSongPartLines } from '../store';
 import { useElementSize } from '../useElementSize';
 
 /** The detected beat grid, drawn as Final Cut Pro draws it: thin green
  *  vertical lines spanning the whole timeline height (ruler + every
  *  track), NOT painted onto the audio waveform.
  *
- *  Two tiers, matching FCP:
- *    - BAR downbeats (every 4th tracked beat) — solid brighter lines.
+ *  Three tiers, matching FCP:
+ *    - SONG PARTS — big structural transitions; heavy lines.
+ *    - BAR downbeats (every 4th tracked beat) — solid lines.
  *    - interim beats — dashed fainter lines.
  *
- *  Same grid-span overlay pattern as SnapIndicators (grid-column 3,
- *  rows 1-2, pointer-events: none). Shown only while `beatGridVisible`
- *  is on — the Beat Detection button toggles that flag. */
+ *  Shown only while `beatGridVisible` is on — the Beat Detection
+ *  button toggles that flag. */
 export function BeatGrid() {
   const wrapRef = useRef<HTMLDivElement | null>(null);
   const { width } = useElementSize(wrapRef);
@@ -25,10 +25,11 @@ export function BeatGrid() {
 
   if (!visible) return <div className="beat-grid-overlay" ref={wrapRef} />;
 
-  // audioBeatLines reads the live state; audioTracks/fps in the deps
+  // The collectors read the live state; audioTracks/fps in the deps
   // above are only here to retrigger the render.
   void audioTracks; void fps;
   const lines = audioBeatLines(useStore.getState());
+  const songParts = audioSongPartLines(useStore.getState());
 
   const visibleSpan = Math.max(1, h.vMax - h.vMin);
   const pxPerFrame = width / visibleSpan;
@@ -40,8 +41,19 @@ export function BeatGrid() {
         const x = (ln.frame - h.vMin) * pxPerFrame;
         return (
           <div
-            key={i}
+            key={'b' + i}
             className={'beat-grid-line' + (ln.isBar ? ' is-bar' : '')}
+            style={{ left: x + 'px' }}
+          />
+        );
+      })}
+      {songParts.map((frame, i) => {
+        if (frame < h.vMin || frame > h.vMax) return null;
+        const x = (frame - h.vMin) * pxPerFrame;
+        return (
+          <div
+            key={'sp' + i}
+            className="beat-grid-line is-songpart"
             style={{ left: x + 'px' }}
           />
         );

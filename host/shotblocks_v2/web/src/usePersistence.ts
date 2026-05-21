@@ -49,6 +49,7 @@ interface SavedClip {
   audioPeaks?: number[];
   audioPeaksSampleRate?: number;
   audioBeatGrid?: { periodSamples: number; phaseSamples: number; confidence: number; barOffset: number };
+  audioSongParts?: number[];
 }
 interface SavedTrack {
   id: number;
@@ -194,6 +195,7 @@ async function loadFromHost(skipNextSave: React.MutableRefObject<boolean>) {
           audioPeaks: c.audioPeaks,
           audioPeaksSampleRate: c.audioPeaksSampleRate,
           audioBeatGrid: c.audioBeatGrid,
+          audioSongParts: c.audioSongParts,
           // Backfill mediaId: pre-media-window scenes keyed audio
           // bytes in the C++ helper by the (then-unsplit) clipId, so
           // the clip's own id IS the correct media key for old data.
@@ -269,6 +271,7 @@ function saveToHost() {
         audioPeaks: c.audioPeaks,
         audioPeaksSampleRate: c.audioPeaksSampleRate,
         audioBeatGrid: c.audioBeatGrid,
+        audioSongParts: c.audioSongParts,
       })),
     })),
     nextClipId: getNextClipId(),

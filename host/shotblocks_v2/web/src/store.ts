@@ -79,6 +79,10 @@ export interface Clip {
    *  `audioPeaksSampleRate`); `confidence` is 0..1. Undefined when the
    *  autocorrelation didn't land a clear pulse. */
   audioBeatGrid?: { periodSamples: number; phaseSamples: number; confidence: number; barOffset: number };
+  /** Song-part boundaries in media-space audio sample frames — the
+   *  big structural transitions (intro→build→drop). The FCP "heavy
+   *  line" tier. Same sample rate as `audioPeaksSampleRate`. */
+  audioSongParts?: number[];
   /** Stable identifier for the underlying audio media. The audio
    *  blob (audioStore) and the persisted bytes (C++ helper) are keyed
    *  by THIS, not by `id` — so when a clip is split, both halves
@@ -341,6 +345,7 @@ export interface State {
     audioPeaks: number[],
     audioPeaksSampleRate: number,
     audioBeatGrid: { periodSamples: number; phaseSamples: number; confidence: number; barOffset: number } | null,
+    audioSongParts: number[],
   ) => void;
 
   /** Append a clip to the named track (e.g. 'V1' or 'A2'). Returns
@@ -690,6 +695,30 @@ export function audioBeatLines(state: State): { frame: number; isBar: boolean }[
         const docFrame = c.inFrame + (peaks[i] * fpr - offset);
         if (docFrame >= c.inFrame && docFrame <= c.outFrame) {
           out.push({ frame: docFrame, isBar: (i - barOffset) % 4 === 0 });
+        }
+      }
+    }
+  }
+  return out;
+}
+
+/** Song-part boundary positions as DOC frames, across all audio
+ *  clips. The FCP "heavy line" tier — big structural transitions.
+ *  Same media-space→doc-frame mapping as the beats. */
+export function audioSongPartLines(state: State): number[] {
+  const out: number[] = [];
+  const fps = state.fps > 0 ? state.fps : 30;
+  for (const t of state.audioTracks) {
+    for (const c of t.clips) {
+      const parts = c.audioSongParts;
+      const sr = c.audioPeaksSampleRate;
+      if (!parts || !parts.length || !sr || sr <= 0) continue;
+      const offset = c.mediaOffsetFrames ?? 0;
+      const fpr = fps / sr;
+      for (let i = 0; i < parts.length; i++) {
+        const docFrame = c.inFrame + (parts[i] * fpr - offset);
+        if (docFrame >= c.inFrame && docFrame <= c.outFrame) {
+          out.push(docFrame);
         }
       }
     }
@@ -1640,7 +1669,7 @@ export const useStore = create<State>((set) => ({
   setDetectingBeats: (on) => set({ detectingBeats: on }),
   setBeatGridVisible: (on) => set({ beatGridVisible: on }),
 
-  setClipAudioPeaks: (mediaId, audioPeaks, audioPeaksSampleRate, audioBeatGrid) => {
+  setClipAudioPeaks: (mediaId, audioPeaks, audioPeaksSampleRate, audioBeatGrid, audioSongParts) => {
     set((s) => {
       const patch = (tracks: Track[]) => tracks.map((t) => {
         if (!t.clips.some((c) => (c.mediaId ?? c.id) === mediaId)) return t;
@@ -1649,7 +1678,8 @@ export const useStore = create<State>((set) => ({
           clips: t.clips.map((c) =>
             (c.mediaId ?? c.id) === mediaId
               ? { ...c, audioPeaks, audioPeaksSampleRate,
-                  audioBeatGrid: audioBeatGrid ?? undefined }
+                  audioBeatGrid: audioBeatGrid ?? undefined,
+                  audioSongParts }
               : c),
         };
       });

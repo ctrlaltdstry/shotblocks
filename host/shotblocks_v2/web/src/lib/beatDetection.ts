@@ -55,16 +55,18 @@ export async function runBeatDetection(): Promise<void> {
       // before the synchronous biquad/envelope passes block.
       await new Promise((r) => setTimeout(r, 0));
       const t0 = performance.now();
-      const { peaks, grid } = detectPeaks(buf);
+      const { peaks, grid, songParts } = detectPeaks(buf);
       const elapsed = (performance.now() - t0).toFixed(0);
       const bpm = grid
         ? (60 / (grid.periodSamples / buf.sampleRate)).toFixed(1)
         : 'none';
       console.log(
         `[beats] media ${mediaId}: ${peaks.length} peaks, grid ${bpm} bpm ` +
-        `(conf ${grid ? grid.confidence.toFixed(2) : '-'}) in ${elapsed}ms`,
+        `(conf ${grid ? grid.confidence.toFixed(2) : '-'}), ` +
+        `${songParts.length} song parts in ${elapsed}ms`,
       );
-      useStore.getState().setClipAudioPeaks(mediaId, peaks, buf.sampleRate, grid);
+      useStore.getState().setClipAudioPeaks(
+        mediaId, peaks, buf.sampleRate, grid, songParts);
     }
   } catch (e) {
     console.warn('[beats] detection failed', e);

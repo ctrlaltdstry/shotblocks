@@ -738,6 +738,15 @@ body.va-splitter-hover .stack__divider.is-grabbable,
   background-image: none;
   background-color: rgba(255, 255, 255, 0.275);
 }
+.beat-grid-line.is-songpart {
+  /* Song part — the heaviest tier (FCP's structural transitions).
+     2px, fully opaque, drawn over the bar/interim lines. */
+  background-image: none;
+  background-color: rgba(255, 255, 255, 0.85);
+  width: 2px;
+  margin-left: -1px;
+  z-index: 1;
+}
 
 /* Beat-grid connector dots — small circles on an audio clip's BOTTOM
    edge, one per bar downbeat. They link the clip to the beat-grid

@@ -67,6 +67,24 @@ const TIGHTNESS = 100;
 
 export const GRID_CONFIDENCE_FLOOR = 0.5;
 
+// Song-part (structure) segmentation — Foote novelty detection.
+//   SEG_FEATURE_BANDS  — log-spaced energy bands per feature frame;
+//     the feature vector whose self-similarity we analyse. Trailer
+//     structure is dynamics/timbre-driven, so band energy (not
+//     chroma) is the right feature.
+//   SEG_KERNEL_HALF    — checkerboard kernel half-size in feature
+//     frames. With the ~10Hz feature rate that's ~3s each side —
+//     long enough to span a section, short enough to localise a
+//     boundary. (Foote uses 8-16; we run wider for long sections.)
+//   SEG_MIN_GAP_SEC    — min spacing between song-part boundaries;
+//     a trailer has sections lasting several seconds, not <2s.
+const SEG_FEATURE_BANDS  = 12;
+const SEG_KERNEL_HALF    = 32;
+const SEG_MIN_GAP_SEC    = 6;
+const SEG_PEAK_MARGIN    = 0.10;   // a boundary peak must stand this
+                                   // fraction (of the curve's max)
+                                   // above its local baseline
+
 export interface BeatGrid {
   /** Beat period in media-space audio sample frames. */
   periodSamples: number;
@@ -86,6 +104,11 @@ export interface DetectResult {
   peaks: number[];
   /** Inferred tempo grid, or null if confidence too low / no data. */
   grid: BeatGrid | null;
+  /** Song-part boundaries — media-space audio sample frames where the
+   *  music structurally changes (intro→build, build→drop, etc).
+   *  Detected by Foote novelty-based segmentation. The FCP "heavy
+   *  line" tier. Empty when nothing structural was found. */
+  songParts: number[];
 }
 
 // ---------------------------------------------------------------------------
@@ -375,6 +398,182 @@ function beatTrackDP(
 }
 
 // ---------------------------------------------------------------------------
+// Song-part segmentation — Foote novelty detection
+// ---------------------------------------------------------------------------
+//
+// Finds the big structural boundaries (intro→build, build→drop, …) —
+// the FCP "song parts" / heavy-line tier. The technique is Foote's
+// novelty-based segmentation (audiolabs FMP C4S4):
+//
+//   1. Per feature-frame, build a low-dim band-energy vector. The
+//      vectors are similar within one homogeneous section (a steady
+//      build) and jump at a boundary.
+//   2. Self-similarity matrix S[i][j] = cosine similarity of frame i
+//      vs frame j. Homogeneous sections show as bright diagonal
+//      blocks; a boundary is a corner where blocks meet.
+//   3. Slide a Gaussian-tapered CHECKERBOARD kernel down the diagonal.
+//      Its +/+/-/- quadrant pattern correlates high exactly at a
+//      block corner → a 1-D novelty curve peaking at boundaries.
+//   4. Peak-pick the novelty curve for the boundary positions.
+
+/** Build per-frame log-band energy feature vectors from the decimated
+ *  signal. One vector per FFT hop; `SEG_FEATURE_BANDS` log-spaced
+ *  bands. Each vector is L2-normalized so the SSM's cosine similarity
+ *  reflects timbral *shape*, not loudness alone. */
+function bandEnergyFeatures(decimated: Float32Array, effRate: number): Float32Array[] {
+  const n = decimated.length;
+  if (n < FFT_SIZE * 2) return [];
+  const t = getFftTables(FFT_SIZE);
+  const win = hannWindow(FFT_SIZE);
+  const re = new Float64Array(FFT_SIZE);
+  const im = new Float64Array(FFT_SIZE);
+  const mags = new Float64Array((FFT_SIZE >> 1) + 1);
+  const nyBin = FFT_SIZE >> 1;
+  const binHz = effRate / FFT_SIZE;
+
+  // Log-spaced band edges from ~40Hz to Nyquist.
+  const loHz = 40, hiHz = effRate / 2;
+  const edges: number[] = [];
+  for (let b = 0; b <= SEG_FEATURE_BANDS; b++) {
+    edges.push(loHz * Math.pow(hiHz / loHz, b / SEG_FEATURE_BANDS));
+  }
+
+  const nFrames = 1 + ((n - FFT_SIZE) / HOP_SIZE | 0);
+  const feats: Float32Array[] = [];
+  for (let f = 0; f < nFrames; f++) {
+    const off = f * HOP_SIZE;
+    for (let i = 0; i < FFT_SIZE; i++) {
+      re[i] = decimated[off + i] * win[i];
+      im[i] = 0;
+    }
+    fftMagnitudes(re, im, FFT_SIZE, t, mags);
+    const v = new Float32Array(SEG_FEATURE_BANDS);
+    for (let b = 0; b < SEG_FEATURE_BANDS; b++) {
+      const blo = Math.max(1, Math.min(nyBin, Math.round(edges[b] / binHz)));
+      const bhi = Math.max(blo + 1, Math.min(nyBin, Math.round(edges[b + 1] / binHz)));
+      let e = 0;
+      for (let k = blo; k < bhi; k++) e += mags[k] * mags[k];
+      // log compression — perceptual, and stops one loud band
+      // dominating the cosine similarity.
+      v[b] = Math.log1p(e);
+    }
+    // L2 normalize.
+    let norm = 0;
+    for (let b = 0; b < SEG_FEATURE_BANDS; b++) norm += v[b] * v[b];
+    norm = Math.sqrt(norm);
+    if (norm > 0) for (let b = 0; b < SEG_FEATURE_BANDS; b++) v[b] /= norm;
+    feats.push(v);
+  }
+  return feats;
+}
+
+/** Foote novelty curve: slide a Gaussian-tapered checkerboard kernel
+ *  along the SSM diagonal. The SSM is never materialised in full — at
+ *  each diagonal position we only need the local (2h+1)² window, so
+ *  we compute those cosine similarities on the fly. */
+function footeNovelty(feats: Float32Array[]): Float64Array {
+  const n = feats.length;
+  const nov = new Float64Array(n);
+  if (n < SEG_KERNEL_HALF * 2 + 1) return nov;
+  const h = SEG_KERNEL_HALF;
+  const sigma = h / 2;
+
+  // Precompute the checkerboard kernel: K(m,n) = sgn(m*n) * gaussian.
+  const ksz = 2 * h + 1;
+  const kernel = new Float64Array(ksz * ksz);
+  for (let m = -h; m <= h; m++) {
+    for (let nn = -h; nn <= h; nn++) {
+      const g = Math.exp(-(m * m + nn * nn) / (2 * sigma * sigma));
+      const sign = (m * nn >= 0) ? 1 : -1;   // +/+ and -/- quadrants positive
+      kernel[(m + h) * ksz + (nn + h)] = sign * g;
+    }
+  }
+
+  // cosine similarity of two already-L2-normalized vectors = dot.
+  const dot = (a: Float32Array, b: Float32Array) => {
+    let s = 0;
+    for (let k = 0; k < a.length; k++) s += a[k] * b[k];
+    return s;
+  };
+
+  for (let c = h; c < n - h; c++) {
+    let acc = 0;
+    for (let m = -h; m <= h; m++) {
+      for (let nn = -h; nn <= h; nn++) {
+        acc += kernel[(m + h) * ksz + (nn + h)] * dot(feats[c + m], feats[c + nn]);
+      }
+    }
+    nov[c] = acc;
+  }
+  return nov;
+}
+
+/** Pick song-part boundaries from the novelty curve.
+ *
+ *  The raw Foote novelty curve is jittery — measured ~1500 tiny local
+ *  maxima on a 3-min track, with no clean height gap that a global %
+ *  threshold could cut at. So, the standard practice:
+ *
+ *    1. SMOOTH the curve (moving average over ~1.5s) — collapses the
+ *       jitter maxima into the handful of real structural bumps.
+ *    2. ADAPTIVE threshold — a peak qualifies when it exceeds its own
+ *       LOCAL moving-average baseline by a margin, not a global %.
+ *       (Same adaptive idea the onset peak-picker uses; a global %
+ *       fails when one drop dominates the curve.)
+ *    3. Min-gap spacing — trailer sections last several seconds.
+ *
+ *  Returns feature-frame indices. */
+function pickSegmentBoundaries(
+  nov: Float64Array, framesPerSec: number,
+): number[] {
+  const n = nov.length;
+  if (n < 8) return [];
+  const minGap = Math.max(1, Math.round(SEG_MIN_GAP_SEC * framesPerSec));
+
+  // 1. Smooth — moving average, ~1.5s window.
+  const smW = Math.max(3, Math.round(1.5 * framesPerSec) | 1);
+  const half = smW >> 1;
+  const sm = new Float64Array(n);
+  for (let i = 0; i < n; i++) {
+    const lo = Math.max(0, i - half), hi = Math.min(n, i + half + 1);
+    let s = 0;
+    for (let j = lo; j < hi; j++) s += nov[j];
+    sm[i] = s / (hi - lo);
+  }
+
+  // 2. Adaptive baseline — a much wider moving average. A boundary is
+  //    a smoothed-curve local max standing SEG_PEAK_MARGIN above this
+  //    local baseline.
+  const bw = Math.max(smW, Math.round(SEG_MIN_GAP_SEC * 2 * framesPerSec) | 1);
+  const bhalf = bw >> 1;
+  let mx = 0;
+  for (let i = 0; i < n; i++) if (sm[i] > mx) mx = sm[i];
+  if (mx <= 0) return [];
+
+  const cands: { idx: number; score: number }[] = [];
+  for (let i = 1; i < n - 1; i++) {
+    if (sm[i] < sm[i - 1] || sm[i] <= sm[i + 1]) continue;   // local max
+    const lo = Math.max(0, i - bhalf), hi = Math.min(n, i + bhalf + 1);
+    let s = 0;
+    for (let j = lo; j < hi; j++) s += sm[j];
+    const baseline = s / (hi - lo);
+    // Prominence above the local baseline, normalized by the curve's
+    // overall scale so SEG_PEAK_MARGIN is a stable fraction.
+    const prominence = (sm[i] - baseline) / mx;
+    if (prominence >= SEG_PEAK_MARGIN) cands.push({ idx: i, score: prominence });
+  }
+
+  // 3. Min-gap — strongest-first, greedily keep the spaced-out ones.
+  cands.sort((a, b) => b.score - a.score);
+  const kept: number[] = [];
+  for (const c of cands) {
+    if (kept.every((k) => Math.abs(k - c.idx) >= minGap)) kept.push(c.idx);
+  }
+  kept.sort((a, b) => a - b);
+  return kept;
+}
+
+// ---------------------------------------------------------------------------
 // Public entry point
 // ---------------------------------------------------------------------------
 
@@ -383,13 +582,13 @@ function beatTrackDP(
  *  dense onset list) plus the inferred tempo grid. */
 export function detectPeaks(buf: AudioBuffer): DetectResult {
   const sampleRate = buf.sampleRate;
-  if (sampleRate <= 0 || buf.length <= 0) return { peaks: [], grid: null };
+  if (sampleRate <= 0 || buf.length <= 0) return { peaks: [], grid: null, songParts: [] };
 
   const mono = mixToMono(buf);
   const dec = decimate(mono, sampleRate, ANALYSIS_RATE);
   const decimated = dec.signal;
   const factor = dec.factor;
-  if (decimated.length < FFT_SIZE * 2) return { peaks: [], grid: null };
+  if (decimated.length < FFT_SIZE * 2) return { peaks: [], grid: null, songParts: [] };
 
   const effRate = sampleRate / factor;
   const binHz = effRate / FFT_SIZE;
@@ -400,14 +599,14 @@ export function detectPeaks(buf: AudioBuffer): DetectResult {
   const kickFlux = bandFlux(decimated, effRate, clampBin(KICK_LO_HZ), clampBin(KICK_HI_HZ));
   const snareFlux = bandFlux(decimated, effRate, clampBin(SNARE_LO_HZ), clampBin(SNARE_HI_HZ));
   const env = onsetEnvelope(kickFlux, snareFlux);
-  if (env.length < 8) return { peaks: [], grid: null };
+  if (env.length < 8) return { peaks: [], grid: null, songParts: [] };
 
   const hopSamples = HOP_SIZE * factor;
   const hopsPerSec = sampleRate / hopSamples;
 
   const periodHops = estimateTempoPeriod(env, hopsPerSec);
   const beatHops = beatTrackDP(env, periodHops, TIGHTNESS);
-  if (beatHops.length < 2) return { peaks: [], grid: null };
+  if (beatHops.length < 2) return { peaks: [], grid: null, songParts: [] };
 
   // Median inter-beat interval (in hops) — the grid period.
   const intervals: number[] = [];
@@ -488,5 +687,28 @@ export function detectPeaks(buf: AudioBuffer): DetectResult {
     barOffset,
   };
 
-  return { peaks, grid };
+  // Song-part segmentation — Foote novelty over band-energy features.
+  // Feature frames share the FFT hop, so feature index → sample is the
+  // same hopSamples mapping the beats use.
+  const feats = bandEnergyFeatures(decimated, effRate);
+  const nov = footeNovelty(feats);
+  const featFramesPerSec = sampleRate / hopSamples;
+  const rawSongParts = pickSegmentBoundaries(nov, featFramesPerSec)
+    .map((fi) => fi * hopSamples);
+
+  // Snap each song-part boundary onto the nearest BEAT when it's
+  // within half a beat — a structural change lands on a beat anyway,
+  // and snapping prevents a heavy song-part line drawing right next
+  // to a dashed beat line (they'd read as two lines for one event).
+  const snapTol = (medianInterval * hopSamples) * 0.5;
+  const songParts = rawSongParts.map((sp) => {
+    let best = sp, bestD = Infinity;
+    for (const b of peaks) {
+      const d = Math.abs(b - sp);
+      if (d < bestD) { bestD = d; best = b; }
+    }
+    return bestD <= snapTol ? best : sp;
+  });
+
+  return { peaks, grid, songParts };
 }
