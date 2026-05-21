@@ -28,6 +28,7 @@ export function WaveformCanvas({ clip }: { clip: Clip }) {
   // Subscribe to h so the canvas relayouts on scroll / zoom.
   const hMin = useStore((s) => s.h.vMin);
   const hMax = useStore((s) => s.h.vMax);
+  const fps = useStore((s) => s.fps);
 
   const rafIdRef = useRef<number | null>(null);
   // Always points at the CURRENT render's doFullRedraw. The mount
@@ -46,7 +47,8 @@ export function WaveformCanvas({ clip }: { clip: Clip }) {
     scheduleLayoutAndDraw();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [clip.peakLevels, hMin, hMax, clip.inFrame, clip.outFrame,
-      clip.mediaOffsetFrames, clip.mediaDurationFrames]);
+      clip.mediaOffsetFrames, clip.mediaDurationFrames,
+      clip.audioPeaks, clip.audioBeatGrid, fps]);
 
   useEffect(() => {
     const canvas = canvasRef.current;
@@ -191,6 +193,9 @@ export function WaveformCanvas({ clip }: { clip: Clip }) {
     // Pixel offset of the visible window's left edge within the media.
     const windowLeftPx = mediaOffsetFrames * cssPxPerFrame;
 
+    // (Bar structure is drawn in the beat-marker pass below, on TOP of
+    // the waveform — see "Beat markers" further down.)
+
     // The pyramid maps the whole file across `mediaFullW`. Pick the
     // level whose bucket width is ~1 CSS pixel at the current zoom.
     const finest = [...clip.peakLevels].sort((a, b) => a.sps - b.sps)[0];
@@ -286,6 +291,10 @@ export function WaveformCanvas({ clip }: { clip: Clip }) {
     ctx.quadraticCurveTo(xs[0], bys[0], xs[0], bys[0]);
     ctx.closePath();
     ctx.fill();
+
+    // Beat markers are NOT painted on the waveform — the BeatGrid
+    // overlay draws them as timeline-spanning green lines (FCP model),
+    // so the waveform stays clean. See components/BeatGrid.tsx.
   }
 
   return (

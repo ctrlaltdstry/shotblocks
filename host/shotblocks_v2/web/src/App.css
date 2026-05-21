@@ -703,9 +703,70 @@ body.va-splitter-hover .stack__divider.is-grabbable,
   background: #ffd60a;
   margin-left: -0.5px;
 }
+
+/* Beat-grid overlay — FCP-style green tempo lines. Lives INSIDE the
+   stage, positioned over the full lanes area but at z-index 0 so the
+   lane CLIPS (opaque, default stacking) paint on top: the green lines
+   show only in the gutters + empty lane area, exactly like Final Cut
+   Pro. The lane backgrounds are transparent (see `.lane`) so the
+   lines read through the empty parts of a track. */
+.beat-grid-overlay {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  z-index: 0;
+  overflow: hidden;
+}
+.beat-grid-line {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  width: 1px;
+  margin-left: -0.5px;
+  /* Interim beat — dashed, faint. A repeating-gradient gives a dash
+     pattern without an SVG / border-image. */
+  background-image: linear-gradient(
+    to bottom,
+    rgba(74, 222, 110, 0.45) 0 4px,
+    transparent 4px 9px
+  );
+  background-size: 1px 9px;
+}
+.beat-grid-line.is-bar {
+  /* Bar downbeat — solid, fully opaque 1px line so it reads as the
+     structural line against the dashed interim beats. */
+  background-image: none;
+  background-color: rgb(74, 222, 110);
+}
+
+/* Beat-grid connector dots — green circles on an audio clip's top
+   edge, one per bar downbeat. They visually link the clip to the
+   grid lines running behind it (Final Cut Pro model). Sit just
+   inside the clip's top edge so the lane's overflow:hidden doesn't
+   clip them. */
+.beat-dots {
+  position: absolute;
+  top: 0; left: 0; right: 0;
+  height: 0;
+  pointer-events: none;
+  z-index: 6;
+}
+.beat-dot {
+  position: absolute;
+  top: 4px;
+  width: 7px;
+  height: 7px;
+  margin-left: -3.5px;
+  border-radius: 50%;
+  background: rgb(74, 222, 110);
+  box-shadow: 0 0 0 1.5px rgba(0, 0, 0, 0.35);
+}
 .lane {
   flex: 0 0 var(--track-h);
-  background: var(--color-grey-12);
+  /* Transparent so the beat-grid overlay (behind the lanes-stack)
+     shows through the empty part of each track. Clips themselves are
+     opaque and occlude the lines. */
+  background: transparent;
   border-bottom: 1px solid var(--color-grey-16);
   position: relative;
   overflow: hidden;

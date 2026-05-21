@@ -10,6 +10,7 @@ import { useAudioPlayback } from './useAudioPlayback';
 import { send } from './lib/host';
 import { useActiveClipRouter } from './useActiveClipRouter';
 import { usePersistence } from './usePersistence';
+import { runBeatDetection } from './lib/beatDetection';
 import { useKeyboard } from './useKeyboard';
 import { useAltRightZoom } from './useAltRightZoom';
 import { useMmbPan } from './useMmbPan';
@@ -26,6 +27,7 @@ import { DropGhost } from './components/DropGhost';
 import { MarqueeOverlay } from './components/MarqueeOverlay';
 import { CutLineOverlay } from './components/CutLineOverlay';
 import { SnapIndicators } from './components/SnapIndicators';
+import { BeatGrid } from './components/BeatGrid';
 import { ContextMenu } from './components/ContextMenu';
 import { RangeDim } from './components/RangeDim';
 import { SpawnGhostLane } from './components/SpawnGhostLane';
@@ -100,6 +102,44 @@ function SnapToggle() {
       onClick={() => useStore.getState().setSnapEnabled(!useStore.getState().snapEnabled)}
     >
       <span className="icon icon--snap" style={{ '--icon-w': '14px', '--icon-h': '14px' } as React.CSSProperties} />
+    </div>
+  );
+}
+
+/** Beat Detection button in the utilities strip. Mirrors Final Cut
+ *  Pro's "Enable/Disable Beat Detection" toggle:
+ *    - First click → analyses every audio clip + shows the grid.
+ *    - Later clicks → toggle the green grid on/off. The analysis
+ *      result is kept, so re-enabling is instant (no re-analyse).
+ *  `is-active` reflects whether the grid is currently shown. */
+function BeatDetectionButton() {
+  const busy = useStore((s) => s.detectingBeats);
+  const gridVisible = useStore((s) => s.beatGridVisible);
+  // Has detection ever produced peaks? (cheap scan)
+  const hasPeaks = useStore((s) =>
+    s.audioTracks.some((t) => t.clips.some((c) => c.audioPeaks && c.audioPeaks.length)));
+  const active = gridVisible && hasPeaks;
+  return (
+    <div
+      className={'utilstrip__icon' + ((active || busy) ? ' is-active' : '')}
+      title={
+        busy ? 'Detecting beats…'
+          : active ? 'Beat Detection: on'
+          : hasPeaks ? 'Beat Detection: off'
+          : 'Beat Detection'
+      }
+      onClick={() => {
+        if (busy) return;
+        if (!hasPeaks) {
+          // Never analysed — run detection (it shows the grid on done).
+          void runBeatDetection();
+        } else {
+          // Already have results — just toggle the grid visibility.
+          useStore.getState().setBeatGridVisible(!gridVisible);
+        }
+      }}
+    >
+      <span className="icon icon--beat-detection" style={{ '--icon-w': '13px', '--icon-h': '13px' } as React.CSSProperties} />
     </div>
   );
 }
@@ -658,9 +698,7 @@ function App() {
         <div className="utilstrip">
           <LoopToggle />
           <SnapToggle />
-          <div className="utilstrip__icon" title="Beat Detection">
-            <span className="icon icon--beat-detection" style={{ '--icon-w': '13px', '--icon-h': '13px' } as React.CSSProperties} />
-          </div>
+          <BeatDetectionButton />
           <div className="utilstrip__icon" title="Markers">
             <span className="icon icon--markers" style={{ '--icon-w': '10px', '--icon-h': '13px' } as React.CSSProperties} />
           </div>
@@ -700,6 +738,11 @@ function App() {
         {/* row 2, col 3 — stage (lanes, rendered from store) */}
         <div className="stage">
           <div className="stage__edge-shadow" />
+          {/* Detected beat grid — FCP-style green tempo lines. First
+              child + z-index 0 so clip bodies paint over it; the
+              lines show through the transparent empty lane area and
+              gutters. Toggled by the Beat Detection button. */}
+          <BeatGrid />
           {/* Play-range dim: black-30% overlay outside [in, out]. Sits
               above the lane backgrounds + clips but BELOW the playhead
               (z:5). pointer-events:none lets clicks/scrub/drag still

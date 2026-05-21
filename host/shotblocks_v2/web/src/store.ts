@@ -63,6 +63,22 @@ export interface Clip {
    *  (sb_audio_track.py:78). Undefined on video clips. */
   mediaDurationFrames?: number;
   mediaOffsetFrames?: number;
+  /** Prominent-peak positions in MEDIA-SPACE audio sample frames (at
+   *  the decoded buffer's sample rate). Detected by `detectPeaks`
+   *  (lib/onsets.ts) when the user hits Beat Detection. The renderer
+   *  converts to doc frames; snap-to-peak feeds these into the drag
+   *  edit-point set. Undefined until detection runs; persists through
+   *  save/load so detection results survive doc reload. */
+  audioPeaks?: number[];
+  /** Sample rate of the buffer `audioPeaks` were measured against —
+   *  needed to convert sample positions → doc frames after a reload
+   *  when the decoded buffer isn't in memory yet. */
+  audioPeaksSampleRate?: number;
+  /** Inferred tempo grid for this clip's media. `periodSamples` /
+   *  `phaseSamples` are media-space audio sample frames (same rate as
+   *  `audioPeaksSampleRate`); `confidence` is 0..1. Undefined when the
+   *  autocorrelation didn't land a clear pulse. */
+  audioBeatGrid?: { periodSamples: number; phaseSamples: number; confidence: number };
   /** Stable identifier for the underlying audio media. The audio
    *  blob (audioStore) and the persisted bytes (C++ helper) are keyed
    *  by THIS, not by `id` — so when a clip is split, both halves
@@ -187,6 +203,18 @@ export interface State {
   // radius. Cleared on pointer-end.
   snapIndicatorFrames: number[];
 
+  // True while beat detection is running over the audio clips. Drives
+  // the Beat Detection button's busy state so it can't be re-fired
+  // mid-analysis. Detection itself runs off-thread-ish (chunked) so
+  // the UI stays responsive.
+  detectingBeats: boolean;
+
+  // Whether the inferred beat-grid overlay (regular dashed tempo
+  // lines) is shown. Set true automatically when detection finds a
+  // confident grid; user can toggle it off. Independent of the hit
+  // markers, which always show once detected.
+  beatGridVisible: boolean;
+
   // Tracks. Index 0 = closest to the V/A divider (V1 / A1). New tracks
   // are added at the outer ends. Auto-create / auto-remove on clip
   // drag rather than via explicit UI buttons (see memory
@@ -302,6 +330,18 @@ export interface State {
   setSnapEnabled: (on: boolean) => void;
   setSnapIndicatorFrames: (frames: number[]) => void;
   setScrubFrame: (frame: number | null) => void;
+  setDetectingBeats: (on: boolean) => void;
+  setBeatGridVisible: (on: boolean) => void;
+
+  /** Attach detected prominent peaks + beat grid to all clips sharing
+   *  `mediaId`. Positions are media-space audio sample frames. Splits
+   *  share a mediaId, so one detection result paints every sibling. */
+  setClipAudioPeaks: (
+    mediaId: number,
+    audioPeaks: number[],
+    audioPeaksSampleRate: number,
+    audioBeatGrid: { periodSamples: number; phaseSamples: number; confidence: number } | null,
+  ) => void;
 
   /** Append a clip to the named track (e.g. 'V1' or 'A2'). Returns
    *  the assigned clip id, or null if the track doesn't exist. */
@@ -602,6 +642,59 @@ export function findFreeSlot(
  *  Returns `{ inFrame, targets }`. `targets` is the edit point(s) the
  *  snapped clip's left/right edge landed on — used by the canvas to
  *  draw yellow snap-indicator lines. Empty when no snap occurred. */
+/** Collect every detected audio peak as a DOC-FRAME position, across
+ *  all audio clips. A peak stored in media-space audio samples maps to
+ *  a doc frame via:
+ *    docFrame = clip.inFrame + (peakSample/sr*fps - mediaOffsetFrames)
+ *  Peaks falling outside the clip's visible [inFrame, outFrame] window
+ *  are dropped — a trimmed-away transient is not a valid snap target.
+ *  Used as extra snap edit-points for body/trim/roll drags. */
+export function audioPeakDocFrames(state: State): number[] {
+  const out: number[] = [];
+  const fps = state.fps > 0 ? state.fps : 30;
+  for (const t of state.audioTracks) {
+    for (const c of t.clips) {
+      const peaks = c.audioPeaks;
+      const sr = c.audioPeaksSampleRate;
+      if (!peaks || !peaks.length || !sr || sr <= 0) continue;
+      const offset = c.mediaOffsetFrames ?? 0;
+      const fpr = fps / sr;
+      for (let i = 0; i < peaks.length; i++) {
+        const docFrame = c.inFrame + (peaks[i] * fpr - offset);
+        if (docFrame >= c.inFrame && docFrame <= c.outFrame) {
+          out.push(docFrame);
+        }
+      }
+    }
+  }
+  return out;
+}
+
+/** Like `audioPeakDocFrames`, but tags each beat as a BAR downbeat
+ *  (every 4th tracked beat from the start — 4/4 assumption) or an
+ *  interim beat. Used by the BeatGrid overlay to draw the FCP-style
+ *  two-tier grid: solid lines for bars, dashed for interim beats. */
+export function audioBeatLines(state: State): { frame: number; isBar: boolean }[] {
+  const out: { frame: number; isBar: boolean }[] = [];
+  const fps = state.fps > 0 ? state.fps : 30;
+  for (const t of state.audioTracks) {
+    for (const c of t.clips) {
+      const peaks = c.audioPeaks;
+      const sr = c.audioPeaksSampleRate;
+      if (!peaks || !peaks.length || !sr || sr <= 0) continue;
+      const offset = c.mediaOffsetFrames ?? 0;
+      const fpr = fps / sr;
+      for (let i = 0; i < peaks.length; i++) {
+        const docFrame = c.inFrame + (peaks[i] * fpr - offset);
+        if (docFrame >= c.inFrame && docFrame <= c.outFrame) {
+          out.push({ frame: docFrame, isBar: i % 4 === 0 });
+        }
+      }
+    }
+  }
+  return out;
+}
+
 export function magneticSnap(
   desiredInFrame: number,
   duration: number,
@@ -778,6 +871,8 @@ export const useStore = create<State>((set) => ({
   audioScrub: true,
   snapEnabled: false,
   snapIndicatorFrames: [],
+  detectingBeats: false,
+  beatGridVisible: true,
   videoTracks: [{ id: 1, name: 'Video 1', clips: [] }],
   audioTracks: [{ id: 1, name: 'Audio 1', clips: [] }],
   dragPreview: null,
@@ -1531,6 +1626,29 @@ export const useStore = create<State>((set) => ({
         return {
           ...t,
           clips: t.clips.map((c) => c.id === clipId ? { ...c, peakLevels, peakAbsMax } : c),
+        };
+      });
+      return {
+        videoTracks: patch(s.videoTracks),
+        audioTracks: patch(s.audioTracks),
+      };
+    });
+  },
+
+  setDetectingBeats: (on) => set({ detectingBeats: on }),
+  setBeatGridVisible: (on) => set({ beatGridVisible: on }),
+
+  setClipAudioPeaks: (mediaId, audioPeaks, audioPeaksSampleRate, audioBeatGrid) => {
+    set((s) => {
+      const patch = (tracks: Track[]) => tracks.map((t) => {
+        if (!t.clips.some((c) => (c.mediaId ?? c.id) === mediaId)) return t;
+        return {
+          ...t,
+          clips: t.clips.map((c) =>
+            (c.mediaId ?? c.id) === mediaId
+              ? { ...c, audioPeaks, audioPeaksSampleRate,
+                  audioBeatGrid: audioBeatGrid ?? undefined }
+              : c),
         };
       });
       return {

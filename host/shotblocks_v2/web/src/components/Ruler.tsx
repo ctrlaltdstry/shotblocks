@@ -1,5 +1,5 @@
 import { useRef, type CSSProperties } from 'react';
-import { useStore, magneticSnap, SNAP_PIXEL_RADIUS } from '../store';
+import { useStore, magneticSnap, audioPeakDocFrames, SNAP_PIXEL_RADIUS } from '../store';
 import { useElementSize } from '../useElementSize';
 import { computeRulerLayout } from '../lib/ruler';
 import { send } from '../lib/host';
@@ -69,6 +69,7 @@ export function Ruler() {
     for (const t of s.audioTracks) {
       for (const c of t.clips) editPoints.push(c.inFrame, c.outFrame);
     }
+    for (const f of audioPeakDocFrames(s)) editPoints.push(f);
     const snapFrames = Math.max(1, SNAP_PIXEL_RADIUS / Math.max(0.0001, pxPerFrame));
     // duration=0 → snap the single playhead frame directly to the
     // nearest edit point, no "other edge" to also align.

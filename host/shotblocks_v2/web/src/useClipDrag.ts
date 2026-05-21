@@ -1,6 +1,6 @@
 import { useEffect, useRef, type RefObject } from 'react';
 import { gsap } from 'gsap';
-import { useStore, magneticSnap, SNAP_PIXEL_RADIUS, type Clip } from './store';
+import { useStore, magneticSnap, audioPeakDocFrames, SNAP_PIXEL_RADIUS, type Clip } from './store';
 import { setSlipPreview, clearSlipPreview } from './lib/slipPreview';
 
 /** Pixel slop before a pointerdown becomes a real drag. Below this we
@@ -346,6 +346,8 @@ export function useClipDrag(
         }
       }
       editPoints.push(state.scrubFrame ?? state.currentFrame);
+      // Snap-to-peak: detected audio peaks are valid snap targets too.
+      for (const f of audioPeakDocFrames(state)) editPoints.push(f);
       // Snap gating (Premiere model): snap is active when the Snap
       // toggle is on, OR while Shift is held — Shift temporarily
       // force-enables snap for this drag even with the toggle off.

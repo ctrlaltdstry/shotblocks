@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from 'react';
-import { useStore, magneticSnap, SNAP_PIXEL_RADIUS } from '../store';
+import { useStore, magneticSnap, audioPeakDocFrames, SNAP_PIXEL_RADIUS } from '../store';
 import type { Track } from '../store';
 import { ShotBlock } from './ShotBlock';
 import { useElementSize } from '../useElementSize';
@@ -301,6 +301,7 @@ export function Lane({ track, side }: { track: Track; side: 'video' | 'audio' })
       }
     }
     editPoints.push(state.scrubFrame ?? state.currentFrame);
+    for (const f of audioPeakDocFrames(state)) editPoints.push(f);
     // Snap gating (Premiere model): active when the Snap toggle is on
     // OR Shift is held — Shift force-enables snap for this trim even
     // with the toggle off. snapFrames=0 short-circuits magneticSnap.
@@ -351,6 +352,7 @@ export function Lane({ track, side }: { track: Track; side: 'video' | 'audio' })
       }
     }
     editPoints.push(state.scrubFrame ?? state.currentFrame);
+    for (const f of audioPeakDocFrames(state)) editPoints.push(f);
     // Same gating as trim (Premiere model) — snap active when the Snap
     // toggle is on OR Shift is held. Roll has no ripple mode.
     const snapActive = state.snapEnabled || ev.shiftKey;

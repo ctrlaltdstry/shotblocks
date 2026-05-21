@@ -43,6 +43,12 @@ interface SavedClip {
   // Stable audio-media key. Persisted so split halves still resolve
   // to the same C++-stored audio bytes after reload.
   mediaId?: number;
+  // Detected prominent peaks (media-space audio sample frames) +
+  // the sample rate they were measured at. Persisted so beat
+  // detection results survive doc reload.
+  audioPeaks?: number[];
+  audioPeaksSampleRate?: number;
+  audioBeatGrid?: { periodSamples: number; phaseSamples: number; confidence: number };
 }
 interface SavedTrack {
   id: number;
@@ -185,6 +191,9 @@ async function loadFromHost(skipNextSave: React.MutableRefObject<boolean>) {
           peakAbsMax: c.peakAbsMax,
           mediaDurationFrames: c.mediaDurationFrames ?? clipDur,
           mediaOffsetFrames: c.mediaOffsetFrames ?? 0,
+          audioPeaks: c.audioPeaks,
+          audioPeaksSampleRate: c.audioPeaksSampleRate,
+          audioBeatGrid: c.audioBeatGrid,
           // Backfill mediaId: pre-media-window scenes keyed audio
           // bytes in the C++ helper by the (then-unsplit) clipId, so
           // the clip's own id IS the correct media key for old data.
@@ -257,6 +266,9 @@ function saveToHost() {
         mediaDurationFrames: c.mediaDurationFrames,
         mediaOffsetFrames: c.mediaOffsetFrames,
         mediaId: c.mediaId,
+        audioPeaks: c.audioPeaks,
+        audioPeaksSampleRate: c.audioPeaksSampleRate,
+        audioBeatGrid: c.audioBeatGrid,
       })),
     })),
     nextClipId: getNextClipId(),
