@@ -388,11 +388,102 @@ See memory `v2-c4d-nav-gestures`.
 - The C++ handler gates on `HTCLIENT` so window-resize cursors at
   the dialog border still work.
 
-### Range bar (Round 14)
+### Range bar (Round 14, superseded — see Round 15–16)
 - The blue play-range tint is a VISUAL fill (`pointer-events:none`,
-  scrub passes through). A separate top **9px grab-strip**
-  (`.range-bar__grab`) drags the whole range left/right. Vertical
-  zones — no conflict with playhead scrub inside the range.
+  scrub passes through). The Round-14 9px top grab-strip was replaced
+  in Round 16 by a centered `|||` grip — see below.
+
+## Round 15–16 additions
+
+These rounds are committed as small per-feature commits (the commit
+policy changed mid-Round-15 — see CLAUDE.md "Commits": one commit per
+atomic verified feature/fix, not one per milestone). `git log` reads
+as a changelog from `b979b68` onward.
+
+### Play range — drag, scrub, keys
+- **Drag the range:** a centered `|||` grip (three 2px vertical lines)
+  is the ONLY range-move target. The blue tint is `pointer-events:none`
+  — a press anywhere in the blue falls through to the ruler and scrubs
+  the playhead, exactly like scrubbing outside the range. No
+  scrub-vs-range ambiguity. Matches the NLE model (e.g. Railcut).
+- **Click anywhere in the ruler** (in or out of the range) jumps the
+  playhead; press on the playhead scrubs it. Click inside the blue
+  scrubs on **pointerdown**, not pointerup (waiting felt laggy).
+- **Keys:** `/` resets the play range to the full timeline;
+  `Shift+/` (reported as `?`) sets it to the selection (or all clips).
+- **Scrub-during-playback pauses transport:** grabbing the v2 playhead
+  while playing freezes the timeline + audio at the held frame
+  (`scrub-begin` / `scrub-end` C++ commands gate the playback timer);
+  releasing re-anchors and resumes from the drop point.
+- **Seek during playback re-anchors** the C++ playback clock so the
+  playhead keeps playing from where it was dropped.
+- **Scrub jump-back fixed:** `scrubFrame` is no longer cleared on
+  pointer-release; `setTick` clears it once C++'s tick echo reaches
+  the seeked frame (see memory `scrub-frame-echo-handoff`).
+
+### Snap (Premiere model — changed from Round 13)
+- **Shift** during a drag/trim/roll/scrub now FORCE-ENABLES snap even
+  when the Snap toggle is off (was: Shift suppressed snap).
+- **Cmd/Ctrl** during a body drag or trim is ripple mode (was Shift).
+- Snap edit points span the WHOLE timeline (both sides, all tracks)
+  for body-drag, trim, and roll — global snapping.
+- The old Ctrl-held slip shortcut is gone (Ctrl = ripple now); slip is
+  the Slip tool / `S` hotkey.
+
+### Cursors — select cursor removed
+- The custom select cursor was REMOVED. It was the only cursor
+  onscreen during playback and flickered (structural two-writer race:
+  WebView2's CSS cursor vs C++ `WM_SETCURSOR`). The select tool now
+  uses the OS default cursor; clips/ruler/playhead all use default.
+  slip/razor/roll/av-split/play-range cursors remain (hover-only, no
+  playback flicker). Memory `tool-cursor-pattern` updated.
+- Razor no longer shows a dead roll cursor at seams — trim/roll
+  edge-detection is select-tool-only.
+
+### Keyboard shortcuts
+- `V` select, `B` blade/razor, `S` slip, `N` snap toggle,
+  `Shift+L` loop toggle. Plus the `/` and `Shift+/` range keys above.
+
+### Inspector panel
+- Right-side slide-in panel — a real grid column (column 4) that
+  PUSHES the timeline (no overlap), opened from the utilities-strip
+  gear icon. Built as a shell to grow into shot properties + the
+  layered-preset sub-timeline (see `.agent/Camera Presets and Motion
+  Layers.md`). First content: the "Audio follows C4D timeline" toggle.
+
+### Audio decoupled from the C4D native timeline
+- Inspector toggle "Audio follows C4D timeline" (default on). When
+  off, scrubbing/playing C4D's NATIVE timeline produces no v2 audio —
+  audio responds only to v2 playback + v2 scrub. The visual playhead
+  stays in sync either way. The `tick` message carries a `v2Playing`
+  flag so JS can tell v2-owned playback from C4D-native activity.
+
+### Minimal overlay scrollbars
+- The gutter scrollbars are gone — replaced by thin **7px** rounded
+  overlay bars on the stage's bottom/right edges (50% black fill so
+  clips show through, 1px faint border). Pan-only — zoom is Alt+RMB.
+- A bar shows ONLY when its axis is actually scrollable: horizontal
+  when zoomed in, vertical when the tracks OVERFLOW the visible region
+  (a zoomed-but-still-fitting view has nowhere to pan → no bar).
+- The `--scrollbar-sz` grid row/column and the v-gutter (with its
+  redundant VaSplitter) were removed; the timeline reclaimed the space.
+
+### Clip label — full-width header band
+- The label is a full-clip-width header band (10% black tint over the
+  clip fill, `3px/13px` padding) — Figma node 287:1811. Replaced the
+  earlier rounded pill (which overhung short clips). Thin clips keep a
+  plain inline label.
+
+### Live stereo dB meter
+- Ports `sb_audio_meter.py` + the meter ballistics from
+  `sb_canvas_audio.py`. `lib/audioMeter.ts` builds a per-channel RMS
+  dBFS envelope (60ms windows, -60..0 floor) per audio clip's decoded
+  buffer, cached per mediaId. `Meter.tsx` samples it at the playhead
+  on a rAF loop with peak-meter ballistics (instant attack, 11 dB/s
+  VU-ish release, 40 dB/s pause decay, 12 dB/s peak-hold tick).
+- Envelope-based (not a live AnalyserNode tap) so it reads during
+  scrub too, matching Python. Two thin L/R bars share the meter's
+  footprint; mono media drives both identically.
 
 ## What does NOT work yet
 
@@ -412,12 +503,11 @@ See memory `v2-c4d-nav-gestures`.
   mid-drag. `useDragRecovery` papers over the user-visible symptom
   (stuck class, stuck inline styles) but the underlying listener
   teardown still happens. Solo replace drag isn't affected.
-- **Cursor flickers during playback** — UNFIXED. The select cursor
-  flickers as the playhead progresses. Pre-existing (not caused by
-  the Round-14 cursor work). Suspect: `useToolCursor`'s
-  `MutationObserver` on `body` class re-evaluating each frame, or
-  synthetic pointermoves from the playhead line sweeping under a
-  stationary cursor. Not yet diagnosed.
+- ~~Cursor flickers during playback~~ — RESOLVED in Round 16 by
+  removing the custom select cursor entirely (the only cursor onscreen
+  during playback). The flicker was a structural two-writer race
+  (WebView2's CSS cursor + C++ `WM_SETCURSOR`); the select tool now
+  uses the OS default cursor. See memory `tool-cursor-pattern`.
 
 ## Stack
 
@@ -558,42 +648,42 @@ codebase for cleanup. Then a full audit pass to reorganize files,
 remove dead code, and fix the lurking lifecycle bugs. Then new
 features (shot library, slate engine, rig port).
 
+Done since this list was written: snap toggle + indicator lines,
+slip tool, live dB meter (Rounds 13–16).
+
 **Top-down port order, biggest user-facing wins first:**
 
-1. **Snap toggle + indicator lines + snap-to-peak.** Currently
-   magnetic snap is always on; Python has a snap button + yellow
-   snap-indicator vertical lines during drag. Needs (3) for
-   snap-to-peak.
-2. **Peak detection + visual peak markers + beat-grid overlay.**
-   Port `sb_audio_onsets.py` to JS (WebAudio + autocorrelation).
-   Triggered via the Beat Detection button. Tall yellow ticks on
-   audio clips. Optional beat-grid overlay.
-3. **Live dB meter** — drive the existing visual meter shell from
-   the playing audio amplitude.
-4. **Track-header controls (mute / solo / lock / eye)** — the
+1. **Peak detection + visual peak markers + beat-grid overlay.**
+   Port `sb_audio_onsets.py` (~747 lines) to JS. Triggered via the
+   Beat Detection button (currently a dead icon in the utilities
+   strip). Tall yellow ticks on audio clips. Unlocks snap-to-peak
+   (the Snap infra already exists) + an optional beat-grid overlay.
+   This is the biggest remaining feature — give it a fresh runway.
+   IMPORTANT: read `sb_audio_onsets.py` first — memory
+   `v9-peak-detection-envelope-only` records that v9 uses envelope
+   local-maxima on a drum-band signal, NOT spectral flux (tried and
+   removed). Don't reintroduce spectral flux.
+2. **Track-header controls (mute / solo / lock / eye)** — the
    icons render in `TrackHeader.tsx` but none are wired. Mute/solo
    gate playback; lock prevents edits; eye on video tracks toggles
    viewport visibility.
-5. **Pen tool — audio level keyframes** with interp modes
+3. **Pen tool — audio level keyframes** with interp modes
    (Linear/Hold/Ease). Affects playback gain. Largest single item.
-6. **Slip tool** — drag audio body to slide source under the clip.
-   Requires `mediaInFrame`/`mediaOutFrame` on Clip. Also fixes the
-   "waveform stretches on trim" caveat.
-7. **Medium-tier hotkeys** — Ctrl+D duplicate, Up/Down jump to
-   prev/next edit point, Alt+Arrow vertical move, `\` zoom-to-fit,
+4. **Medium-tier hotkeys** — Ctrl+D duplicate, Up/Down jump to
+   prev/next edit point, Alt+Arrow vertical move, zoom-to-fit,
    Ctrl+= zoom around playhead, razor snap-to-peak.
-8. **Polish** — hover-fade clip edges, range-bar dbl-click clear,
+5. **Polish** — hover-fade clip edges, range-bar dbl-click clear,
    orphan "Remove" vs "Delete" label, OM-rename live-reflect.
 
 **Then:**
-9. **Audit + cleanup pass** — folder structure, dead code, dead
+6. **Audit + cleanup pass** — folder structure, dead code, dead
    files. Fix the cross-track ripple stuck-class bug properly (not
    just masked by useDragRecovery).
-10. **Shot library / shot-creation flow** — preset shot templates
-    the user can drag onto V1. Bigger UX surface; design first.
-11. **Port v1 rig math to C++** (spring/damper, quat look-at, fBm
-    noise, autofocus, framing, zoom). Turns v2 from "timeline UI"
-    into "actual Shotblocks plugin."
+7. **Shot library / shot-creation flow** — preset shot templates
+   the user can drag onto V1. Bigger UX surface; design first.
+8. **Port v1 rig math to C++** (spring/damper, quat look-at, fBm
+   noise, autofocus, framing, zoom). Turns v2 from "timeline UI"
+   into "actual Shotblocks plugin."
 
 Slate (the signature "align shots to motion-energy peaks" feature)
 was never built in v1 either — parked until v2 reaches feature
