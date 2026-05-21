@@ -12,8 +12,11 @@ import { useStore } from './store';
  *    - Horizontal cursor movement slides the h-window so the frame
  *      that was under the cursor at press time stays glued to the
  *      cursor (1:1 pan).
- *    - Vertical cursor movement slides the v-window on whichever
- *      side (V/A) the cursor started in. Same 1:1 glue.
+ *    - Vertical cursor movement REAPPORTIONS the video/audio split
+ *      (the `vaShare` value the V/A divider line sits at): drag up
+ *      reveals more video, drag down reveals more audio. The divider
+ *      is no longer a draggable handle — this pan IS how you move it.
+ *      `setVaShare` clamps [0,1], so the pan stops at the edges.
  *    - Modifier keys are ignored — Alt+MMB pans the same as plain MMB.
  *
  *  We also call preventDefault on the auxclick / MMB-pointerdown to
@@ -52,28 +55,14 @@ export function useMmbPan() {
       const hSpanStart = Math.max(1, hStart.vMax - hStart.vMin);
       const framesPerPx = hSpanStart / xRect.width;
 
-      // ---- Vertical: which side, and track-units-per-pixel. ----
-      let vSide: 'video' | 'audio' | null = null;
-      let vStart: { min: number; max: number; vMin: number; vMax: number } | null = null;
-      let vUnitsPerPx = 0;
-      const stackVideos = document.getElementById('lanes-videos');
-      const stackAudios = document.getElementById('lanes-audios');
-      if (stackVideos) {
-        const r = stackVideos.getBoundingClientRect();
-        if (startClientY >= r.top && startClientY <= r.bottom && r.height > 0) {
-          vSide = 'video';
-          vStart = s0.vVideo;
-          vUnitsPerPx = (vStart.vMax - vStart.vMin) / r.height;
-        }
-      }
-      if (vSide === null && stackAudios) {
-        const r = stackAudios.getBoundingClientRect();
-        if (startClientY >= r.top && startClientY <= r.bottom && r.height > 0) {
-          vSide = 'audio';
-          vStart = s0.vAudio;
-          vUnitsPerPx = (vStart.vMax - vStart.vMin) / r.height;
-        }
-      }
+      // ---- Vertical: the V/A reapportion. Drag moves `vaShare` —
+      // video's fraction of the lane region. shareStart is the value
+      // at press time; shareDelta per pixel = 1 / region height. ----
+      const vaShareStart = s0.vaShare;
+      const lanesAreaEl = document.getElementById('lanes-area');
+      const regionPx = lanesAreaEl
+        ? Math.max(1, lanesAreaEl.getBoundingClientRect().height)
+        : 1;
 
       function onMove(mv: PointerEvent) {
         const dx = mv.clientX - startClientX;
@@ -90,31 +79,12 @@ export function useMmbPan() {
         if (hMax > hStart.max) { hMin -= hMax - hStart.max; hMax = hStart.max; }
         useStore.getState().setHVisible(hMin, hMax);
 
-        // ---- Vertical pan ----
-        // Hand-tool feel: content follows the cursor. Drag UP =
-        // content slides UP = window shifts to expose what was below.
-        //
-        //   Video stack (bottom-up: V1 at the bottom, V<max> at the
-        //   top): drag UP slides the pile UP, so lower-V-index tracks
-        //   (V1, V2…) come into view → vMin/vMax DECREASE.
-        //   Audio stack (top-down: A1 at the top, A<max> at the
-        //   bottom): drag UP slides the pile UP, so higher-A-index
-        //   tracks (A<max>) come into view → vMin/vMax INCREASE.
-        //
-        //   Drag UP = dy < 0 in screen coords. Video shift = +dy,
-        //   audio shift = -dy.
-        if (vSide && vStart) {
-          const vShift = (vSide === 'video' ? dy : -dy) * vUnitsPerPx;
-          let nMin = vStart.vMin + vShift;
-          let nMax = vStart.vMax + vShift;
-          if (nMin < vStart.min) { nMax += vStart.min - nMin; nMin = vStart.min; }
-          if (nMax > vStart.max) { nMin -= nMax - vStart.max; nMax = vStart.max; }
-          if (vSide === 'video') {
-            useStore.getState().setVVideoVisible(nMin, nMax);
-          } else {
-            useStore.getState().setVAudioVisible(nMin, nMax);
-          }
-        }
+        // ---- Vertical: reapportion the V/A split ----
+        // Drag DOWN (dy > 0) moves the divider down = more video on
+        // screen = higher vaShare. Drag UP = more audio. 1:1 with the
+        // cursor over the lane region. setVaShare clamps [0,1] so the
+        // pan halts when one side is fully shown.
+        useStore.getState().setVaShare(vaShareStart + dy / regionPx);
       }
 
       function onUp() {

@@ -319,7 +319,7 @@ function HeadersColumn({
             <TrackHeader key={t.id} track={t} side="video" />
           ))}
         </div>
-        <VaSplitter stackRef={stackRef} videosRef={videosRef} />
+        <VaSplitter />
         <div className="stack__audios" id="headers-audios">
           {audioTracks.map((t) => (
             <TrackHeader key={t.id} track={t} side="audio" />
@@ -358,7 +358,7 @@ function LanesStack({
           <Lane key={t.id} track={t} side="video" />
         ))}
       </div>
-      <VaSplitter stackRef={stackRef} videosRef={videosRef} />
+      <VaSplitter />
       <div className="stack__audios" id="lanes-audios" ref={audiosRef}>
         {audioTracks.map((t) => (
           <Lane key={t.id} track={t} side="audio" />

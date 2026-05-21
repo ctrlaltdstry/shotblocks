@@ -53,14 +53,9 @@ export function useToolCursor(): void {
 
     function compute(x: number, y: number): CursorMode {
       const s = useStore.getState();
-      // V/A splitter takes priority over any tool cursor — it shows
-      // whenever the pointer is over the splitter OR a splitter drag
-      // is in progress, regardless of the active tool. VaSplitter
-      // toggles `body.va-splitter-hover` for exactly both states.
-      if (document.body.classList.contains('va-splitter-hover')) {
-        return 'av-split';
-      }
-      // Roll-edit seam takes priority too — the Lane sets
+      // (The V/A divider is no longer a draggable handle — no cursor
+      // for it. Vertical MMB pan reapportions the split instead.)
+      // Roll-edit seam takes priority — the Lane sets
       // `rollEditActive` while the pointer is in a roll seam zone or
       // a roll drag is running.
       if (s.rollEditActive) {
@@ -120,16 +115,8 @@ export function useToolCursor(): void {
       }
     });
 
-    // The V/A splitter signals via the `va-splitter-hover` body class
-    // (not store state). Watch it so the cursor updates when a
-    // splitter drag ends with the pointer stationary (no pointermove
-    // to re-run compute).
-    const classObs = new MutationObserver(reevaluate);
-    classObs.observe(document.body, { attributes: true, attributeFilter: ['class'] });
-
     window.addEventListener('pointermove', onMove, true);
     return () => {
-      classObs.disconnect();
       window.removeEventListener('pointermove', onMove, true);
       unsub();
       apply('default');

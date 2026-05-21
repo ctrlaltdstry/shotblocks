@@ -450,33 +450,16 @@
 }
 .lane-spacer[data-side="video"] { flex-basis: var(--video-track-h); }
 .lane-spacer[data-side="audio"] { flex-basis: var(--audio-track-h); }
+/* The V/A divider — a non-interactive visual line. Its position is
+   driven by `vaShare` (flex-grow on the stacks); the vertical MMB pan
+   moves it. Not a grab handle any more — pointer-events:none so it
+   never intercepts a click / drag / pan that lands on it. */
 .stack__divider {
   flex: 0 0 var(--va-divider-h);
   background: var(--color-grey-7);
   box-sizing: content-box;
   border-bottom: 1px solid var(--color-grey-16);
-}
-/* V/A splitter cursor — the AV-split glyph. Shown whenever the
-   pointer is over the draggable divider, regardless of the active
-   tool. The `.body` prefix + !important keep the splitter cursor
-   winning over any other tool/element cursor. `16 16` hotspot
-   matches the .cur (the divider drags vertically — symmetric). */
-.body .stack__divider.is-grabbable {
-  cursor: url("data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAACAAAAAgCAYAAABzenr0AAACBUlEQVR4nO1WTYsTQRB9ValpyMcsEUECiYoBQdGDCFnwqHgR2eP8BG8KorCI4ATmmIMgyBx1l0VwD1kk7mFP/oXgSkBv/gDxEkiIH7QpnYGwDmiMPad50DTNTPd7/aq6uoECBQr8O9YBPE763HG8Vqu96Pf7H40xLwGcyI05CAIG8CCO4w/WWtvr9UYAHgIg5+TWWu2udjqdN7PZ7LsK0F7HzHzFuYB5zNcA7AyHw092AaPR6LMxZtvzvDWX5Grx3TAMD20Goig6BHDPZSjarVbrILX+KKbT6Vf9zsxnXQm4BGAPwCBt9ldSDBbaHhFdXpkpCAK1cfPI4r+1DAFZbXPpsHie5+vk8Xj8Jcvuv4XO13XK5fJyycnMTQBb/8mBLRE5uWQQoA7cAvCciHb06AHQirf/BwH7yX8/5xDRM2bWdWrLCiAR8UXktIicEZE2gA3N8slk8i3Lbj0dzWbzgIg2mFn/bzPzqWQzKx9NIqILuqsoit5lCQjD8G2y84urkmUiScw7xpiBVr5Fcq2M82P6iohuVyoV34mAbrerNmqReZp1FxDRE7Xd9aXkEdFNALt6C6qAOI7f65iZb9TrdXFJnqIO4L6GQt8D1Wr1tRYbETmWB7mCmPnc/BESA1DyuFQqnc/lPZCi0WhoKK4T0SMiuub7vpcbeYqEVDM+l7gXKOAMPwCD52PosFijWAAAAABJRU5ErkJggg==") 16 16, ns-resize !important;
-}
-/* Hover state: lights up ALL splitters together via body class so the
-   V/A seam reads as one continuous handle, not three disconnected
-   segments. CSS-level :hover would only match the one under the
-   cursor. */
-body.va-splitter-hover .stack__divider.is-grabbable,
-.stack__divider.is-grabbable:hover {
-  background-color: var(--color-timeline-primary-highlight);
-  background-image: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='5' height='5' viewBox='0 0 5 5'><line x1='5' y1='0' x2='0' y2='5' stroke='%23ffffff' stroke-opacity='0.3' stroke-width='1'/></svg>");
-  background-size: 5px 5px;
-  background-repeat: repeat;
-  box-shadow: inset 0 0 0 1px #01438B;
-  border-bottom-color: transparent;
-  background-clip: padding-box;
+  pointer-events: none;
 }
 
 /* Track header — pulled from the legacy markup pattern.
@@ -938,6 +921,10 @@ body.va-splitter-hover .stack__divider.is-grabbable,
 .shot-block.is-video    {
   background: var(--color-timeline-default-block);
   border-color: color-mix(in srgb, var(--color-timeline-default-block) 70%, black);
+  /* Flush to the lane's BOTTOM edge (no 2px inset there) so the beat-
+     grid lines running behind don't peek through a sliver of gap
+     below the clip. The top keeps its 2px inset for row separation. */
+  bottom: 0;
 }
 .shot-block.is-video.is-selected {
   background: var(--color-timeline-primary-highlight);

@@ -3,33 +3,32 @@ import { useStore } from './store';
 
 /** C4D viewport-style Alt + right-click drag zoom for the timeline.
  *
- *  Mirrors Python's `_drag_zoom` in sb_canvas_drag.py:661 (which only
- *  did horizontal — we extend to vertical too). The gesture:
- *    - Alt + RMB press anywhere in the ruler or lanes-area starts
- *      the zoom drag. The frame under the cursor at press time becomes
- *      the horizontal anchor (stays at the same X through the zoom).
- *    - Drag right → zoom in horizontally (smaller h-span).
- *      Drag left  → zoom out horizontally.
- *    - Drag up   → zoom in vertically on whichever side (V/A) the
- *      cursor started in. The track-row under the cursor at press
- *      time is the anchor.
- *      Drag down → zoom out vertically.
- *    - Both axes respond simultaneously based on their own deltas.
+ *  Two scopes, by where the press lands:
  *
- *  Sensitivity: factor = exp(-delta / 200). Matches Python exactly.
- *  200px of drag ≈ 0.37x zoom in (or 2.72x out).
+ *    - In the CANVAS (ruler or lanes-area): zooms EVERYTHING — the
+ *      time axis (horizontal) AND both the video and audio track
+ *      stacks (vertical), together. The frame + track-row under the
+ *      cursor at press time are the anchors.
  *
- *  The handler suppresses the default contextmenu when Alt is held so
- *  the right-click never opens the menu under this gesture. Normal
- *  Alt-less right-click still works as before. */
+ *    - In a TRACK-HEADER stack: zooms only THAT side's tracks,
+ *      vertically. Press in the video headers → video tracks resize;
+ *      press in the audio headers → audio tracks resize. No
+ *      horizontal zoom. This is how the two sides are zoomed
+ *      independently now that the V/A divider is no longer draggable.
+ *
+ *  Drag right/up = zoom in, left/down = zoom out. Sensitivity
+ *  factor = exp(-delta / 200), matching Python's `_drag_zoom`.
+ *
+ *  The handler suppresses the context menu while Alt is held so the
+ *  right-click never opens a menu under this gesture; plain (Alt-less)
+ *  right-click still opens the track-header / clip menus. */
 
 const SENS = 200; // pixels per e-fold; matches Python's _drag_zoom.
 
+type VWin = { min: number; max: number; vMin: number; vMax: number };
+
 export function useAltRightZoom() {
   useEffect(() => {
-    // While Alt is held during a right-click gesture, suppress the
-    // native (and our own) context menu. Capture phase so we beat
-    // the ShotBlock / lanes-area onContextMenu handlers.
     function onContextMenu(ev: MouseEvent) {
       if (ev.altKey) {
         ev.preventDefault();
@@ -39,14 +38,14 @@ export function useAltRightZoom() {
 
     function onPointerDown(ev: PointerEvent) {
       if (ev.button !== 2 || !ev.altKey) return;
-      // Only react when the press lands somewhere in the timeline
-      // content (ruler or lanes-area). Headers, palette, top bar,
-      // scrollbars stay untouched.
       const target = ev.target as HTMLElement | null;
       if (!target) return;
-      const ruler = target.closest('.ruler-row');
-      const lanesArea = target.closest('.lanes-area');
-      if (!ruler && !lanesArea) return;
+
+      const inRuler = !!target.closest('.ruler-row');
+      const inLanes = !!target.closest('.lanes-area');
+      const inHeaders = !!target.closest('#headers-videos')
+        || !!target.closest('#headers-audios');
+      if (!inRuler && !inLanes && !inHeaders) return;
 
       ev.preventDefault();
       ev.stopPropagation();
@@ -55,106 +54,123 @@ export function useAltRightZoom() {
       const startClientX = ev.clientX;
       const startClientY = ev.clientY;
 
-      // ----- Horizontal anchor: snapshot at press time. -----
-      // Use the lanes-area (or ruler) rect to convert clientX → frame.
-      // Lanes-area and ruler-row span the same horizontal extent.
-      const xRef = (lanesArea ?? ruler) as HTMLElement;
-      const xRect = xRef.getBoundingClientRect();
-      const hStart = s0.h;
-      const hSpanStart = Math.max(1, hStart.vMax - hStart.vMin);
-      const xFracInRect = Math.max(0, Math.min(1, (startClientX - xRect.left) / xRect.width));
-      const anchorFrame = hStart.vMin + xFracInRect * hSpanStart;
+      // Scope: a press in the headers zooms ONE side vertically and
+      // does NOT touch the time axis; a press in the canvas zooms
+      // time + both sides.
+      const headerScoped = inHeaders;
 
-      // ----- Vertical anchor: which side (V or A) the cursor is in. -----
-      // Determined once at press time; the gesture commits to one side
-      // even if the cursor drifts across the V/A splitter mid-drag.
-      let vSide: 'video' | 'audio' | null = null;
-      let vAnchorTrackUnit = 0;
-      let vWinStart: { min: number; max: number; vMin: number; vMax: number } | null = null;
-      let vRect: DOMRect | null = null;
-      const stackVideos = document.getElementById('lanes-videos');
-      const stackAudios = document.getElementById('lanes-audios');
-      if (stackVideos) {
-        const r = stackVideos.getBoundingClientRect();
-        if (startClientY >= r.top && startClientY <= r.bottom) {
-          vSide = 'video';
-          vWinStart = s0.vVideo;
-          vRect = r;
-        }
+      // ---- Horizontal anchor (canvas scope only) ----
+      let hStart = s0.h;
+      let hSpanStart = 1;
+      let anchorFrame = 0;
+      if (!headerScoped) {
+        const xRef = (target.closest('.lanes-area')
+          ?? target.closest('.ruler-row')) as HTMLElement;
+        const xRect = xRef.getBoundingClientRect();
+        hStart = s0.h;
+        hSpanStart = Math.max(1, hStart.vMax - hStart.vMin);
+        const xFrac = Math.max(0, Math.min(1, (startClientX - xRect.left) / xRect.width));
+        anchorFrame = hStart.vMin + xFrac * hSpanStart;
       }
-      if (vSide === null && stackAudios) {
-        const r = stackAudios.getBoundingClientRect();
-        if (startClientY >= r.top && startClientY <= r.bottom) {
-          vSide = 'audio';
-          vWinStart = s0.vAudio;
-          vRect = r;
-        }
+
+      // ---- Vertical: which side(s) to zoom + their anchors ----
+      // A "target" describes one side's zoom: its window, the rect it
+      // occupies on screen, and the track-unit anchored under the
+      // cursor (kept under the cursor through the zoom).
+      interface VTarget {
+        side: 'video' | 'audio';
+        win: VWin;
+        anchorUnit: number;
       }
-      if (vSide && vRect && vWinStart) {
-        const vSpan = Math.max(0.01, vWinStart.vMax - vWinStart.vMin);
-        // Video stack is bottom-up (V1 at the bottom, V<max> at the
-        // top), so the topmost edge of the rect maps to vMax. Audio
-        // stack is top-down, topmost edge maps to vMin.
-        const yFracInRect = Math.max(0, Math.min(1, (startClientY - vRect.top) / vRect.height));
-        if (vSide === 'video') {
-          vAnchorTrackUnit = vWinStart.vMax - yFracInRect * vSpan;
+      const vTargets: VTarget[] = [];
+
+      const measure = (
+        side: 'video' | 'audio',
+        rect: DOMRect | null,
+        win: VWin,
+      ): VTarget | null => {
+        if (!rect || rect.height <= 0) return null;
+        const span = Math.max(0.01, win.vMax - win.vMin);
+        // yFrac 0 = rect top. Video stack is bottom-up (vMax at top),
+        // audio top-down (vMin at top).
+        const yFrac = Math.max(0, Math.min(1,
+          (startClientY - rect.top) / rect.height));
+        const anchorUnit = side === 'video'
+          ? win.vMax - yFrac * span
+          : win.vMin + yFrac * span;
+        return { side, win, anchorUnit };
+      };
+
+      const videosCanvas = document.getElementById('lanes-videos');
+      const audiosCanvas = document.getElementById('lanes-audios');
+      const videosHeader = document.getElementById('headers-videos');
+      const audiosHeader = document.getElementById('headers-audios');
+
+      if (headerScoped) {
+        // Only the side whose header was pressed.
+        const inVideoHeaders = !!target.closest('#headers-videos');
+        if (inVideoHeaders && videosHeader) {
+          const t = measure('video', videosHeader.getBoundingClientRect(), s0.vVideo);
+          if (t) vTargets.push(t);
+        } else if (audiosHeader) {
+          const t = measure('audio', audiosHeader.getBoundingClientRect(), s0.vAudio);
+          if (t) vTargets.push(t);
+        }
+      } else {
+        // Canvas scope: zoom BOTH sides. Each anchors on its own rect
+        // (the cursor only sits in one, but both zoom around their
+        // visible centre — the pressed side stays glued to the
+        // cursor, the other zooms about the equivalent fraction).
+        const tv = measure('video', videosCanvas?.getBoundingClientRect() ?? null, s0.vVideo);
+        const ta = measure('audio', audiosCanvas?.getBoundingClientRect() ?? null, s0.vAudio);
+        if (tv) vTargets.push(tv);
+        if (ta) vTargets.push(ta);
+      }
+
+      function applyVZoom(t: VTarget, factor: number) {
+        const spanStart = Math.max(0.01, t.win.vMax - t.win.vMin);
+        const spanNew = Math.max(0.05, spanStart * factor);
+        const anchorFrac = t.side === 'video'
+          ? (t.win.vMax - t.anchorUnit) / spanStart
+          : (t.anchorUnit - t.win.vMin) / spanStart;
+        let nMin: number;
+        let nMax: number;
+        if (t.side === 'video') {
+          nMax = t.anchorUnit + anchorFrac * spanNew;
+          nMin = nMax - spanNew;
         } else {
-          vAnchorTrackUnit = vWinStart.vMin + yFracInRect * vSpan;
+          nMin = t.anchorUnit - anchorFrac * spanNew;
+          nMax = nMin + spanNew;
         }
+        if (nMin < t.win.min) { nMax += t.win.min - nMin; nMin = t.win.min; }
+        if (nMax > t.win.max) { nMin -= nMax - t.win.max; nMax = t.win.max; }
+        nMin = Math.max(t.win.min, nMin);
+        nMax = Math.min(t.win.max, nMax);
+        if (t.side === 'video') useStore.getState().setVVideoVisible(nMin, nMax);
+        else useStore.getState().setVAudioVisible(nMin, nMax);
       }
 
       function onMove(mv: PointerEvent) {
         const dx = mv.clientX - startClientX;
         const dy = mv.clientY - startClientY;
 
-        // ---- Horizontal zoom around anchorFrame ----
-        const hFactor = Math.exp(-dx / SENS);
-        const hSpanNew = Math.max(1, hSpanStart * hFactor);
-        const xRatio = hSpanStart > 0 ? (anchorFrame - hStart.vMin) / hSpanStart : 0;
-        let hMin = anchorFrame - xRatio * hSpanNew;
-        let hMax = hMin + hSpanNew;
-        if (hMin < hStart.min) { hMax += hStart.min - hMin; hMin = hStart.min; }
-        if (hMax > hStart.max) { hMin -= hMax - hStart.max; hMax = hStart.max; }
-        hMin = Math.max(hStart.min, hMin);
-        hMax = Math.min(hStart.max, hMax);
-        useStore.getState().setHVisible(hMin, hMax);
-
-        // ---- Vertical zoom around vAnchorTrackUnit (if a side was hit) ----
-        if (vSide && vWinStart) {
-          // Drag UP (dy < 0) = zoom IN = smaller span. factor = exp(dy / SENS).
-          const vFactor = Math.exp(dy / SENS);
-          const vSpanStart = Math.max(0.01, vWinStart.vMax - vWinStart.vMin);
-          const vSpanNew = Math.max(0.05, vSpanStart * vFactor);
-          // Recompute anchor's fractional position so it stays under
-          // the cursor's Y after the zoom.
-          let anchorFrac: number;
-          if (vSide === 'video') {
-            // Video stack: vMax maps to rect top. Anchor's frac from top =
-            // (vMax - anchor) / span.
-            anchorFrac = (vWinStart.vMax - vAnchorTrackUnit) / vSpanStart;
-          } else {
-            anchorFrac = (vAnchorTrackUnit - vWinStart.vMin) / vSpanStart;
-          }
-          let nMin: number;
-          let nMax: number;
-          if (vSide === 'video') {
-            nMax = vAnchorTrackUnit + anchorFrac * vSpanNew;
-            nMin = nMax - vSpanNew;
-          } else {
-            nMin = vAnchorTrackUnit - anchorFrac * vSpanNew;
-            nMax = nMin + vSpanNew;
-          }
-          // Clamp to the window's outer range.
-          if (nMin < vWinStart.min) { nMax += vWinStart.min - nMin; nMin = vWinStart.min; }
-          if (nMax > vWinStart.max) { nMin -= nMax - vWinStart.max; nMax = vWinStart.max; }
-          nMin = Math.max(vWinStart.min, nMin);
-          nMax = Math.min(vWinStart.max, nMax);
-          if (vSide === 'video') {
-            useStore.getState().setVVideoVisible(nMin, nMax);
-          } else {
-            useStore.getState().setVAudioVisible(nMin, nMax);
-          }
+        // Horizontal zoom — canvas scope only.
+        if (!headerScoped) {
+          const hFactor = Math.exp(-dx / SENS);
+          const hSpanNew = Math.max(1, hSpanStart * hFactor);
+          const xRatio = hSpanStart > 0 ? (anchorFrame - hStart.vMin) / hSpanStart : 0;
+          let hMin = anchorFrame - xRatio * hSpanNew;
+          let hMax = hMin + hSpanNew;
+          if (hMin < hStart.min) { hMax += hStart.min - hMin; hMin = hStart.min; }
+          if (hMax > hStart.max) { hMin -= hMax - hStart.max; hMax = hStart.max; }
+          hMin = Math.max(hStart.min, hMin);
+          hMax = Math.min(hStart.max, hMax);
+          useStore.getState().setHVisible(hMin, hMax);
         }
+
+        // Vertical zoom — drag UP (dy < 0) = zoom IN.
+        const vFactor = Math.exp(dy / SENS);
+        for (const t of vTargets) applyVZoom(t, vFactor);
       }
 
       function onUp() {
