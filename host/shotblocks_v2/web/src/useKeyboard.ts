@@ -99,13 +99,20 @@ export function useKeyboard(): void {
         void send({ kind: 'set-play-range', inFrame: s.playRangeIn, outFrame: newOut });
         return;
       }
-      // `/` → set play-range to selection (or all clips if nothing is
-      // selected). Mirrors Python's _range_to_selection_or_all
-      // (sb_canvas.py:2576).
+      // `/` → reset the play range to the full timeline (0 → docFrames).
       if (!mod && !ev.altKey && ev.key === '/') {
         ev.preventDefault();
         const s = useStore.getState();
-        rangeToSelectionOrAll(s);
+        s.setPlayRange(0, s.docFrames);
+        void send({ kind: 'set-play-range', inFrame: 0, outFrame: s.docFrames });
+        return;
+      }
+      // `Shift+/` (which the keyboard reports as `?`) → set play-range
+      // to the selection (or all clips if nothing is selected).
+      // Mirrors Python's _range_to_selection_or_all (sb_canvas.py:2576).
+      if (!mod && !ev.altKey && ev.key === '?') {
+        ev.preventDefault();
+        rangeToSelectionOrAll(useStore.getState());
         return;
       }
 
