@@ -760,9 +760,10 @@ body.va-splitter-hover .stack__divider.is-grabbable,
 
 /* Beat-grid connector dot — one per (LOD-surviving) bar line, drawn
    by BeatDotsOverlay at the bar line's exact X. `left`/`top` are set
-   inline (`top` = audio region's BOTTOM edge); the transform centres
-   horizontally and pulls the dot up so it sits inset inside the clip
-   above the bottom edge. */
+   inline (`top` = audio clip's BOTTOM edge); the transform sits the
+   dot entirely ABOVE that edge, inside the clip — the dot's BOTTOM
+   touching the clip edge — so the gutter grid line below runs right
+   up to the dot's edge and reads connected. */
 .beat-dot {
   position: absolute;
   width: 6px;
@@ -770,7 +771,7 @@ body.va-splitter-hover .stack__divider.is-grabbable,
   border-radius: 50%;
   background: var(--color-beat-grid);
   box-shadow: 0 0 0 1.5px rgba(0, 0, 0, 0.35);
-  transform: translate(-50%, -11px);
+  transform: translate(-50%, -100%);
   z-index: 6;
 }
 /* Song-part dot — FCP-style hollow ring: dark centre, light outline.
@@ -781,7 +782,7 @@ body.va-splitter-hover .stack__divider.is-grabbable,
   /* Slightly larger so the ring reads clearly. */
   width: 8px;
   height: 8px;
-  transform: translate(-50%, -12px);
+  transform: translate(-50%, -100%);
 }
 .lane {
   flex: 0 0 var(--track-h);
@@ -947,6 +948,11 @@ body.va-splitter-hover .stack__divider.is-grabbable,
 .shot-block.is-audio    {
   background: var(--color-timeline-audio);
   border-color: color-mix(in srgb, var(--color-timeline-audio) 70%, black);
+  /* Flush to the lane's TOP edge (no 2px inset there) so the beat-
+     grid lines running behind don't peek through a sliver of gap
+     above the clip. The bottom keeps its 2px inset — that's the
+     row-separation gap, and where the connector dots hang. */
+  top: 0;
 }
 .shot-block.is-audio.is-selected {
   background: var(--color-timeline-audio-selected);

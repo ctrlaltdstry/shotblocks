@@ -3,17 +3,18 @@ import { useStore } from '../store';
 import { useElementSize } from '../useElementSize';
 import { computeBeatGridLayout } from '../lib/beatGridLayout';
 
-/** Beat-grid connector dots — drawn at the BOTTOM of the audio-lanes
- *  region, on each grid line where it meets the audio clips:
+/** Beat-grid connector dots — one per grid line that has a dot:
  *    - solid dot per (LOD-surviving) BAR line.
- *    - hollow ring per SONG-PART line (FCP-style — distinct from the
- *      bar dots).
+ *    - hollow ring per SONG-PART line (FCP-style — distinct).
  *
- *  Separate from BeatGrid because the LINES sit behind the clips
- *  (showing through the gutters) while the DOTS must sit ON TOP of
- *  the clips — a dot behind an opaque clip would be invisible. Both
- *  use `computeBeatGridLayout`, so dot X + LOD stride match the grid
- *  lines exactly: every dot sits on its line, none are orphaned.
+ *  Each dot straddles the audio clip's BOTTOM edge — centred on the
+ *  edge, half over the clip, half in the gutter below. The grid LINES
+ *  (BeatGrid) run behind the clips and show in that gutter, so a
+ *  gutter line runs right up to the dot's edge: dot and line read as
+ *  connected without drawing anything over the clip.
+ *
+ *  Both this and BeatGrid use `computeBeatGridLayout`, so dot X + LOD
+ *  stride match the grid lines exactly.
  *
  *  Mounted as a high-z overlay inside the stage (after the lanes). */
 export function BeatDotsOverlay() {
