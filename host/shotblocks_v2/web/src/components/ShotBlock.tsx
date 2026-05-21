@@ -23,17 +23,12 @@ export function ShotBlock({
   side,
   trackId,
   thin,
-  narrow,
   style,
 }: {
   clip: Clip;
   side: 'video' | 'audio';
   trackId: string;
   thin: boolean;
-  /** Clip too narrow to hold the label pill — drop the pill so the
-   *  bare label clips cleanly at the clip edge (the pill's 16px of
-   *  padding can't shrink and would overhang). */
-  narrow: boolean;
   style?: CSSProperties;
 }) {
   const edgeHover = useStore((s) => s.edgeHover);
@@ -106,7 +101,6 @@ export function ShotBlock({
     (clip.state === 'orphaned' || clip.state === 'orphaned-selected') && 'is-orphaned',
     (clip.state === 'locked' || clip.locked) && 'is-locked',
     thin && 'is-thin',
-    narrow && 'is-narrow',
     hoverLeft  && 'is-edge-left',
     hoverRight && 'is-edge-right',
     isDragging && 'is-dragging',

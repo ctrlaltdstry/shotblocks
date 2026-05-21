@@ -31,7 +31,7 @@ const EDGE_PX = 24;
 
 export function Lane({ track, side }: { track: Track; side: 'video' | 'audio' }) {
   const laneRef = useRef<HTMLDivElement | null>(null);
-  const { height: laneHeight, width: laneWidth } = useElementSize(laneRef);
+  const { height: laneHeight } = useElementSize(laneRef);
   const h = useStore((s) => s.h);
   const setEdgeHover = useStore((s) => s.setEdgeHover);
   const setSelectedClip = useStore((s) => s.setSelectedClip);
@@ -404,12 +404,6 @@ export function Lane({ track, side }: { track: Track; side: 'video' | 'audio' })
       {track.clips.map((clip) => {
         const lanePctLeft  = ((clip.inFrame  - h.vMin) / visibleSpan) * 100;
         const lanePctRight = ((clip.outFrame - h.vMin) / visibleSpan) * 100;
-        // Clip pixel width — when it's too narrow to hold the label
-        // pill (which has 16px of unshrinkable padding), ShotBlock
-        // drops the pill so the bare label clips cleanly at the edge.
-        const clipPx = laneWidth > 0
-          ? ((clip.outFrame - clip.inFrame) / visibleSpan) * laneWidth
-          : 999;
         return (
           <ShotBlock
             key={clip.id}
@@ -417,7 +411,6 @@ export function Lane({ track, side }: { track: Track; side: 'video' | 'audio' })
             side={side}
             trackId={trackId}
             thin={thin}
-            narrow={clipPx < 44}
             style={{
               left:  lanePctLeft + '%',
               right: (100 - lanePctRight) + '%',

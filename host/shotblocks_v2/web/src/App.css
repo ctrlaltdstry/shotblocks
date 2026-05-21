@@ -847,44 +847,21 @@ body.is-clip-dragging .lane {
   color: rgba(255, 255, 255, 0.75);
 }
 
+/* Clip label — a full-width header band (Figma node 287:1811). The
+   label IS the band: a full-clip-width row, 3px/13px padding, with a
+   10% black tint over the clip fill. It negative-insets past
+   `.shot-block__content`'s 5px/14px padding so the band reaches the
+   clip edges; the content box's overflow:hidden clips it to the
+   rounded corners. Inter Regular 10px white text, ellipsis-clipped. */
 .shot-block__label {
   position: relative;        /* lift above the waveform canvas */
-  /* `0 1 auto` + min-width:0 — the label may SHRINK below its
-     content size so a narrow clip clips it (text-overflow ellipsis)
-     instead of the pill overhanging the clip edge. `0 0 auto` froze
-     it at min-content width and it spilled past short clips. */
-  flex: 0 1 auto;
-  min-width: 0;
-  align-self: flex-start;    /* pill hugs the text, doesn't stretch full-width */
-  max-width: 100%;           /* but never overflow the clip */
-  line-height: 1;
+  margin: -5px -14px 0;      /* cancel content padding so the band is full-width */
+  padding: 3px 13px;
+  background: rgba(0, 0, 0, 0.10);
+  line-height: normal;
   white-space: nowrap;
   text-overflow: ellipsis;
   overflow: hidden;
-  /* Pill treatment — a translucent chip behind the label.
-     border-radius is large enough to fully round the ends into a
-     pill rather than a rounded rectangle. The audio waveform is
-     where legibility actually suffers, so audio gets a strong dark
-     pill (overridden below); the default here is the light video
-     chip — barely-there, just a touch of separation. */
-  padding: 2px 8px;
-  background: rgba(0, 0, 0, 0.10);
-  border-radius: 999px;
-}
-/* Audio labels sit over the busy waveform — they need a strong dark
-   pill to stay legible. Video clips have a flat fill and only need a
-   hint (the lighter default above). */
-.shot-block.is-audio .shot-block__label {
-  background: rgba(0, 0, 0, 0.42);
-}
-/* Narrow clip — drop the pill entirely. The pill's 16px of unshrinkable
-   padding kept the label wider than a short clip and it overhung the
-   edge. Without the pill the bare label shrinks to 0 and ellipsis-clips
-   cleanly, exactly as it did before the pill was added. */
-.shot-block.is-narrow .shot-block__label {
-  padding: 0;
-  background: transparent;
-  border-radius: 0;
 }
 .shot-block__icon-wrap {
   /* Same recipe as .shot-block__label — when the clip narrows, the
@@ -929,8 +906,14 @@ body.is-clip-dragging .lane {
   padding: 4px 25px 4px 15px;
   justify-content: space-between;
 }
+/* Thin clips: no header band — the single-row centered layout is too
+   short for it, and the whole clip already reads as a label. Drop the
+   band's background + negative margins, back to a plain inline label. */
 .shot-block.is-thin .shot-block__label {
   flex: 0 1 auto; min-width: 0;
+  margin: 0;
+  padding: 0;
+  background: transparent;
 }
 
 /* Edge-hover brackets — yellow `[` on left, mirrored `]` on right.
