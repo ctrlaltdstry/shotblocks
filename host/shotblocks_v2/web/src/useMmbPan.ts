@@ -11,13 +11,15 @@ import { useStore } from './store';
  *    - MMB press anywhere in ruler or lanes-area starts pan.
  *    - Horizontal cursor movement slides the h-window so the frame
  *      that was under the cursor at press time stays glued to the
- *      cursor (1:1 pan).
- *    - Vertical cursor movement REAPPORTIONS the video/audio split
- *      (the `vaShare` value the V/A divider line sits at): drag up
- *      reveals more video, drag down reveals more audio. The divider
- *      is no longer a draggable handle — this pan IS how you move it.
- *      `setVaShare` clamps [0,1], so the pan stops at the edges.
- *    - Modifier keys are ignored — Alt+MMB pans the same as plain MMB.
+ *      cursor (1:1 pan). Same regardless of modifiers — time is a
+ *      single global axis.
+ *    - Vertical cursor movement has TWO modes:
+ *        · default (plain MMB, or Alt+MMB) — REAPPORTIONS the
+ *          video/audio split (the `vaShare` value the divider sits
+ *          at): drag up reveals more video, down more audio.
+ *        · Alt+Shift+MMB — pans ONE section's own scroll window
+ *          (video or audio, whichever the cursor started in),
+ *          leaving the other side and the V/A split untouched.
  *
  *  We also call preventDefault on the auxclick / MMB-pointerdown to
  *  suppress WebView2's default "auto-scroll cursor" behavior. */
@@ -55,14 +57,42 @@ export function useMmbPan() {
       const hSpanStart = Math.max(1, hStart.vMax - hStart.vMin);
       const framesPerPx = hSpanStart / xRect.width;
 
-      // ---- Vertical: the V/A reapportion. Drag moves `vaShare` —
-      // video's fraction of the lane region. shareStart is the value
-      // at press time; shareDelta per pixel = 1 / region height. ----
+      // ---- Vertical mode: Alt+Shift = pan one section; else the
+      // V/A reapportion. Captured at press time. ----
+      const sectionMode = ev.altKey && ev.shiftKey;
+
+      // -- Default mode: V/A reapportion via `vaShare`. --
       const vaShareStart = s0.vaShare;
       const lanesAreaEl = document.getElementById('lanes-area');
       const regionPx = lanesAreaEl
         ? Math.max(1, lanesAreaEl.getBoundingClientRect().height)
         : 1;
+
+      // -- Section mode: which side the cursor started in, that
+      //    side's v-window, and its track-units-per-pixel. --
+      let vSide: 'video' | 'audio' | null = null;
+      let vStart: { min: number; max: number; vMin: number; vMax: number } | null = null;
+      let vUnitsPerPx = 0;
+      if (sectionMode) {
+        const stackVideos = document.getElementById('lanes-videos');
+        const stackAudios = document.getElementById('lanes-audios');
+        if (stackVideos) {
+          const r = stackVideos.getBoundingClientRect();
+          if (startClientY >= r.top && startClientY <= r.bottom && r.height > 0) {
+            vSide = 'video';
+            vStart = s0.vVideo;
+            vUnitsPerPx = (vStart.vMax - vStart.vMin) / r.height;
+          }
+        }
+        if (vSide === null && stackAudios) {
+          const r = stackAudios.getBoundingClientRect();
+          if (startClientY >= r.top && startClientY <= r.bottom && r.height > 0) {
+            vSide = 'audio';
+            vStart = s0.vAudio;
+            vUnitsPerPx = (vStart.vMax - vStart.vMin) / r.height;
+          }
+        }
+      }
 
       function onMove(mv: PointerEvent) {
         const dx = mv.clientX - startClientX;
@@ -79,12 +109,30 @@ export function useMmbPan() {
         if (hMax > hStart.max) { hMin -= hMax - hStart.max; hMax = hStart.max; }
         useStore.getState().setHVisible(hMin, hMax);
 
-        // ---- Vertical: reapportion the V/A split ----
-        // Drag DOWN (dy > 0) moves the divider down = more video on
-        // screen = higher vaShare. Drag UP = more audio. 1:1 with the
-        // cursor over the lane region. setVaShare clamps [0,1] so the
-        // pan halts when one side is fully shown.
-        useStore.getState().setVaShare(vaShareStart + dy / regionPx);
+        // ---- Vertical pan ----
+        if (sectionMode) {
+          // Pan ONE section's own scroll window. Hand-tool feel:
+          // content follows the cursor. Video stack is bottom-up,
+          // audio top-down — so drag UP shifts video's window down
+          // (+dy) and audio's up (-dy) to keep "content follows hand".
+          if (vSide && vStart) {
+            const vShift = (vSide === 'video' ? dy : -dy) * vUnitsPerPx;
+            let nMin = vStart.vMin + vShift;
+            let nMax = vStart.vMax + vShift;
+            if (nMin < vStart.min) { nMax += vStart.min - nMin; nMin = vStart.min; }
+            if (nMax > vStart.max) { nMin -= nMax - vStart.max; nMax = vStart.max; }
+            if (vSide === 'video') {
+              useStore.getState().setVVideoVisible(nMin, nMax);
+            } else {
+              useStore.getState().setVAudioVisible(nMin, nMax);
+            }
+          }
+        } else {
+          // Reapportion the V/A split. Drag DOWN (dy > 0) moves the
+          // divider down = more video on screen = higher vaShare.
+          // setVaShare clamps [0,1] so the pan stops at the edges.
+          useStore.getState().setVaShare(vaShareStart + dy / regionPx);
+        }
       }
 
       function onUp() {
