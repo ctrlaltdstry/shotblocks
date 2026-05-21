@@ -69,7 +69,17 @@ export function Meter() {
               decodingRef.current.add(mediaId);
               if (!decodeCtx) decodeCtx = ctorCtx();
               void getAudioBuffer(mediaId, decodeCtx).then((buf) => {
-                if (buf) envsRef.current.set(mediaId, getMeterEnvelope(mediaId, buf));
+                if (buf) {
+                  envsRef.current.set(mediaId, getMeterEnvelope(mediaId, buf));
+                } else {
+                  // No bytes in audioStore yet. On doc LOAD the bytes
+                  // are fetched from C++ asynchronously, so the meter
+                  // can ask before they've landed. Clear the "tried"
+                  // mark so a later rAF retries once fetchAudio lands
+                  // — otherwise the meter stays dead for reloaded
+                  // audio until the clip is re-imported.
+                  decodingRef.current.delete(mediaId);
+                }
               });
             }
             continue;
