@@ -137,17 +137,18 @@ function AudioScrubToggle() {
 }
 
 /** Bottom horizontal scrollbar — pans/zooms the visible time window. */
+/** Horizontal scrollbar — overlay on the stage's bottom edge. Renders
+ *  ONLY while the timeline is zoomed in (the visible window is a
+ *  strict subset of the full range); at full zoom-out there's nothing
+ *  to pan, so no scrollbar shows. */
 function HScroll() {
   const h = useStore((s) => s.h);
   const setHVisible = useStore((s) => s.setHVisible);
+  const zoomedIn = h.vMin > h.min || h.vMax < h.max;
+  if (!zoomedIn) return null;
   return (
     <div className="h-scroll">
-      <Scrollbar
-        axis="x"
-        window={h}
-        minSpan={4}
-        onChange={setHVisible}
-      />
+      <Scrollbar axis="x" window={h} minSpan={4} onChange={setHVisible} />
     </div>
   );
 }
@@ -156,35 +157,25 @@ function HScroll() {
  *  the actual edges of the visible window — drag them together to
  *  zoom in, apart to zoom out. The lane content stays anchored at the
  *  V/A divider via the .stack__videos / .stack__audios flex rules. */
-function VScroll({
-  which,
-  elementRef,
-}: {
-  which: 'video' | 'audio';
-  elementRef?: React.RefObject<HTMLDivElement | null>;
-}) {
+/** Vertical scrollbar for one side of the V/A split — overlay on the
+ *  stage's right edge. Renders ONLY when that side's tracks overflow
+ *  the visible region (real pan distance exists). A zoomed-but-still-
+ *  fitting view has nowhere to pan, so no scrollbar shows. Pan-only —
+ *  vertical zoom is Alt+RMB drag. */
+function VScroll({ which, overflows }: { which: 'video' | 'audio'; overflows: boolean }) {
   const win = useStore((s) => which === 'video' ? s.vVideo : s.vAudio);
   const setter = useStore((s) => which === 'video' ? s.setVVideoVisible : s.setVAudioVisible);
-  const trackCount = useStore((s) => which === 'video' ? s.videoTracks.length : s.audioTracks.length);
-  // maxSpan: largest legal zoom-out. trackPx = NATURAL * count / span,
-  // clamped at MIN_TRACK_PX. Past `span = NATURAL * count / MIN`,
-  // zooming out further has no visual effect — lanes are already at
-  // their floor. We cap there. The cap is always >= trackCount (the
-  // natural zoom default) so the user can zoom from "all tracks at
-  // natural height" down to "all tracks at min height" without the
-  // dots fighting them.
-  const maxSpan = NATURAL_TRACK_PX * Math.max(1, trackCount) / MIN_TRACK_PX;
+  if (!overflows) return null;
   return (
-    <div ref={elementRef} className="v-scroll" title={`${which === 'video' ? 'Video' : 'Audio'} tracks scroll/zoom`}>
+    <div className={'v-scroll v-scroll--' + which}>
       <Scrollbar
         axis="y"
         window={win}
         minSpan={0.1}
-        maxSpan={maxSpan}
         onChange={setter}
-        // Video stack is bottom-up (V1 at the bottom, V<max> at the
-        // top), so the scrollbar reads naturally only when inverted:
-        // thumb-at-top corresponds to V<max> being visible.
+        // Video stack is bottom-up (V1 bottom, V<max> top), so the
+        // scrollbar reads naturally only inverted: thumb-at-top maps
+        // to V<max> being visible.
         invert={which === 'video'}
       />
     </div>
@@ -363,6 +354,23 @@ function computeVMax(trackCount: number, visibleHeight: number): number {
   const overflow = Math.max(0, contentH - visibleHeight);
   const panHeadroom = overflow / MIN_TRACK_PX;
   return maxSpan + panHeadroom;
+}
+
+/** True when one side's tracks overflow its visible region at the
+ *  current zoom — i.e. there is real distance to pan. The v-scrollbar
+ *  is gated on this: a zoomed-but-still-fitting view has nowhere to
+ *  pan, so no scrollbar shows. Mirrors useVerticalZoomVars' geometry. */
+function sideOverflows(
+  win: { vMin: number; vMax: number },
+  trackCount: number,
+  visibleHeight: number,
+): boolean {
+  if (visibleHeight < 1) return false;
+  const n = Math.max(1, trackCount);
+  const span = Math.max(0.01, win.vMax - win.vMin);
+  const trackPx = Math.max(MIN_TRACK_PX, NATURAL_TRACK_PX * n / span);
+  const contentH = trackPx * (n + 1);   // +1 = spawn-buffer spacer
+  return contentH - visibleHeight > 0.5;
 }
 
 function useTrackCountSync(videoStackH: number, audioStackH: number) {
@@ -598,8 +606,6 @@ function App() {
   const lanesStackRef = useRef<HTMLDivElement | null>(null);
   const lanesVideosRef = useRef<HTMLDivElement | null>(null);
   const lanesAudiosRef = useRef<HTMLDivElement | null>(null);
-  const vgutterRef = useRef<HTMLDivElement | null>(null);
-  const vgutterVideoRef = useRef<HTMLDivElement | null>(null);
   // Measure the lane stack heights so useTrackCountSync can compute
   // an adaptive `max` for each side (smaller = thumb fills more of
   // the track at zoom-out; larger = pan headroom when content
@@ -620,6 +626,18 @@ function App() {
   const inspectorOpen = useStore((s) => s.inspectorOpen);
 
   useVerticalZoomVars(lanesVideosRef, lanesAudiosRef);
+
+  // Does each side's track content overflow its visible region at the
+  // current zoom? Same formula as useVerticalZoomVars (track height =
+  // NATURAL/span clamped at MIN; contentH includes the spawn spacer).
+  // A v-scrollbar shows ONLY when there's real overflow to pan — not
+  // merely because the zoom window is a subset of the full range.
+  const vVideo = useStore((s) => s.vVideo);
+  const vAudio = useStore((s) => s.vAudio);
+  const videoTrackCount = useStore((s) => s.videoTracks.length);
+  const audioTrackCount = useStore((s) => s.audioTracks.length);
+  const videoOverflows = sideOverflows(vVideo, videoTrackCount, videoStackSize.height);
+  const audioOverflows = sideOverflows(vAudio, audioTrackCount, audioStackSize.height);
 
   return (
     <div className="app">
@@ -652,7 +670,6 @@ function App() {
         <div className="ruler-row" id="ruler-row">
           <Ruler />
         </div>
-        <div className="ruler-row__gutter-cap" />
 
         {/* row 2, col 1 — tool palette + dB meter + audio-scrub toggle */}
         <div className="rail">
@@ -721,6 +738,13 @@ function App() {
               creates for vertical scroll. With z:5 it now paints over
               both lane backgrounds AND clip bodies. */}
           <Playhead lanesAreaRef={lanesAreaRef} />
+
+          {/* Overlay scrollbars — minimal 4px thumbs floating on the
+              stage's bottom / right edges. Each renders only while its
+              axis is zoomed in (see HScroll / VScroll). */}
+          <HScroll />
+          <VScroll which="video" overflows={videoOverflows} />
+          <VScroll which="audio" overflows={audioOverflows} />
         </div>
 
         {/* Razor cut-line preview — spans ruler row (row 1) through
@@ -741,18 +765,7 @@ function App() {
             dragging a clip into a not-yet-existing track. */}
         <SpawnGhostLane />
 
-        {/* row 3 — h-scroll */}
-        <HScroll />
-
-        {/* row 2, col 4 — v-gutter. Uses the same VaSplitter; the two
-            VScrolls' flex-grow reads --va-video-share / --va-audio-share. */}
-        <div className="v-gutter" ref={vgutterRef}>
-          <VScroll which="video" elementRef={vgutterVideoRef} />
-          <VaSplitter stackRef={vgutterRef} videosRef={vgutterVideoRef} />
-          <VScroll which="audio" />
-        </div>
-
-        {/* Inspector — grid column 5, all 3 rows. Width collapses to 0
+        {/* Inspector — grid column 4, all 3 rows. Width collapses to 0
             when closed so the timeline reclaims the space. */}
         <Inspector />
       </div>

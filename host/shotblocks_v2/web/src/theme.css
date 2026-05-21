@@ -33,12 +33,6 @@
   --audio-track-h: 65px;
   --va-divider-h:  4px;
 
-  /* Scrollbars */
-  --scrollbar-sz:        19px;
-  --scrollbar-pill-sz:   15px;
-  --scrollbar-end-sz:    15px;
-  --scrollbar-end-inset: 0px;
-
   /* V/A split (1/1 = centered). JS rewrites these as the splitter drags. */
   --va-video-share: 1;
   --va-audio-share: 1;
