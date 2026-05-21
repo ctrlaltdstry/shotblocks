@@ -166,23 +166,38 @@
    above the ruler ticks/numbers. Pointer-events transparent so the
    user can still click+drag the ruler to scrub the playhead even
    when a play range is active. */
-/* The blue range tint fills the full ruler height. The whole band is
-   interactive: a drag (past a 3px threshold) slides the entire range,
-   a sub-threshold press falls through to a playhead scrub at that
-   frame. One handler (onMiddlePointerDown) disambiguates — no separate
-   vertical zones, click anywhere in the blue to move the range. */
+/* The blue range tint — VISUAL ONLY. pointer-events:none, so a press
+   anywhere in the blue falls straight through to the ruler and scrubs
+   the playhead, identical to scrubbing outside the range. The range
+   is moved only via the ||| grip below — no scrub-vs-range conflict. */
 .range-bar__middle {
   position: absolute;
   top: 0; bottom: 0;
   background: rgba(0, 122, 255, 0.10);
-  pointer-events: none;          /* visual fill — grab-strip handles input */
+  pointer-events: none;
   z-index: 3;
 }
-.range-bar__grab {
+/* Range grip — the ||| handle, the ONLY range-move target. Centered
+   on the range; three vertical lines on a faint rounded chip. */
+.range-bar__grip {
   position: absolute;
-  top: 0; bottom: 0;             /* full-height — drag anywhere = move range */
-  pointer-events: auto;
+  top: 0; bottom: 0;
   z-index: 4;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 2px;
+  cursor: grab;
+}
+.range-bar__grip:active { cursor: grabbing; }
+.range-bar__grip > span {
+  width: 2px;
+  height: 15px;
+  background: rgba(255, 255, 255, 0.28);
+  border-radius: 1px;
+}
+.range-bar__grip:hover > span {
+  background: rgba(255, 255, 255, 0.5);
 }
 /* In/out chevron handles — the blue bars at each end. They get the
    play-range cursor (data-URI; matches the C++ play-range.cur).

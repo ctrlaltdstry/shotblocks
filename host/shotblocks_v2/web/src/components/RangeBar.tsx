@@ -79,85 +79,24 @@ export function RangeBar({ rulerRef }: { rulerRef: React.RefObject<HTMLDivElemen
     };
   }
 
-  /** Press inside the blue range tint. The gesture is decided AT
-   *  pointerdown by WHERE the press lands:
-   *   - On the playhead column (within PLAYHEAD_GRAB_PX) → scrub the
-   *     playhead: press jumps it there, drag keeps scrubbing.
-   *   - Anywhere else in the blue → slide the WHOLE range (in + out
-   *     together, length preserved, clamped to doc bounds).
-   *  Ports Python `_drag_range_body`. */
-  function onMiddlePointerDown(ev: React.PointerEvent<HTMLDivElement>) {
+  /** Press on the range grip (the |||) — slides the WHOLE range
+   *  (in + out together, length preserved, clamped to doc bounds).
+   *  The grip is a small dedicated target; the rest of the blue tint
+   *  is pure playhead-scrub surface (pointer-events:none), so there's
+   *  no scrub-vs-range ambiguity. Ports Python `_drag_range_body`. */
+  function onGripPointerDown(ev: React.PointerEvent<HTMLDivElement>) {
     if (ev.button !== 0) return;
     ev.stopPropagation();
     ev.preventDefault();
-    const rect = rulerRef.current?.getBoundingClientRect();
-    if (!rect) return;
     const px = pxPerFrame();
     if (px <= 0) return;
 
-    function frameAt(clientX: number): number {
-      const x = Math.max(0, Math.min(rect!.width, clientX - rect!.left));
-      return Math.max(0, Math.min(docFrames, Math.round(h.vMin + x / px)));
-    }
-
-    // Is the press on the playhead? Decided here, at pointerdown.
-    const playheadFrame = useStore.getState().scrubFrame ?? useStore.getState().currentFrame;
-    const playheadX = rect.left + (playheadFrame - h.vMin) * px;
-    const PLAYHEAD_GRAB_PX = 6;
-    const onPlayhead = Math.abs(ev.clientX - playheadX) <= PLAYHEAD_GRAB_PX;
-
-    if (onPlayhead) {
-      // Scrub the playhead — same behaviour as scrubbing the ruler,
-      // including freezing v2 playback for the duration of the scrub.
-      void send({ kind: 'scrub-begin' });
-      function scrubTo(clientX: number) {
-        const frame = frameAt(clientX);
-        useStore.getState().setScrubFrame(frame);
-        void send({ kind: 'seek', frame });
-      }
-      scrubTo(ev.clientX);
-      function smove(mv: PointerEvent) { scrubTo(mv.clientX); }
-      function sup() {
-        void send({ kind: 'scrub-end' });
-        // scrubFrame is cleared by setTick once C++'s echo catches up
-        // — clearing here would jump the playhead back briefly.
-        window.removeEventListener('pointermove', smove);
-        window.removeEventListener('pointerup', sup);
-        window.removeEventListener('pointercancel', sup);
-      }
-      window.addEventListener('pointermove', smove);
-      window.addEventListener('pointerup', sup);
-      window.addEventListener('pointercancel', sup);
-      return;
-    }
-
-    // Otherwise: jump the playhead IMMEDIATELY on press (the common
-    // case — must feel instant, no waiting for pointerup or the C++
-    // tick echo). If the press then turns into a drag past the
-    // threshold, it's a range-slide instead: revert the scrub and
-    // move the whole range.
     const startClientX = ev.clientX;
     const startIn = playRangeIn;
     const startOut = playRangeOut;
     const length = startOut - startIn;
-    const prevPlayhead = useStore.getState().scrubFrame ?? useStore.getState().currentFrame;
-    let dragging = false;
-    const THRESHOLD_PX = 3;
-
-    // Optimistic local jump — scrubFrame drives the playhead render
-    // with zero round-trip; the seek tells C++ where to go.
-    const pressFrame = frameAt(ev.clientX);
-    useStore.getState().setScrubFrame(pressFrame);
-    void send({ kind: 'seek', frame: pressFrame });
 
     function move(mv: PointerEvent) {
-      if (!dragging && Math.abs(mv.clientX - startClientX) >= THRESHOLD_PX) {
-        // Became a range-drag — undo the playhead jump from the press.
-        dragging = true;
-        useStore.getState().setScrubFrame(prevPlayhead);
-        void send({ kind: 'seek', frame: prevPlayhead });
-      }
-      if (!dragging) return;
       const delta = Math.round((mv.clientX - startClientX) / px);
       const maxIn = Math.max(0, docFrames - length);
       const newIn = Math.max(0, Math.min(maxIn, startIn + delta));
@@ -167,10 +106,6 @@ export function RangeBar({ rulerRef }: { rulerRef: React.RefObject<HTMLDivElemen
       window.removeEventListener('pointermove', move);
       window.removeEventListener('pointerup', up);
       window.removeEventListener('pointercancel', up);
-      // scrubFrame is cleared by setTick once C++'s echo catches up to
-      // the seeked frame — both for a plain click and for the
-      // drag-reverted prevPlayhead seek. Clearing here would jump the
-      // playhead back to the stale currentFrame for a few frames.
     }
     window.addEventListener('pointermove', move);
     window.addEventListener('pointerup', up);
@@ -220,9 +155,19 @@ export function RangeBar({ rulerRef }: { rulerRef: React.RefObject<HTMLDivElemen
     transform: 'scaleX(-1)',
   };
 
+  const rangeW = Math.max(0, xOut - xIn);
   const middleStyle: CSSProperties = {
     left: xIn + 'px',
-    width: Math.max(0, xOut - xIn) + 'px',
+    width: rangeW + 'px',
+  };
+  // The ||| grip — a small fixed-width drag target centered on the
+  // range. Only this moves the range; the blue tint is pure scrub
+  // surface. Hidden when the range is too narrow to hold it.
+  const GRIP_W = 18;
+  const gripFits = rangeW >= GRIP_W + 8;
+  const gripStyle: CSSProperties = {
+    left: (xIn + rangeW / 2 - GRIP_W / 2) + 'px',
+    width: GRIP_W + 'px',
   };
 
   // When the range covers the entire document, treat that as "no
@@ -242,17 +187,19 @@ export function RangeBar({ rulerRef }: { rulerRef: React.RefObject<HTMLDivElemen
           style={middleStyle}
         />
       )}
-      {/* Range grab-strip — the top 9px band, draggable to slide the
-          whole range left/right (in + out together). Separate
-          vertical zone from the scrub area so the two never
-          conflict. */}
-      {!rangeIsFullDoc && (
+      {/* Range grip — the ||| handle centered on the range. The ONLY
+          range-move target; the blue tint stays pure scrub surface so
+          the playhead and the range never fight for the same press.
+          Three vertical lines drawn via CSS. Hidden on a narrow range. */}
+      {!rangeIsFullDoc && gripFits && (
         <div
-          className="range-bar__grab"
-          style={middleStyle}
-          onPointerDown={onMiddlePointerDown}
+          className="range-bar__grip"
+          style={gripStyle}
+          onPointerDown={onGripPointerDown}
           title="Drag to move the play range"
-        />
+        >
+          <span /><span /><span />
+        </div>
       )}
       {/* In handle — chevron points left, blue bar at inner edge. */}
       <div
