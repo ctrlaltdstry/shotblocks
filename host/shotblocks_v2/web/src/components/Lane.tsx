@@ -31,7 +31,7 @@ const EDGE_PX = 24;
 
 export function Lane({ track, side }: { track: Track; side: 'video' | 'audio' }) {
   const laneRef = useRef<HTMLDivElement | null>(null);
-  const { height: laneHeight } = useElementSize(laneRef);
+  const { height: laneHeight, width: laneWidth } = useElementSize(laneRef);
   const h = useStore((s) => s.h);
   const setEdgeHover = useStore((s) => s.setEdgeHover);
   const setSelectedClip = useStore((s) => s.setSelectedClip);
@@ -82,12 +82,18 @@ export function Lane({ track, side }: { track: Track; side: 'video' | 'audio' })
       onRollPointerMove(ev);
       return;
     }
-    // While a slip drag is in progress, do NOT run edge-hover
-    // detection. It would set cursorMode='trim' + an inline cursor on
-    // the lane and is-edge-* on the clip; when the slip ends those
-    // are left stuck, jamming the cursor for the whole lane. Keep the
-    // lane in default cursor mode and clear any edge-hover.
-    if (useStore.getState().slipDragging) {
+    // Trim / roll edge-hover detection belongs to the SELECT tool only.
+    // Skip it when:
+    //  - the razor or slip tool is active — those tools own the seam
+    //    with their own behavior (cut / slip); showing a trim or roll
+    //    cursor there would promise an action the click doesn't do.
+    //  - a slip drag or body drag is in progress — the dragged clip's
+    //    edges sweep under the cursor and would flip the mode (and the
+    //    cursor) every frame.
+    const tool = useStore.getState().activeTool;
+    if (tool !== 'select'
+        || useStore.getState().slipDragging
+        || useStore.getState().dragClip) {
       if (cursorMode !== 'default') setCursorMode('default');
       return;
     }
@@ -282,34 +288,33 @@ export function Lane({ track, side }: { track: Track; side: 'video' | 'audio' })
       ? t.origInFrame + dxFrames
       : t.origOutFrame + dxFrames;
 
-    // Snap to cross-track edit points (excluding the clip being
-    // trimmed itself to avoid self-snap). Matches Python
-    // _magnetic_snap_edge + _collect_edit_points (sb_shot_model.py:124).
+    // Snap to edit points across the WHOLE timeline — every clip's
+    // in/out on both sides (video + audio), all tracks — excluding the
+    // clip being trimmed itself (self-snap). Global snapping, matching
+    // body-drag and roll. Plus the playhead.
     const state = useStore.getState();
-    const sideTracks = side === 'video' ? state.videoTracks : state.audioTracks;
     const editPoints: number[] = [];
-    for (const trk of sideTracks) {
+    for (const trk of [...state.videoTracks, ...state.audioTracks]) {
       for (const c of trk.clips) {
         if (c.id === t.clipId) continue;
         editPoints.push(c.inFrame, c.outFrame);
       }
     }
     editPoints.push(state.scrubFrame ?? state.currentFrame);
-    // Snap gating: off when the Snap toggle is off, OR when Shift is
-    // held (ripple overrides snap regardless of toggle, per Python
-    // `_qualifier_mode` sb_canvas.py:344). snapFrames=0 short-circuits
-    // magneticSnap to a no-op.
-    const snapActive = state.snapEnabled && !ev.shiftKey;
+    // Snap gating (Premiere model): active when the Snap toggle is on
+    // OR Shift is held — Shift force-enables snap for this trim even
+    // with the toggle off. snapFrames=0 short-circuits magneticSnap.
+    const snapActive = state.snapEnabled || ev.shiftKey;
     const snapFrames = snapActive ? Math.max(1, SNAP_PIXEL_RADIUS / t.pxPerFrame) : 0;
     // For a single-edge snap, snap the edge's want-frame directly to
     // the nearest edit point; treat duration as 0 so magneticSnap
     // doesn't try to also snap the OTHER edge.
     const snap = magneticSnap(rawWant, 0, editPoints, snapFrames);
     setSnapIndicatorFrames(snap.targets);
-    // Shift held during trim → ripple mode (push same-track neighbors
-    // aside instead of overwriting them). Live: tapping Shift mid-drag
-    // toggles the mode in real time, mirroring Premiere/Resolve.
-    const mode = ev.shiftKey ? 'ripple' : 'replace';
+    // Cmd/Ctrl held during trim → ripple mode (push same-track
+    // neighbors aside instead of overwriting them). Live: tapping the
+    // modifier mid-drag toggles the mode, mirroring Premiere/Resolve.
+    const mode = (ev.ctrlKey || ev.metaKey) ? 'ripple' : 'replace';
     resizeClip(t.clipId, trackId, t.edge, snap.inFrame, mode);
   }
 
@@ -329,21 +334,26 @@ export function Lane({ track, side }: { track: Track; side: 'video' | 'audio' })
     const dxFrames = Math.round(dxPx / Math.max(0.0001, r.pxPerFrame));
     const rawSeam = r.origSeamFrame + dxFrames;
 
-    // Snap the seam to cross-track edit points. Exclude BOTH clips
-    // since they're moving together — snapping to either of their
-    // edges would be a self-snap.
+    // Snap the seam to edit points across the WHOLE timeline — every
+    // clip's in/out on BOTH sides (video + audio), plus the playhead.
+    // Exclude BOTH seam clips since they move together (self-snap).
+    //
+    // Why both sides, not just this side: a roll between the only two
+    // clips on a track excludes both of them, leaving nothing on that
+    // side to catch on. The user expects the seam to still snap to
+    // clip edges elsewhere (e.g. the video clips above an audio roll).
     const state = useStore.getState();
-    const sideTracks = side === 'video' ? state.videoTracks : state.audioTracks;
     const editPoints: number[] = [];
-    for (const trk of sideTracks) {
+    for (const trk of [...state.videoTracks, ...state.audioTracks]) {
       for (const c of trk.clips) {
         if (c.id === r.leftClipId || c.id === r.rightClipId) continue;
         editPoints.push(c.inFrame, c.outFrame);
       }
     }
     editPoints.push(state.scrubFrame ?? state.currentFrame);
-    // Same gating as trim — Snap toggle off OR Shift held → no snap.
-    const snapActive = state.snapEnabled && !ev.shiftKey;
+    // Same gating as trim (Premiere model) — snap active when the Snap
+    // toggle is on OR Shift is held. Roll has no ripple mode.
+    const snapActive = state.snapEnabled || ev.shiftKey;
     const snapFrames = snapActive ? Math.max(1, SNAP_PIXEL_RADIUS / r.pxPerFrame) : 0;
     const snap = magneticSnap(rawSeam, 0, editPoints, snapFrames);
     setSnapIndicatorFrames(snap.targets);
@@ -394,6 +404,12 @@ export function Lane({ track, side }: { track: Track; side: 'video' | 'audio' })
       {track.clips.map((clip) => {
         const lanePctLeft  = ((clip.inFrame  - h.vMin) / visibleSpan) * 100;
         const lanePctRight = ((clip.outFrame - h.vMin) / visibleSpan) * 100;
+        // Clip pixel width — when it's too narrow to hold the label
+        // pill (which has 16px of unshrinkable padding), ShotBlock
+        // drops the pill so the bare label clips cleanly at the edge.
+        const clipPx = laneWidth > 0
+          ? ((clip.outFrame - clip.inFrame) / visibleSpan) * laneWidth
+          : 999;
         return (
           <ShotBlock
             key={clip.id}
@@ -401,6 +417,7 @@ export function Lane({ track, side }: { track: Track; side: 'video' | 'audio' })
             side={side}
             trackId={trackId}
             thin={thin}
+            narrow={clipPx < 44}
             style={{
               left:  lanePctLeft + '%',
               right: (100 - lanePctRight) + '%',

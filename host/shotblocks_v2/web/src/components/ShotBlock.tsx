@@ -23,12 +23,17 @@ export function ShotBlock({
   side,
   trackId,
   thin,
+  narrow,
   style,
 }: {
   clip: Clip;
   side: 'video' | 'audio';
   trackId: string;
   thin: boolean;
+  /** Clip too narrow to hold the label pill — drop the pill so the
+   *  bare label clips cleanly at the clip edge (the pill's 16px of
+   *  padding can't shrink and would overhang). */
+  narrow: boolean;
   style?: CSSProperties;
 }) {
   const edgeHover = useStore((s) => s.edgeHover);
@@ -46,14 +51,15 @@ export function ShotBlock({
   // spanning ruler + lanes-area. Lets the user see exactly which
   // frame they'll cut on, on every track. Pointer-leave clears.
   //
-  // When Snap is on (Shift suppresses), the preview line pulls to the
-  // playhead within SNAP_PIXEL_RADIUS so the visual matches where the
-  // cut will actually land — see the razor-snap branch in useClipDrag.
+  // When snap is active (Snap toggle on OR Shift held), the preview
+  // line pulls to the playhead within SNAP_PIXEL_RADIUS so the visual
+  // matches where the cut lands — see the razor-snap branch in
+  // useClipDrag.
   function onRazorPointerMove(ev: React.PointerEvent<HTMLDivElement>) {
     const s = useStore.getState();
     if (s.activeTool !== 'razor') return;
     let hoverX = ev.clientX;
-    if (s.snapEnabled && !ev.shiftKey) {
+    if (s.snapEnabled || ev.shiftKey) {
       const laneEl = ev.currentTarget.closest('.lane') as HTMLElement | null;
       if (laneEl) {
         const r = laneEl.getBoundingClientRect();
@@ -100,6 +106,7 @@ export function ShotBlock({
     (clip.state === 'orphaned' || clip.state === 'orphaned-selected') && 'is-orphaned',
     (clip.state === 'locked' || clip.locked) && 'is-locked',
     thin && 'is-thin',
+    narrow && 'is-narrow',
     hoverLeft  && 'is-edge-left',
     hoverRight && 'is-edge-right',
     isDragging && 'is-dragging',

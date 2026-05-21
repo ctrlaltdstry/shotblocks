@@ -37,6 +37,16 @@ Verification is by inspection: check Extensions → Console in C4D after relaunc
 
 Junctions (`mklink /J`) for zero-copy dev do **not** load reliably from this C4D install. Copy-on-deploy is the canonical workflow; don't reintroduce junctions without verifying.
 
+## Debugging method — measure, don't guess
+
+This is a hard process rule, learned the expensive way. Bug-chasing sessions go in circles when fixes are shipped on theory and the user is used as the debugger. Don't do that.
+
+1. **No code change until a measurement proves the cause.** For a layout/visual bug: a CDP `getBoundingClientRect` dump (`node scripts/cdp-eval.mjs "<expr>"`, store on `window.__SHOTBLOCKS_STORE__`). For a behavior bug: a console log, the C4D Console, or a store snapshot. If the cause can't be measured yet, instrument *first* and ship that — a deploy that produces a fact, not a guess.
+2. **State one falsifiable hypothesis before touching anything** — "X is wider than Y; if I measure them equal, I'm wrong" — not "let me try X."
+3. **A failed fix gets reverted before the next attempt.** Never stack a new fix on a failed one; that is how a session accumulates wrong guesses and regresses.
+4. **Two failed attempts on the same bug → stop guessing and instrument.** No third blind attempt.
+5. **When the user says something factual about when/where it broke** ("it worked before X", "check the console"), that is ground truth — a constraint to work backward from, not a suggestion to weigh against a theory.
+
 ## Code layout
 
 The current `src/` is a flatter `sb_*` module convention rather than the package layout sketched in `architecture.md` (which is aspirational):

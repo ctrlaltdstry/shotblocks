@@ -48,16 +48,17 @@ export function Ruler() {
     const f = Math.round(h.vMin + (x / rect.width) * visibleSpan);
     return Math.max(0, Math.min(docFrames, f));
   }
-  /** Magnetically pull a raw scrub frame to nearby clip edit points
-   *  when the Snap toggle is on (Shift held suppresses it, matching
-   *  the body/trim-drag inversion). Edit points are every clip's
-   *  in/out across BOTH sides — Python's `_drag_playhead` snaps the
-   *  playhead to shot ins/outs + audio edges (sb_canvas_drag.py:549).
-   *  The playhead is the moving thing, so it isn't its own target.
-   *  Publishes the yellow indicator lines as a side effect. */
+  /** Magnetically pull a raw scrub frame to nearby clip edit points.
+   *  Snap is active when the Snap toggle is on OR Shift is held
+   *  (Premiere model — Shift force-enables snap for this scrub). Edit
+   *  points are every clip's in/out across BOTH sides — Python's
+   *  `_drag_playhead` snaps the playhead to shot ins/outs + audio
+   *  edges (sb_canvas_drag.py:549). The playhead is the moving thing,
+   *  so it isn't its own target. Publishes the yellow indicator lines
+   *  as a side effect. */
   function snapScrub(rawFrame: number, shiftKey: boolean): number {
     const s = useStore.getState();
-    if (!s.snapEnabled || shiftKey) {
+    if (!s.snapEnabled && !shiftKey) {
       s.setSnapIndicatorFrames([]);
       return rawFrame;
     }
@@ -99,7 +100,10 @@ export function Ruler() {
   function onPointerEnd(ev: React.PointerEvent<HTMLDivElement>) {
     if (!drag.current.active) return;
     drag.current.active = false;
-    setScrubFrame(null);
+    // Don't clear scrubFrame here — setTick clears it once C++'s tick
+    // echo catches up to the seeked frame. Clearing now would drop
+    // the optimistic playhead back to the stale currentFrame and
+    // make it visibly jump back a few frames.
     useStore.getState().setSnapIndicatorFrames([]);
     try { ev.currentTarget.releasePointerCapture(ev.pointerId); } catch { /* noop */ }
   }
@@ -108,7 +112,6 @@ export function Ruler() {
     <div
       ref={innerRef}
       className="ruler-row__inner"
-      style={{ cursor: 'ew-resize' }}
       onPointerDown={onPointerDown}
       onPointerMove={onPointerMove}
       onPointerUp={onPointerEnd}

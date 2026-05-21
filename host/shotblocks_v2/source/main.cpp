@@ -994,8 +994,8 @@ private:
 				m = CURSOR_SLIP;
 			else if (body.find("\"mode\":\"razor\"") != std::string::npos)
 				m = CURSOR_RAZOR;
-			else if (body.find("\"mode\":\"select\"") != std::string::npos)
-				m = CURSOR_SELECT;
+			// No "select" case — the Select tool uses the OS default
+			// cursor (removed to kill the playback cursor flicker).
 			else if (body.find("\"mode\":\"av-split\"") != std::string::npos)
 				m = CURSOR_AV_SPLIT;
 			else if (body.find("\"mode\":\"roll\"") != std::string::npos)
@@ -1090,6 +1090,17 @@ private:
 				if (absFrame > maxFrame)
 					absFrame = maxFrame;
 				doc->SetTime(BaseTime(absFrame, fps));
+				// If a seek lands DURING v2-owned playback, re-anchor the
+				// wall-clock playback clock to the seeked frame — else the
+				// next Timer() tick recomputes targetFrame from the stale
+				// anchor and snaps the playhead back. Playback then
+				// continues from where the scrub dropped it. Mirrors
+				// Python's _move_playhead re-anchor (sb_canvas_playback.py:640).
+				if (_v2Playing)
+				{
+					_v2AnchorMs    = GeGetMilliSeconds();
+					_v2AnchorFrame = absFrame - minFrame;
+				}
 				// EVMSG_TIMECHANGED triggers the viewport + timeline + our
 				// own PostTick via CoreMessage, keeping every UI in sync.
 				EventAdd();
@@ -1675,16 +1686,16 @@ private:
 		wchar_t* lastSlash = wcsrchr(path, L'\\');
 		if (lastSlash)
 			*(lastSlash + 1) = 0;
+		// No select.cur — the Select tool uses the OS default cursor.
 		_slipCursor    = LoadCursorFile(path, L"slip.cur");
 		_razorCursor   = LoadCursorFile(path, L"razor.cur");
-		_selectCursor  = LoadCursorFile(path, L"select.cur");
 		_avSplitCursor   = LoadCursorFile(path, L"av-split.cur");
 		_rollCursor      = LoadCursorFile(path, L"roll.cur");
 		_playRangeCursor = LoadCursorFile(path, L"play-range.cur");
 		char b[192];
 		_snprintf_s(b, sizeof(b), _TRUNCATE,
-			"[Shotblocks/v2] cursors loaded: slip=%d razor=%d select=%d avsplit=%d roll=%d playrange=%d",
-			_slipCursor ? 1 : 0, _razorCursor ? 1 : 0, _selectCursor ? 1 : 0,
+			"[Shotblocks/v2] cursors loaded: slip=%d razor=%d avsplit=%d roll=%d playrange=%d",
+			_slipCursor ? 1 : 0, _razorCursor ? 1 : 0,
 			_avSplitCursor ? 1 : 0, _rollCursor ? 1 : 0, _playRangeCursor ? 1 : 0);
 		GePrint(maxon::String(b));
 	}
@@ -1696,7 +1707,7 @@ private:
 		{
 			case CURSOR_SLIP:     return _slipCursor;
 			case CURSOR_RAZOR:    return _razorCursor;
-			case CURSOR_SELECT:   return _selectCursor;
+			// CURSOR_SELECT removed — Select tool uses the OS default.
 			case CURSOR_AV_SPLIT:   return _avSplitCursor;
 			case CURSOR_ROLL:       return _rollCursor;
 			case CURSOR_PLAY_RANGE: return _playRangeCursor;
@@ -1797,7 +1808,6 @@ private:
 	bool                 _cursorsLoaded{false};
 	HCURSOR              _slipCursor{nullptr};
 	HCURSOR              _razorCursor{nullptr};
-	HCURSOR              _selectCursor{nullptr};
 	HCURSOR              _avSplitCursor{nullptr};
 	HCURSOR              _rollCursor{nullptr};
 	HCURSOR              _playRangeCursor{nullptr};

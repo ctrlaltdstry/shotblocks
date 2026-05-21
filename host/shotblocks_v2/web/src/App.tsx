@@ -86,9 +86,9 @@ function LoopToggle() {
 
 /** Snap toggle in the utilities strip. Magnetic snap during clip
  *  body/trim/roll drags is gated on this flag. Default OFF, mirroring
- *  Python's `_snap_enabled = False` (sb_canvas.py:420). Shift held
- *  during a drag overrides this toggle (ripple mode beats snap, per
- *  Python `_qualifier_mode`). */
+ *  Python's `_snap_enabled = False` (sb_canvas.py:420). Holding Shift
+ *  during a drag force-enables snap even when this toggle is off
+ *  (Premiere model); Cmd/Ctrl during a drag is ripple mode. */
 function SnapToggle() {
   const on = useStore((s) => s.snapEnabled);
   return (

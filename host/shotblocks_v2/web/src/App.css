@@ -155,30 +155,28 @@
    above the ruler ticks/numbers. Pointer-events transparent so the
    user can still click+drag the ruler to scrub the playhead even
    when a play range is active. */
-/* The blue range tint fills the full ruler height as a VISUAL band,
-   but only its TOP grab-strip is pointer-interactive (drag = move the
-   whole range). The lower part is click-through so the playhead can
-   still be scrubbed inside the range — no gesture conflict, the two
-   live in separate vertical zones. */
+/* The blue range tint fills the full ruler height. The whole band is
+   interactive: a drag (past a 3px threshold) slides the entire range,
+   a sub-threshold press falls through to a playhead scrub at that
+   frame. One handler (onMiddlePointerDown) disambiguates — no separate
+   vertical zones, click anywhere in the blue to move the range. */
 .range-bar__middle {
   position: absolute;
   top: 0; bottom: 0;
   background: rgba(0, 122, 255, 0.10);
-  pointer-events: none;          /* visual fill — scrub passes through */
+  pointer-events: none;          /* visual fill — grab-strip handles input */
   z-index: 3;
 }
 .range-bar__grab {
   position: absolute;
-  top: 0;
-  height: 9px;                   /* top grab-strip — drag to move range */
+  top: 0; bottom: 0;             /* full-height — drag anywhere = move range */
   pointer-events: auto;
   z-index: 4;
 }
 /* In/out chevron handles — the blue bars at each end. They get the
    play-range cursor (data-URI; matches the C++ play-range.cur).
-   .body prefix + !important raise specificity above
-   .body.is-tool-select * (also !important) so the play-range cursor
-   wins over the select cursor on the handles. 16 16 hotspot matches
+   .body prefix + !important keep the play-range cursor winning over
+   any tool/element cursor on the handles. 16 16 hotspot matches
    the .cur. */
 .range-bar__handle {
   position: absolute;
@@ -396,9 +394,8 @@
 }
 /* V/A splitter cursor — the AV-split glyph. Shown whenever the
    pointer is over the draggable divider, regardless of the active
-   tool. The `.body` prefix + !important raise specificity above the
-   `.body.is-tool-select *` rule (which is also !important) so the
-   splitter cursor wins over the select cursor. `16 16` hotspot
+   tool. The `.body` prefix + !important keep the splitter cursor
+   winning over any other tool/element cursor. `16 16` hotspot
    matches the .cur (the divider drags vertically — symmetric). */
 .body .stack__divider.is-grabbable {
   cursor: url("data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAACAAAAAgCAYAAABzenr0AAACBUlEQVR4nO1WTYsTQRB9ValpyMcsEUECiYoBQdGDCFnwqHgR2eP8BG8KorCI4ATmmIMgyBx1l0VwD1kk7mFP/oXgSkBv/gDxEkiIH7QpnYGwDmiMPad50DTNTPd7/aq6uoECBQr8O9YBPE763HG8Vqu96Pf7H40xLwGcyI05CAIG8CCO4w/WWtvr9UYAHgIg5+TWWu2udjqdN7PZ7LsK0F7HzHzFuYB5zNcA7AyHw092AaPR6LMxZtvzvDWX5Grx3TAMD20Goig6BHDPZSjarVbrILX+KKbT6Vf9zsxnXQm4BGAPwCBt9ldSDBbaHhFdXpkpCAK1cfPI4r+1DAFZbXPpsHie5+vk8Xj8Jcvuv4XO13XK5fJyycnMTQBb/8mBLRE5uWQQoA7cAvCciHb06AHQirf/BwH7yX8/5xDRM2bWdWrLCiAR8UXktIicEZE2gA3N8slk8i3Lbj0dzWbzgIg2mFn/bzPzqWQzKx9NIqILuqsoit5lCQjD8G2y84urkmUiScw7xpiBVr5Fcq2M82P6iohuVyoV34mAbrerNmqReZp1FxDRE7Xd9aXkEdFNALt6C6qAOI7f65iZb9TrdXFJnqIO4L6GQt8D1Wr1tRYbETmWB7mCmPnc/BESA1DyuFQqnc/lPZCi0WhoKK4T0SMiuub7vpcbeYqEVDM+l7gXKOAMPwCD52PosFijWAAAAABJRU5ErkJggg==") 16 16, ns-resize !important;
@@ -547,23 +544,11 @@ body.va-splitter-hover .stack__divider.is-grabbable,
   cursor: url("data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAACAAAAAgCAYAAABzenr0AAABkElEQVR4nO2VMUsCYRjH/xA8NEhT5HKQtxikH0DuAwRHuMWBm1/gPkKzQ+BggwStQlAO1pJcEFiQN+QgUbdkIESWRVBwN3RkPaFwXWqi3kVw//Udfr/n+b/vHRAkSJDxIgJYA7ACgPyGK9FoVMtms5eqqp4D2Aaw4Bc8FYvFjlqtltnpplAoXPslkQKwX6vVHjuu+CHxNXkmk7lwb8APiYQTms/nDUVRztwCXknMAFjXNO3WCTJN0+4nMG0JmYhK3HulUrkbBOTYtv3uhcQGg3nlkiQdD5q6Xq8/iaJYdp87JObHFUjE4/Eyd88SyWTy1A1pNpuvgiAcVqvVh35yuVzuCoA6yRakYRKWZb0ZhvE8qJpGo/ECYHMSgV8lnOHKnE+0WCze8CWeVGBkCe6992R1Xb8PhUJ7ABanITCyBJ/xv6ILX54WfGQJnpyIdr2A95WQZfmk3W5bvTvg1eRDJYjoIBKJlAFsAVjyGv5DIp1O6wBW/QJ/kwiHwyUi2vn86gl/IcCZAzD7V/AgQf5/PgDKt0GJmp4PQwAAAABJRU5ErkJggg=="), crosshair;
 }
 
-/* Select tool cursor — the general pointer over the WHOLE timeline
-   body: ruler, lanes, clips, track headers, scrollbars — everything.
-   While the Select tool is active this one arrow is shown uniformly,
-   including over clips, while dragging a clip, scrubbing the
-   playhead, and over the scrollbars / track headers (which otherwise
-   show grab / resize cursors). Same two-layer model as the razor
-   cursor: CSS data-URI here + C++ WM_SETCURSOR ownership. !important
-   beats `.shot-block { cursor: grab }`, the ruler's inline ew-resize,
-   the scrollbars' grab / resize cursors, and `body.is-clip-dragging`.
-   useToolCursor.ts matches the SAME surface (the whole `.body`). */
-.body.is-tool-select,
-.body.is-tool-select * {
-  /* The `10 10` after the url() is the hotspot (the arrow tip) in the
-     32px image — it MUST match the .cur's embedded hotspot or the
-     cursor feels offset from the hit-point. */
-  cursor: url("data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAACAAAAAgCAYAAABzenr0AAABNUlEQVR4nO2Tr2+DUBSFKxATCMTExAR/AqICOTlROYlAIJAVFZNzFRg8giYzTSYm+BMQCARicmJiAol4AoH4lksoyX65AtnyTnKT58637jl3tdLS0tL6CwKugR1gLwWwreuapmkAMmADGHMC2E3TdKZp4vs+RVEIyDtwD1zNBZGJuTxlHMchjmOUUi3wDNxODbDJ83wEOI1sJQxDqqqSrbwNXbmcAsAQg/V6/Q3iNK7rcjgcaNtWtnI8e2mBhyRJfgUwDKOH2O/3dF0nG9meG6Avo2VZn4w9zyPLMrkScZUsoskuBXgKgmA0lzfwAtxNkv0PADdlWY4A8nMxn9z4C8SrlFEyV0oJgDU3wC5N075wkvms5gOApZTqoki6RjQ7wADxOJzaZikAW+4cuFgEQEtL69/oA2tzHuichUJaAAAAAElFTkSuQmCC") 10 10, default !important;
-}
+/* No custom Select-tool cursor. The Select tool uses the OS default
+   cursor everywhere — this avoids the WebView2/C++ two-writer cursor
+   race that flickered the custom select cursor during playback. The
+   Select tool still exists as a palette button; it just doesn't paint
+   a cursor. Range handles keep their own ew-resize cursor. */
 
 /* Slip tool cursor. Slip only acts on AUDIO clips (it slides the media
    window), so the slip cursor shows on audio shot-blocks; elsewhere
@@ -740,7 +725,7 @@ body.is-clip-dragging .lane {
      box to overlap the clip's own 1px border. The inner
      .shot-block__content wrapper has its OWN overflow:hidden so the
      label/icon clip cleanly to the rounded corners. */
-  cursor: grab;
+  cursor: default;
   user-select: none;
   font-family: Inter, sans-serif;
   font-size: 10px;
@@ -768,6 +753,15 @@ body.is-clip-dragging .lane {
   padding: 5px 14px 4px;
   overflow: hidden;
   border-radius: 4px;
+  /* min-width:0 — WITHOUT this the box's `auto` minimum lets the
+     unshrinkable label (16px of pill padding) STRETCH the content box
+     wider than the clip, defeating inset:0. Pinning min-width:0 keeps
+     the box exactly the clip width so the clip-path mask below clips
+     at the real clip edge. */
+  min-width: 0;
+  /* Hard mask: clip-path forces EVERYTHING inside (label pill, text,
+     waveform) to the clip's box. */
+  clip-path: inset(0 round 4px);
 }
 /* Selected stroke is white (per Figma node 173:2549 — "Selected"
    variant). Rendered as a child-div overlay (.shot-block__selected-
@@ -777,10 +771,10 @@ body.is-clip-dragging .lane {
    color) is still per-type below since it's a fill change, not an
    overlay. */
 /* During an in-timeline drag, the clip element itself translates under
-   the cursor — no ghost, no dim. We just want a grabbing cursor and a
-   z-index lift so the moving clip draws above any clip it crosses. */
+   the cursor — no ghost, no dim. Just a z-index lift so the moving clip
+   draws above any clip it crosses. Cursor stays default. */
 .shot-block.is-dragging {
-  cursor: grabbing;
+  cursor: default;
   z-index: 10;
   /* pointer-events: none so the visually-translated clip doesn't
      show up in elementsFromPoint hit-tests during drag — otherwise
@@ -846,11 +840,42 @@ body.is-clip-dragging .lane {
 
 .shot-block__label {
   position: relative;        /* lift above the waveform canvas */
-  flex: 0 0 auto;
+  /* `0 1 auto` + min-width:0 — the label may SHRINK below its
+     content size so a narrow clip clips it (text-overflow ellipsis)
+     instead of the pill overhanging the clip edge. `0 0 auto` froze
+     it at min-content width and it spilled past short clips. */
+  flex: 0 1 auto;
+  min-width: 0;
+  align-self: flex-start;    /* pill hugs the text, doesn't stretch full-width */
+  max-width: 100%;           /* but never overflow the clip */
   line-height: 1;
   white-space: nowrap;
   text-overflow: ellipsis;
   overflow: hidden;
+  /* Pill treatment — a translucent chip behind the label.
+     border-radius is large enough to fully round the ends into a
+     pill rather than a rounded rectangle. The audio waveform is
+     where legibility actually suffers, so audio gets a strong dark
+     pill (overridden below); the default here is the light video
+     chip — barely-there, just a touch of separation. */
+  padding: 2px 8px;
+  background: rgba(0, 0, 0, 0.10);
+  border-radius: 999px;
+}
+/* Audio labels sit over the busy waveform — they need a strong dark
+   pill to stay legible. Video clips have a flat fill and only need a
+   hint (the lighter default above). */
+.shot-block.is-audio .shot-block__label {
+  background: rgba(0, 0, 0, 0.42);
+}
+/* Narrow clip — drop the pill entirely. The pill's 16px of unshrinkable
+   padding kept the label wider than a short clip and it overhung the
+   edge. Without the pill the bare label shrinks to 0 and ellipsis-clips
+   cleanly, exactly as it did before the pill was added. */
+.shot-block.is-narrow .shot-block__label {
+  padding: 0;
+  background: transparent;
+  border-radius: 0;
 }
 .shot-block__icon-wrap {
   /* Same recipe as .shot-block__label — when the clip narrows, the
@@ -896,7 +921,7 @@ body.is-clip-dragging .lane {
   justify-content: space-between;
 }
 .shot-block.is-thin .shot-block__label {
-  flex: 1 1 0; min-width: 0;
+  flex: 0 1 auto; min-width: 0;
 }
 
 /* Edge-hover brackets — yellow `[` on left, mirrored `]` on right.

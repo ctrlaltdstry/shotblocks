@@ -80,20 +80,37 @@ export function WaveformCanvas({ clip }: { clip: Clip }) {
   function layoutOnly() {
     const canvas = canvasRef.current;
     if (!canvas) return null;
-    const clipEl = canvas.parentElement?.closest('.shot-block') as HTMLElement | null;
-    const laneEl = clipEl?.closest('.lane') as HTMLElement | null;
-    if (!clipEl || !laneEl) return null;
+    const contentEl = canvas.parentElement as HTMLElement | null;
+    const clipEl = contentEl?.closest('.shot-block') as HTMLElement | null;
+    const laneEl = contentEl?.closest('.lane') as HTMLElement | null;
+    if (!contentEl || !clipEl || !laneEl) return null;
 
+    // The canvas's CSS left/width are relative to its offset parent
+    // (.shot-block__content). But the content box sub-pixel-rounds
+    // ~1px WIDER than the actual clip (.shot-block) — so sizing the
+    // canvas to the content box overhangs the clip edge. Clamp to the
+    // CLIP's rect (the true edge), expressed in content-box space.
+    const contentRect = contentEl.getBoundingClientRect();
     const clipRect = clipEl.getBoundingClientRect();
     const laneRect = laneEl.getBoundingClientRect();
-    const leftPx  = Math.max(0, laneRect.left  - clipRect.left);
-    const rightPx = Math.min(clipRect.width, laneRect.right - clipRect.left);
+
+    // Clip edges in content-box coordinate space.
+    const clipLeft  = clipRect.left  - contentRect.left;
+    const clipRight = clipRect.right - contentRect.left;
+
+    // Visible window = (lane ∩ clip), in content-box space.
+    const leftPx  = Math.max(clipLeft,  laneRect.left  - contentRect.left);
+    const rightPx = Math.min(clipRight, laneRect.right - contentRect.left);
     const visW    = Math.max(0, rightPx - leftPx);
 
     canvas.style.left  = leftPx + 'px';
     canvas.style.right = 'auto';
     canvas.style.width = visW + 'px';
-    return { leftPx, visW, clipFullW: clipRect.width };
+    // `leftPx` positions the canvas in content-box space, but draw()
+    // wants the visible window's offset relative to the CLIP's left
+    // edge — subtract clipLeft so the waveform media-window mapping
+    // lines up with the clip, not the content box.
+    return { leftPx: leftPx - clipLeft, visW, clipFullW: clipRect.width };
   }
 
   // Keep the redraw ref pointed at THIS render's doFullRedraw, so any

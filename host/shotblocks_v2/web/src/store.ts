@@ -781,6 +781,17 @@ export const useStore = create<State>((set) => ({
     currentFrame: frame,
     fps: fps > 0 ? fps : s.fps,
     playing,
+    // Drop the optimistic scrub override once C++'s tick echo has
+    // caught up to the EXACT seeked frame. Clearing scrubFrame on
+    // pointer-release instead (the old way) dropped it BEFORE the echo
+    // arrived, so the playhead briefly fell back to the stale
+    // currentFrame and jumped. Strict `===`, not `>=`: a backward
+    // scrub leaves currentFrame ahead of scrubFrame, and `>=` would
+    // clear instantly and jump the playhead back. During an active
+    // scrub drag each move re-sets scrubFrame, so a transient clear
+    // here is harmless. JS frameAt and C++ both clamp to the same
+    // [0, docFrames] range, so the echo always hits the exact frame.
+    scrubFrame: s.scrubFrame !== null && frame === s.scrubFrame ? null : s.scrubFrame,
   })),
 
   setScrubFrame: (frame) => set({ scrubFrame: frame }),

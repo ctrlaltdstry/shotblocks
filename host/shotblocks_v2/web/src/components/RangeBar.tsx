@@ -79,50 +79,95 @@ export function RangeBar({ rulerRef }: { rulerRef: React.RefObject<HTMLDivElemen
     };
   }
 
-  /** Press on the blue range tint. Drag (past a 3px threshold) slides
-   *  the WHOLE range — in + out together, length preserved, clamped
-   *  to doc bounds. A sub-threshold press is treated as a click and
-   *  scrubs the playhead to that frame (so the tint still works as a
-   *  scrub surface). Ports Python `_drag_range_body`. */
+  /** Press inside the blue range tint. The gesture is decided AT
+   *  pointerdown by WHERE the press lands:
+   *   - On the playhead column (within PLAYHEAD_GRAB_PX) → scrub the
+   *     playhead: press jumps it there, drag keeps scrubbing.
+   *   - Anywhere else in the blue → slide the WHOLE range (in + out
+   *     together, length preserved, clamped to doc bounds).
+   *  Ports Python `_drag_range_body`. */
   function onMiddlePointerDown(ev: React.PointerEvent<HTMLDivElement>) {
     if (ev.button !== 0) return;
     ev.stopPropagation();
     ev.preventDefault();
+    const rect = rulerRef.current?.getBoundingClientRect();
+    if (!rect) return;
+    const px = pxPerFrame();
+    if (px <= 0) return;
+
+    function frameAt(clientX: number): number {
+      const x = Math.max(0, Math.min(rect!.width, clientX - rect!.left));
+      return Math.max(0, Math.min(docFrames, Math.round(h.vMin + x / px)));
+    }
+
+    // Is the press on the playhead? Decided here, at pointerdown.
+    const playheadFrame = useStore.getState().scrubFrame ?? useStore.getState().currentFrame;
+    const playheadX = rect.left + (playheadFrame - h.vMin) * px;
+    const PLAYHEAD_GRAB_PX = 6;
+    const onPlayhead = Math.abs(ev.clientX - playheadX) <= PLAYHEAD_GRAB_PX;
+
+    if (onPlayhead) {
+      // Scrub the playhead — same behaviour as scrubbing the ruler.
+      function scrubTo(clientX: number) {
+        const frame = frameAt(clientX);
+        useStore.getState().setScrubFrame(frame);
+        void send({ kind: 'seek', frame });
+      }
+      scrubTo(ev.clientX);
+      function smove(mv: PointerEvent) { scrubTo(mv.clientX); }
+      function sup() {
+        // scrubFrame is cleared by setTick once C++'s echo catches up
+        // — clearing here would jump the playhead back briefly.
+        window.removeEventListener('pointermove', smove);
+        window.removeEventListener('pointerup', sup);
+        window.removeEventListener('pointercancel', sup);
+      }
+      window.addEventListener('pointermove', smove);
+      window.addEventListener('pointerup', sup);
+      window.addEventListener('pointercancel', sup);
+      return;
+    }
+
+    // Otherwise: jump the playhead IMMEDIATELY on press (the common
+    // case — must feel instant, no waiting for pointerup or the C++
+    // tick echo). If the press then turns into a drag past the
+    // threshold, it's a range-slide instead: revert the scrub and
+    // move the whole range.
     const startClientX = ev.clientX;
     const startIn = playRangeIn;
     const startOut = playRangeOut;
     const length = startOut - startIn;
-    let maxAbsDx = 0;
+    const prevPlayhead = useStore.getState().scrubFrame ?? useStore.getState().currentFrame;
+    let dragging = false;
     const THRESHOLD_PX = 3;
 
+    // Optimistic local jump — scrubFrame drives the playhead render
+    // with zero round-trip; the seek tells C++ where to go.
+    const pressFrame = frameAt(ev.clientX);
+    useStore.getState().setScrubFrame(pressFrame);
+    void send({ kind: 'seek', frame: pressFrame });
+
     function move(mv: PointerEvent) {
-      const dx = mv.clientX - startClientX;
-      if (Math.abs(dx) > maxAbsDx) maxAbsDx = Math.abs(dx);
-      if (maxAbsDx < THRESHOLD_PX) return; // still a click — don't shift
-      const px = pxPerFrame();
-      if (px <= 0) return;
-      let delta = Math.round(dx / px);
-      // Clamp so the (length-preserving) range stays inside the doc.
-      const minIn = 0;
+      if (!dragging && Math.abs(mv.clientX - startClientX) >= THRESHOLD_PX) {
+        // Became a range-drag — undo the playhead jump from the press.
+        dragging = true;
+        useStore.getState().setScrubFrame(prevPlayhead);
+        void send({ kind: 'seek', frame: prevPlayhead });
+      }
+      if (!dragging) return;
+      const delta = Math.round((mv.clientX - startClientX) / px);
       const maxIn = Math.max(0, docFrames - length);
-      const newIn = Math.max(minIn, Math.min(maxIn, startIn + delta));
-      delta = newIn - startIn;
+      const newIn = Math.max(0, Math.min(maxIn, startIn + delta));
       commit(newIn, newIn + length);
     }
-    function up(upEv: PointerEvent) {
+    function up() {
       window.removeEventListener('pointermove', move);
       window.removeEventListener('pointerup', up);
       window.removeEventListener('pointercancel', up);
-      if (maxAbsDx >= THRESHOLD_PX) return; // was a drag — already committed
-      // Sub-threshold press → click: scrub the playhead to this frame.
-      const rect = rulerRef.current?.getBoundingClientRect();
-      if (!rect) return;
-      const x = Math.max(0, Math.min(rect.width, upEv.clientX - rect.left));
-      const px = pxPerFrame();
-      if (px <= 0) return;
-      const frame = Math.max(0, Math.min(docFrames, Math.round(h.vMin + x / px)));
-      useStore.getState().setScrubFrame(frame);
-      void send({ kind: 'seek', frame });
+      // scrubFrame is cleared by setTick once C++'s echo catches up to
+      // the seeked frame — both for a plain click and for the
+      // drag-reverted prevPlayhead seek. Clearing here would jump the
+      // playhead back to the stale currentFrame for a few frames.
     }
     window.addEventListener('pointermove', move);
     window.addEventListener('pointerup', up);

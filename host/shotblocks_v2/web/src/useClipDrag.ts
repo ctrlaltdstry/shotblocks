@@ -122,26 +122,28 @@ function resolveLane(
 
   // Cursor inside a lane: check whether we should spawn instead.
   // Spawn rule: when hovering the OUTERMOST track on this side (the
-  // V<maxId> for video, A<maxId> for audio), the half of the lane
-  // farthest from the V/A splitter resolves to a new track. That
-  // gives a "drag up a bit" gesture that creates V2 from V1 without
-  // needing to drag all the way into the ruler. Stays on the existing
-  // outermost track if hovering the inner half.
+  // V<maxId> for video, A<maxId> for audio), only a THIN band at the
+  // lane's outer edge (farthest from the V/A splitter) resolves to a
+  // new track. A narrow band — not the whole outer half — so a normal
+  // horizontal drag through the lane never accidentally spawns; the
+  // user has to deliberately push to the outer edge to create V2.
   if (hoverLane) {
     const trackId = hoverLane.getAttribute('data-track');
     if (!trackId) return null;
     const trackNum = parseInt(trackId.slice(1), 10);
     if (trackNum === maxId) {
       const r = hoverLane.getBoundingClientRect();
-      const mid = r.top + r.height / 2;
+      // Spawn band: the outer 22% of the lane, capped at 14px so it
+      // stays a thin trigger even on tall lanes.
+      const band = Math.min(14, r.height * 0.22);
       // Video: V1 is at the BOTTOM of its stack (closest to splitter),
-      // V<max> is at the TOP. So the spawn-half is the upper half.
+      // V<max> is at the TOP. So the spawn band is at the lane TOP.
       // Audio: A1 is at the TOP of its stack (closest to splitter),
-      // A<max> is at the BOTTOM. So the spawn-half is the lower half.
-      if (side === 'video' && clientY < mid) {
+      // A<max> is at the BOTTOM. So the spawn band is at the lane BOTTOM.
+      if (side === 'video' && clientY < r.top + band) {
         return { kind: 'spawn', trackId: spawnId };
       }
-      if (side === 'audio' && clientY > mid) {
+      if (side === 'audio' && clientY > r.bottom - band) {
         return { kind: 'spawn', trackId: spawnId };
       }
     }
@@ -251,13 +253,15 @@ export function useClipDrag(
       const d = dragRef.current;
       if (d.pointerId !== ev.pointerId) return;
 
-      // Re-anchor on Shift toggle: clear transform AND reset the drag
+      // Re-anchor on ripple-toggle: clear transform AND reset the drag
       // origin to (current pointer, current store position) so the
       // next mode's delta math starts from a clean baseline. Without
       // this, switching from replace (transform-only) to ripple
       // (live-commit) would compute frameDelta from the *original*
       // pointer-down position, double-applying the move.
-      const nowRipple = ev.shiftKey;
+      // Ripple = Cmd/Ctrl held (Premiere model — Shift is now the
+      // force-snap modifier, see snapActive below).
+      const nowRipple = ev.ctrlKey || ev.metaKey;
       const toggled = !d.groupIds && nowRipple !== d.rippleMode && d.active;
       if (toggled) {
         // Find the moving clip's live position in the store. After a
@@ -327,25 +331,26 @@ export function useClipDrag(
       // resolves any final overlaps (Python's "replace" mode, see
       // sb_shot_model.py:_resolve_position).
       //
-      // Edit-point sources: all same-side clips' inFrame + outFrame
-      // (cross-track per Python's _collect_edit_points), excluding
-      // moving clips (single clip OR whole group) themselves to
-      // prevent self-snap.
+      // Edit-point sources: every clip's inFrame + outFrame across the
+      // WHOLE timeline — both sides (video + audio), all tracks — so a
+      // clip snaps to edges globally (e.g. a video clip catches on an
+      // audio clip's edge below it). Excludes the moving clip(s) (single
+      // clip OR whole group) to prevent self-snap. Plus the playhead.
       const state = useStore.getState();
-      const sideTracks = side === 'video' ? state.videoTracks : state.audioTracks;
       const movingIds = d.groupIds ?? new Set<number>([clip.id]);
       const editPoints: number[] = [];
-      for (const t of sideTracks) {
+      for (const t of [...state.videoTracks, ...state.audioTracks]) {
         for (const c of t.clips) {
           if (movingIds.has(c.id)) continue;
           editPoints.push(c.inFrame, c.outFrame);
         }
       }
       editPoints.push(state.scrubFrame ?? state.currentFrame);
-      // Snap gating: off if the toggle is off, OR if ripple mode is
-      // active (Shift overrides snap per Python `_qualifier_mode`,
-      // sb_canvas.py:344). snapFrames=0 short-circuits magneticSnap.
-      const snapActive = state.snapEnabled && !d.rippleMode;
+      // Snap gating (Premiere model): snap is active when the Snap
+      // toggle is on, OR while Shift is held — Shift temporarily
+      // force-enables snap for this drag even with the toggle off.
+      // snapFrames=0 short-circuits magneticSnap to a no-op.
+      const snapActive = state.snapEnabled || ev.shiftKey;
       const snapFrames = snapActive ? Math.max(1, SNAP_PIXEL_RADIUS / d.pxPerFrame) : 0;
       const snap = magneticSnap(rawInFrame, duration, editPoints, snapFrames);
       const snappedIn = Math.max(0, snap.inFrame);
@@ -522,9 +527,9 @@ export function useClipDrag(
         // Razor snap: pull the cut to the playhead frame only — clip
         // edges are already cuts so they're not useful targets. Lets
         // the user park the playhead inside a clip and cut exactly
-        // there. Gated on the Snap toggle; Shift suppresses (matches
-        // the body/trim/scrub-drag inversion).
-        if (liveStore.snapEnabled && !ev.shiftKey) {
+        // there. Active when the Snap toggle is on OR Shift is held
+        // (Shift force-enables snap — Premiere model).
+        if (liveStore.snapEnabled || ev.shiftKey) {
           const playhead = liveStore.scrubFrame ?? liveStore.currentFrame;
           const snapFrames = Math.max(1, SNAP_PIXEL_RADIUS / pxPerFrame);
           if (Math.abs(cursorFrame - playhead) <= snapFrames) {
@@ -542,15 +547,18 @@ export function useClipDrag(
       const edgeReserve = clipWidthEdgeZone(rect.width);
       if (xInClip < edgeReserve || xInClip > rect.width - edgeReserve) return;
 
-      // Slip gesture: when the Slip tool is active OR Ctrl is held, a
-      // body drag on an AUDIO clip slides the media window under the
-      // (fixed-position) clip instead of moving the clip. Ports
-      // Python's slip branch (sb_canvas.py:2917, _drag_audio_slip).
-      // Edge-zone drags already returned above, so trim still works
-      // while the Slip tool is active.
+      // Slip gesture: when the Slip tool is active, a body drag on an
+      // AUDIO clip slides the media window under the (fixed-position)
+      // clip instead of moving the clip. Ports Python's slip branch
+      // (sb_canvas.py:2917, _drag_audio_slip). Edge-zone drags already
+      // returned above, so trim still works while the Slip tool is on.
+      //
+      // The old Ctrl-held shortcut for slip is GONE — Ctrl/Cmd now
+      // means ripple (Premiere model). Slip is reached via the Slip
+      // tool (palette or the `S` hotkey).
       {
         const st = useStore.getState();
-        const slipActive = side === 'audio' && (st.activeTool === 'slip' || ev.ctrlKey || ev.metaKey);
+        const slipActive = side === 'audio' && st.activeTool === 'slip';
         if (slipActive) {
           startSlipDrag(ev);
           return;
@@ -615,7 +623,7 @@ export function useClipDrag(
         lastDy: 0,
         animatedDy: 0,
         groupIds: isGroupDrag ? new Set(selSnapshot) : null,
-        rippleMode: ev.shiftKey,
+        rippleMode: ev.ctrlKey || ev.metaKey,
       };
 
       ev.preventDefault();

@@ -80,12 +80,11 @@ export function useToolCursor(): void {
         // Razor cuts any clip — video or audio.
         return pointerOverRect(x, y, '.shot-block') ? 'razor' : 'default';
       }
-      if (s.activeTool === 'select') {
-        // Select is the general pointer over the WHOLE timeline body
-        // — ruler, lanes, clips, track headers, scrollbars. Matches
-        // the CSS select-cursor rule's `.body` scope.
-        return pointerOverRect(x, y, '.body') ? 'select' : 'default';
-      }
+      // Select tool: no custom cursor. The OS default arrow handles
+      // everything the Select tool controls — this removed the
+      // WebView2/C++ two-writer race that flickered a custom select
+      // cursor during playback. Range handles still get their own
+      // play-range cursor (handled above).
       return 'default';
     }
 

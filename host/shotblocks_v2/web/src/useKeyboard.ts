@@ -109,6 +109,38 @@ export function useKeyboard(): void {
         return;
       }
 
+      // Tool shortcuts — bare keys, NLE-standard letters. Mirror the
+      // tool-palette buttons: set the store tool + tell C++.
+      //   V → select   B → blade (razor)   S → slip
+      if (!mod && !ev.altKey && !ev.shiftKey) {
+        let toolId: 'select' | 'razor' | 'slip' | null = null;
+        if (ev.key === 'v' || ev.key === 'V') toolId = 'select';
+        else if (ev.key === 'b' || ev.key === 'B') toolId = 'razor';
+        else if (ev.key === 's' || ev.key === 'S') toolId = 'slip';
+        if (toolId) {
+          ev.preventDefault();
+          useStore.getState().setActiveTool(toolId);
+          void send({ kind: 'tool', id: toolId });
+          return;
+        }
+      }
+
+      // N → toggle Snap (mirrors the utilities-strip Snap button).
+      if (!mod && !ev.altKey && !ev.shiftKey && (ev.key === 'n' || ev.key === 'N')) {
+        ev.preventDefault();
+        useStore.getState().setSnapEnabled(!useStore.getState().snapEnabled);
+        return;
+      }
+
+      // Shift+L → toggle Loop (mirrors the utilities-strip Loop button).
+      if (!mod && !ev.altKey && ev.shiftKey && (ev.key === 'l' || ev.key === 'L')) {
+        ev.preventDefault();
+        const next = !useStore.getState().loopEnabled;
+        useStore.getState().setLoopEnabled(next);
+        void send({ kind: 'set-loop', enabled: next });
+        return;
+      }
+
       // Delete / Backspace → delete selection.
       if (ev.key === 'Delete' || ev.key === 'Backspace') {
         const sel = useStore.getState().selectedClipIds;

@@ -78,6 +78,10 @@ export function useMarquee(lanesAreaRef: RefObject<HTMLDivElement | null>): void
       const target = ev.target as HTMLElement | null;
       if (!target) return;
       if (target.closest('.shot-block')) return;
+      // Also reject the V/A splitter — it owns its own up/down drag.
+      // It lives inside the lanes-area, and its React stopPropagation
+      // can't block this native listener on an ancestor DOM node.
+      if (target.closest('.stack__divider')) return;
       // Also skip if the lanes-area itself is the click target (or a
       // lane is): both are valid marquee zones. The early-return
       // above already filtered clips and their descendants.
