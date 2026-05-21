@@ -30,6 +30,7 @@ import { ContextMenu } from './components/ContextMenu';
 import { RangeDim } from './components/RangeDim';
 import { SpawnGhostLane } from './components/SpawnGhostLane';
 import { Inspector } from './components/Inspector';
+import { Meter } from './components/Meter';
 import { useMarquee } from './useMarquee';
 import { DebugOverlay } from './DebugOverlay';
 import { useElementSize } from './useElementSize';
@@ -683,7 +684,7 @@ function App() {
                 </div>
               </div>
               <div className="rail__meter-bars">
-                <div className="rail__meter-bar" />
+                <Meter />
               </div>
             </div>
           </div>

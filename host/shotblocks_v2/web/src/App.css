@@ -323,10 +323,54 @@
   justify-content: center;
   min-height: 0;
 }
-.rail__meter-bar {
+/* Live stereo dB meter — two thin bars (L/R) sharing the meter width
+   with a small gap. Each bar is a dark track; the gradient is
+   masked from the top by .rail__meter-cover; the peak tick floats at
+   the recent peak. */
+.rail__meter-stereo {
   flex: 1 1 0;
   min-height: 0;
+  display: flex;
+  gap: 2px;
+}
+.rail__meter-bar {
+  flex: 1 1 0;
+  min-width: 0;
+  min-height: 0;
+  position: relative;
   background: var(--color-grey-7);
+  overflow: hidden;
+}
+/* The gradient spans the FULL bar height — its colour at any point is
+   fixed to that dB position. The level is shown by COVERING the part
+   above it with the dark track colour (.rail__meter-cover), so the
+   gradient never compresses into a short fill. */
+.rail__meter-fill {
+  position: absolute;
+  inset: 0;
+  /* Green → yellow → red, bottom→top. Stops map Python's dBFS zones
+     onto 0..1: green to ~-18dB (.70), yellow to ~-6dB (.90), red up. */
+  background: linear-gradient(to top,
+    #3fb950 0%,
+    #3fb950 70%,
+    #d6b427 82%,
+    #e5484d 95%);
+}
+/* Cover — masks the gradient from `level` upward with the track
+   colour. Meter.tsx sets `height` to (1 - level) per frame. */
+.rail__meter-cover {
+  position: absolute;
+  left: 0; right: 0; top: 0;
+  height: 100%;      /* Meter.tsx sets this per frame */
+  background: var(--color-grey-7);
+}
+.rail__meter-peak {
+  position: absolute;
+  left: 0; right: 0;
+  bottom: 0%;        /* Meter.tsx sets this per frame */
+  height: 2px;
+  background: rgba(255, 255, 255, 0.85);
+  pointer-events: none;
 }
 
 /* row 2 col 2 — track headers */
