@@ -2,6 +2,7 @@ import { useRef, type CSSProperties } from 'react';
 import { useStore, SNAP_PIXEL_RADIUS, type Clip } from '../store';
 import { useClipDrag } from '../useClipDrag';
 import { WaveformCanvas } from './WaveformCanvas';
+import { BeatDots } from './BeatDots';
 
 /** Shot block (a clip rendered inside a Lane). Visual matrix per
  *  Figma node 173:1827: state × type × height.
@@ -37,6 +38,7 @@ export function ShotBlock({
   const dragClip = useStore((s) => s.dragClip);
   const isDragging = dragClip?.clipId === clip.id;
   const isSelected = useStore((s) => s.selectedClipIds.has(clip.id));
+  const beatGridVisible = useStore((s) => s.beatGridVisible);
   const ref = useRef<HTMLDivElement | null>(null);
   useClipDrag(clip, trackId, side, ref);
 
@@ -141,6 +143,10 @@ export function ShotBlock({
           <span className={iconClass} />
         </div>
       </div>
+      {/* Beat-grid connector dots — a CHILD of the clip so they ride
+          the clip's transform during a drag (no lag, no z-order
+          glitch) and travel between tracks with it. */}
+      {side === 'audio' && beatGridVisible && <BeatDots clip={clip} />}
       {/* Edge-hover brackets — always in the DOM at opacity 0; fade
           in via .is-edge-left / .is-edge-right on parent. Yellow
           three-sided rounded rectangles per Figma node 193:1166. */}

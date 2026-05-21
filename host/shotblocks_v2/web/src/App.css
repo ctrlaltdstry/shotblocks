@@ -717,16 +717,6 @@ body.va-splitter-hover .stack__divider.is-grabbable,
   z-index: 0;
   overflow: hidden;
 }
-/* The connector dots — a separate overlay ABOVE the clips (z:4, under
-   the playhead at z:5) so the dots paint on top of the opaque clip
-   bodies. The grid LINES stay behind, at z:0. */
-.beat-dots-overlay {
-  position: absolute;
-  inset: 0;
-  pointer-events: none;
-  z-index: 4;
-  overflow: hidden;
-}
 .beat-grid-line {
   position: absolute;
   top: 0;
@@ -734,10 +724,12 @@ body.va-splitter-hover .stack__divider.is-grabbable,
   width: 1px;
   margin-left: -0.5px;
   /* Interim beat — dashed, faint. A repeating-gradient gives a dash
-     pattern without an SVG / border-image. */
+     pattern without an SVG / border-image. Neutral white — reads as
+     structural scaffolding, doesn't compete with the coloured clips
+     the way a tinted grid did. */
   background-image: linear-gradient(
     to bottom,
-    rgba(255, 255, 255, 0.18) 0 4px,
+    rgba(255, 255, 255, 0.10) 0 4px,
     transparent 4px 9px
   );
   background-size: 1px 9px;
@@ -746,43 +738,49 @@ body.va-splitter-hover .stack__divider.is-grabbable,
   /* Bar downbeat — solid 1px line, brighter than the dashed interim
      beats so it reads as the structural line. */
   background-image: none;
-  background-color: rgba(255, 255, 255, 0.275);
+  background-color: rgba(255, 255, 255, 0.18);
 }
 .beat-grid-line.is-songpart {
   /* Song part — the heaviest tier (FCP's structural transitions).
-     2px, fully opaque, drawn over the bar/interim lines. */
+     2px, drawn over the bar/interim lines. Audio-track green so it
+     reads as belonging to the music. */
   background-image: none;
-  background-color: rgba(255, 255, 255, 0.85);
+  background-color: var(--color-timeline-audio);
   width: 2px;
   margin-left: -1px;
   z-index: 1;
 }
 
-/* Beat-grid connector dot — one per (LOD-surviving) bar line, drawn
-   by BeatDotsOverlay at the bar line's exact X. `left`/`top` are set
-   inline (`top` = audio clip's BOTTOM edge); the transform sits the
-   dot entirely ABOVE that edge, inside the clip — the dot's BOTTOM
-   touching the clip edge — so the gutter grid line below runs right
-   up to the dot's edge and reads connected. */
+/* Beat-grid connector dots — a CHILD layer of an audio .shot-block
+   (so they ride the clip's transform during a drag). `.beat-dots` is
+   a zero-height anchor on the clip's bottom edge; each `.beat-dot`
+   positions by `left:%` along it. */
+.beat-dots {
+  position: absolute;
+  left: 0; right: 0; bottom: 0;
+  height: 0;
+  pointer-events: none;
+  z-index: 6;
+}
+/* Bar dot — sits inside the clip with its BOTTOM edge on the clip's
+   bottom edge, so the gutter grid line below runs right up to it.
+   Semi-transparent black: it darkens the clip's OWN colour rather
+   than introducing a new one. */
 .beat-dot {
   position: absolute;
+  bottom: 0;
   width: 6px;
   height: 6px;
   border-radius: 50%;
-  background: var(--color-beat-grid);
-  box-shadow: 0 0 0 1.5px rgba(0, 0, 0, 0.35);
-  transform: translate(-50%, -100%);
-  z-index: 6;
+  background: rgba(0, 0, 0, 0.38);
+  transform: translate(-50%, 0);
 }
-/* Song-part dot — FCP-style hollow ring: dark centre, light outline.
-   Distinguishes the structural markers from the solid bar dots. */
+/* Song-part dot — solid white at 40%, larger than the bar dots so
+   the structural markers still read as the distinct tier. */
 .beat-dot--songpart {
-  background: var(--color-grey-10);
-  border: 1.5px solid var(--color-beat-grid);
-  /* Slightly larger so the ring reads clearly. */
-  width: 8px;
-  height: 8px;
-  transform: translate(-50%, -100%);
+  background: rgba(255, 255, 255, 0.4);
+  width: 9px;
+  height: 9px;
 }
 .lane {
   flex: 0 0 var(--track-h);

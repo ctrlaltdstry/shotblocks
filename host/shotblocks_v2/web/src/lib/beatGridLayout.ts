@@ -26,6 +26,37 @@ export interface BeatGridLayout {
   barXs: number[];
 }
 
+/** The bar-line LOD stride for the current zoom: bars are drawn every
+ *  Nth bar (1, 2, 4, 8 …) so the displayed bar gap stays comfortable.
+ *  `width` is the timeline's pixel width. Shared so the per-clip dots
+ *  and the BeatGrid lines decimate identically. */
+export function computeBarStride(state: State, width: number): number {
+  const h = state.h;
+  const visibleSpan = Math.max(1, h.vMax - h.vMin);
+  const pxPerFrame = width / visibleSpan;
+  const fps = state.fps > 0 ? state.fps : 30;
+  // Beat spacing in px, from the grid's tempo period if known.
+  let beatFrames = 0;
+  for (const t of state.audioTracks) {
+    for (const c of t.clips) {
+      const g = c.audioBeatGrid;
+      const sr = c.audioPeaksSampleRate;
+      if (g && sr && g.periodSamples > 0) {
+        beatFrames = (g.periodSamples / sr) * fps;
+        break;
+      }
+    }
+    if (beatFrames) break;
+  }
+  if (beatFrames <= 0) return 1;
+  const baseBarSpacing = beatFrames * pxPerFrame * 4;
+  let stride = 1;
+  while (baseBarSpacing * stride < MIN_BAR_SPACING_PX && stride < 1024) {
+    stride *= 2;
+  }
+  return stride;
+}
+
 /** Compute the LOD-resolved beat-grid layout for the current zoom.
  *  `width` is the overlay's pixel width; the visible frame window is
  *  read from `state.h`. */

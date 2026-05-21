@@ -22,8 +22,8 @@
   --color-timeline-hover:                #ffffff4d;
   --color-timeline-edge-highlight:       #EDA840;
   /* Beat-detection grid (lines + connector dots). Neutral white so it
-     reads as quiet structural guides and doesn't compete with the
-     green audio waveforms. */
+     reads as quiet structural scaffolding, not a coloured feature
+     competing with the clips. */
   --color-beat-grid:                     #ffffff;
 
   /* Layout */
