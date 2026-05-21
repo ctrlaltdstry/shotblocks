@@ -26,7 +26,7 @@ export interface OmItem {
 
 export type HostInbound =
   | { kind: 'hello'; port: number }
-  | { kind: 'tick'; frame: number; fps: number; playing: boolean }
+  | { kind: 'tick'; frame: number; fps: number; playing: boolean; v2Playing: boolean }
   | { kind: 'doc-info'; fps: number; docFrames: number; playRangeIn: number; playRangeOut: number }
   | { kind: 'om-hover';  viewportX: number; viewportY: number; items: OmItem[] }
   | { kind: 'om-drop';   viewportX: number; viewportY: number; items: OmItem[] }
@@ -39,6 +39,8 @@ export type HostInbound =
 export type HostOutbound =
   | { kind: 'ping'; t: number }
   | { kind: 'seek'; frame: number }
+  | { kind: 'scrub-begin' }
+  | { kind: 'scrub-end' }
   | { kind: 'tool'; id: string }
   | { kind: 'set-active-camera'; objectId: number }
   | { kind: 'save-state'; json: string; objectIds: number[] }

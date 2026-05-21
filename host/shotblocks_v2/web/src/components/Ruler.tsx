@@ -90,6 +90,10 @@ export function Ruler() {
   function onPointerDown(ev: React.PointerEvent<HTMLDivElement>) {
     if (ev.button !== 0) return;
     drag.current.active = true;
+    // Tell C++ a scrub started. If v2 playback is running it freezes
+    // transport so the playhead holds wherever this scrub puts it
+    // (no-op if not playing). scrub-end resumes from the drop point.
+    send({ kind: 'scrub-begin' }).catch(() => {});
     try { ev.currentTarget.setPointerCapture(ev.pointerId); } catch { /* noop */ }
     seek(ev.clientX, ev);
   }
@@ -100,6 +104,9 @@ export function Ruler() {
   function onPointerEnd(ev: React.PointerEvent<HTMLDivElement>) {
     if (!drag.current.active) return;
     drag.current.active = false;
+    // Resume playback (if it was frozen by scrub-begin) from the drop
+    // point. C++ re-anchors its playback clock to the current frame.
+    send({ kind: 'scrub-end' }).catch(() => {});
     // Don't clear scrubFrame here — setTick clears it once C++'s tick
     // echo catches up to the seeked frame. Clearing now would drop
     // the optimistic playhead back to the stale currentFrame and

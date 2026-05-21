@@ -107,7 +107,9 @@ export function RangeBar({ rulerRef }: { rulerRef: React.RefObject<HTMLDivElemen
     const onPlayhead = Math.abs(ev.clientX - playheadX) <= PLAYHEAD_GRAB_PX;
 
     if (onPlayhead) {
-      // Scrub the playhead — same behaviour as scrubbing the ruler.
+      // Scrub the playhead — same behaviour as scrubbing the ruler,
+      // including freezing v2 playback for the duration of the scrub.
+      void send({ kind: 'scrub-begin' });
       function scrubTo(clientX: number) {
         const frame = frameAt(clientX);
         useStore.getState().setScrubFrame(frame);
@@ -116,6 +118,7 @@ export function RangeBar({ rulerRef }: { rulerRef: React.RefObject<HTMLDivElemen
       scrubTo(ev.clientX);
       function smove(mv: PointerEvent) { scrubTo(mv.clientX); }
       function sup() {
+        void send({ kind: 'scrub-end' });
         // scrubFrame is cleared by setTick once C++'s echo catches up
         // — clearing here would jump the playhead back briefly.
         window.removeEventListener('pointermove', smove);

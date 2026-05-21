@@ -29,6 +29,7 @@ import { SnapIndicators } from './components/SnapIndicators';
 import { ContextMenu } from './components/ContextMenu';
 import { RangeDim } from './components/RangeDim';
 import { SpawnGhostLane } from './components/SpawnGhostLane';
+import { Inspector } from './components/Inspector';
 import { useMarquee } from './useMarquee';
 import { DebugOverlay } from './DebugOverlay';
 import { useElementSize } from './useElementSize';
@@ -98,6 +99,22 @@ function SnapToggle() {
       onClick={() => useStore.getState().setSnapEnabled(!useStore.getState().snapEnabled)}
     >
       <span className="icon icon--snap" style={{ '--icon-w': '14px', '--icon-h': '14px' } as React.CSSProperties} />
+    </div>
+  );
+}
+
+/** Inspector toggle — the utilities-strip gear icon. Opens / closes
+ *  the right-side Inspector panel. (Gear icon kept for now; a custom
+ *  icon comes later.) */
+function InspectorToggle() {
+  const open = useStore((s) => s.inspectorOpen);
+  return (
+    <div
+      className={'utilstrip__icon' + (open ? ' is-active' : '')}
+      title="Inspector"
+      onClick={() => useStore.getState().setInspectorOpen(!useStore.getState().inspectorOpen)}
+    >
+      <span className="icon icon--settings" style={{ '--icon-w': '15px', '--icon-h': '15px' } as React.CSSProperties} />
     </div>
   );
 }
@@ -600,6 +617,7 @@ function App() {
   }, [vaShare]);
 
   const activeTool = useStore((s) => s.activeTool);
+  const inspectorOpen = useStore((s) => s.inspectorOpen);
 
   useVerticalZoomVars(lanesVideosRef, lanesAudiosRef);
 
@@ -609,7 +627,9 @@ function App() {
         <Timecode />
       </div>
 
-      <div className={'body' + (activeTool === 'select' ? ' is-tool-select' : '')}>
+      <div className={'body'
+        + (activeTool === 'select' ? ' is-tool-select' : '')
+        + (inspectorOpen ? ' inspector-open' : '')}>
         {/* row 1, col 1 — logo */}
         <div className="logo">
           <img className="logo__mark" src={logoUrl} alt="Shotblocks" />
@@ -625,9 +645,7 @@ function App() {
           <div className="utilstrip__icon" title="Markers">
             <span className="icon icon--markers" style={{ '--icon-w': '10px', '--icon-h': '13px' } as React.CSSProperties} />
           </div>
-          <div className="utilstrip__icon" title="Settings">
-            <span className="icon icon--settings" style={{ '--icon-w': '15px', '--icon-h': '15px' } as React.CSSProperties} />
-          </div>
+          <InspectorToggle />
         </div>
 
         {/* row 1, col 3 — ruler */}
@@ -733,6 +751,10 @@ function App() {
           <VaSplitter stackRef={vgutterRef} videosRef={vgutterVideoRef} />
           <VScroll which="audio" />
         </div>
+
+        {/* Inspector — grid column 5, all 3 rows. Width collapses to 0
+            when closed so the timeline reclaims the space. */}
+        <Inspector />
       </div>
       <DebugOverlay />
     </div>

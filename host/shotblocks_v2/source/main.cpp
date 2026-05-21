@@ -551,7 +551,9 @@ public:
 		// wall-clock elapsed time since play started, so timer jitter
 		// doesn't accumulate (Python's _playback_anchor_t /
 		// _playback_anchor_frame pattern, sb_canvas_playback.py:147).
-		if (_v2Playing)
+		// While the user scrub-holds the playhead during playback, the
+		// advance is frozen — the timeline stays where they hold it.
+		if (_v2Playing && !_v2ScrubPaused)
 		{
 			BaseDocument* doc = GetActiveDocument();
 			if (doc)
@@ -1107,6 +1109,35 @@ private:
 			}
 			return "{\"ok\":true,\"kind\":\"seek-ack\"}";
 		}
+		if (body.find("\"kind\":\"scrub-begin\"") != std::string::npos)
+		{
+			// User grabbed the v2 playhead. If v2 playback is running,
+			// freeze it — the Timer stops advancing and PostTick reports
+			// not-playing, so the timeline + audio hold wherever the
+			// scrub puts the playhead. No-op if not v2-playing.
+			if (_v2Playing)
+				_v2ScrubPaused = true;
+			return "{\"ok\":true,\"kind\":\"scrub-begin-ack\"}";
+		}
+		if (body.find("\"kind\":\"scrub-end\"") != std::string::npos)
+		{
+			// User released the v2 playhead. Re-anchor the playback
+			// clock to the current (scrubbed-to) frame and resume.
+			if (_v2ScrubPaused)
+			{
+				_v2ScrubPaused = false;
+				BaseDocument* doc = GetActiveDocument();
+				if (doc)
+				{
+					Int32 fps = doc->GetFps();
+					if (fps <= 0) fps = 30;
+					Int32 minFrame = doc->GetMinTime().GetFrame(fps);
+					_v2AnchorMs    = GeGetMilliSeconds();
+					_v2AnchorFrame = doc->GetTime().GetFrame(fps) - minFrame;
+				}
+			}
+			return "{\"ok\":true,\"kind\":\"scrub-end-ack\"}";
+		}
 		if (body.find("\"kind\":\"set-active-camera\"") != std::string::npos)
 		{
 			// JS routes the playhead-derived active clip's camera here.
@@ -1587,16 +1618,32 @@ private:
 		Int32 fps = doc->GetFps();
 		Int32 frame = doc->GetTime().GetFrame(fps);
 		Float nowMs = GeGetMilliSeconds();
-		// `playing` reflects EITHER v2-owned playback (spacebar) OR
-		// C4D-initiated playback (native play button — inferred from
-		// EVMSG_TIMECHANGED cadence). Either way audio/UI sync to it.
+		// `playing` reflects EITHER v2-owned playback (spacebar) OR any
+		// C4D-native timeline activity (play button OR scrubbing — both
+		// fire EVMSG_TIMECHANGED, indistinguishable from here). The
+		// visual playhead syncs to `playing` either way.
+		// `v2Playing` is the NARROW signal: true only for v2-owned
+		// playback. The audio layer uses it to honor the "audio follows
+		// C4D timeline" setting — when that's off, audio responds to
+		// v2Playing only, so C4D-native scrub/play makes no sound.
 		bool externalPlaying = (nowMs - _lastTimeChangedTickMs) < 200.0;
 		bool playing = _v2Playing || externalPlaying;
+		bool v2Playing = _v2Playing;
+		// A scrub-hold during playback freezes transport — report
+		// not-playing so the timeline + audio stop at the held frame.
+		// (externalPlaying would otherwise stay true: each scrub seek
+		// fires EVMSG_TIMECHANGED.)
+		if (_v2ScrubPaused)
+		{
+			playing = false;
+			v2Playing = false;
+		}
 
 		char buf[256];
 		_snprintf_s(buf, sizeof(buf), _TRUNCATE,
-			"{\"kind\":\"tick\",\"frame\":%d,\"fps\":%d,\"playing\":%s}",
-			(int)frame, (int)fps, playing ? "true" : "false");
+			"{\"kind\":\"tick\",\"frame\":%d,\"fps\":%d,\"playing\":%s,\"v2Playing\":%s}",
+			(int)frame, (int)fps, playing ? "true" : "false",
+			v2Playing ? "true" : "false");
 		_htmlView->PostWebMessage(maxon::String(buf));
 	}
 
@@ -1845,6 +1892,12 @@ private:
 	// C4D's native play button still works independently — that
 	// path doesn't set _v2Playing, so the loop logic doesn't apply.
 	Bool                 _v2Playing{false};
+	// True while the user is scrub-holding the v2 playhead DURING v2
+	// playback. The Timer freezes its advance and PostTick reports
+	// not-playing, so the timeline + audio hold at the scrubbed frame.
+	// scrub-end re-anchors and clears this so playback resumes from
+	// the drop point.
+	Bool                 _v2ScrubPaused{false};
 	Float                _v2AnchorMs{0.0};   // wall-clock anchor at play start
 	Int32                _v2AnchorFrame{0};  // doc frame at play start
 	Int32                _v2RangeIn{0};

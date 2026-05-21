@@ -160,6 +160,19 @@ export interface State {
   // rail. Default on.
   audioScrub: boolean;
 
+  // Inspector panel (right-side slide-in) open/closed. Toggled from
+  // the utilities-strip gear icon. Hosts global settings now; grows
+  // into selected-shot properties + preset layers later.
+  inspectorOpen: boolean;
+
+  // When ON (default), v2 audio plays/scrubs in response to the C4D
+  // NATIVE timeline (its play button AND scrubbing its playhead).
+  // When OFF, v2 audio responds ONLY to v2-timeline interaction
+  // (v2 spacebar playback, v2 ruler scrub) — interacting with C4D's
+  // native timeline produces no audio. The visual playhead stays in
+  // sync with C4D either way; this gates AUDIO only.
+  c4dAudioFollows: boolean;
+
   // Snap-to-edge toggle (utilities strip "Snap" button). When OFF,
   // body/trim/roll drags are free of magnetic pull. When ON, they
   // snap to nearby edit points within SNAP_PIXEL_RADIUS px. Shift
@@ -283,6 +296,8 @@ export interface State {
   setVAudioVisible: (vMin: number, vMax: number) => void;
   setVaShare: (share: number) => void;
   setActiveTool: (tool: ToolId) => void;
+  setInspectorOpen: (open: boolean) => void;
+  setC4dAudioFollows: (on: boolean) => void;
   setAudioScrub: (on: boolean) => void;
   setSnapEnabled: (on: boolean) => void;
   setSnapIndicatorFrames: (frames: number[]) => void;
@@ -758,6 +773,8 @@ export const useStore = create<State>((set) => ({
   vAudio: { min: 0, max: 2,   vMin: 0.5, vMax: 1.5 },
   vaShare: 0.5,
   activeTool: 'select',
+  inspectorOpen: false,
+  c4dAudioFollows: true,
   audioScrub: true,
   snapEnabled: false,
   snapIndicatorFrames: [],
@@ -834,6 +851,8 @@ export const useStore = create<State>((set) => ({
   setVaShare: (share) => set({ vaShare: Math.max(0, Math.min(1, share)) }),
 
   setActiveTool: (tool) => set({ activeTool: tool }),
+  setInspectorOpen: (open) => set({ inspectorOpen: open }),
+  setC4dAudioFollows: (on) => set({ c4dAudioFollows: on }),
   setAudioScrub: (on) => set({ audioScrub: on }),
   setSnapEnabled: (on) => set({ snapEnabled: on }),
   setSnapIndicatorFrames: (frames) => set((s) => {
