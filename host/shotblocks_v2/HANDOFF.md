@@ -649,24 +649,36 @@ remove dead code, and fix the lurking lifecycle bugs. Then new
 features (shot library, slate engine, rig port).
 
 Done since this list was written: snap toggle + indicator lines,
-slip tool, live dB meter (Rounds 13–16).
+slip tool, live dB meter (Rounds 13–16). **DONE: beat detection** —
+full FCP-style three-tier grid (song parts / bars / interim beats),
+connector dots, LOD thinning, snap-to-beat, persistence (`onsets.ts`,
+`BeatGrid`, `BeatDots`; see memory `project_v2_beat_detection`).
+**DONE: fluid canvas navigation** — MMB pans the V/A split,
+non-draggable divider, scoped Alt+RMB zoom, Alt+Shift+MMB per-section
+pan. Per-track resize was attempted and REVERTED (broke the zoom);
+parked.
 
 **Top-down port order, biggest user-facing wins first:**
 
-1. **Peak detection + visual peak markers + beat-grid overlay.**
-   Port `sb_audio_onsets.py` (~747 lines) to JS. Triggered via the
-   Beat Detection button (currently a dead icon in the utilities
-   strip). Tall yellow ticks on audio clips. Unlocks snap-to-peak
-   (the Snap infra already exists) + an optional beat-grid overlay.
-   This is the biggest remaining feature — give it a fresh runway.
-   IMPORTANT: read `sb_audio_onsets.py` first — memory
-   `v9-peak-detection-envelope-only` records that v9 uses envelope
-   local-maxima on a drum-band signal, NOT spectral flux (tried and
-   removed). Don't reintroduce spectral flux.
-2. **Track-header controls (mute / solo / lock / eye)** — the
-   icons render in `TrackHeader.tsx` but none are wired. Mute/solo
-   gate playback; lock prevents edits; eye on video tracks toggles
-   viewport visibility.
+1. ~~Peak detection~~ — DONE (see above).
+2. **Track headers — controls + the twirl-down motion sub-layers.**
+   THIS IS THE NEXT TASK. Two parts:
+   a. **Wire the existing header controls** — mute / solo / lock /
+      eye icons render in `TrackHeader.tsx` but none are wired.
+      Mute/solo gate playback; lock prevents edits; eye on video
+      tracks toggles viewport visibility.
+   b. **The twirl-down → "camera motion" sub-layers.** The twirl
+      triangle on a (camera/video) track header expands that track
+      to reveal a contained work area — a sub-timeline INSIDE the
+      camera track for layering camera-motion presets. These layers
+      are NOT keyframed; they're preset motion layers with sub-ranges
+      and intensity envelopes that compose additively. This is the
+      "layered preset composition" thread from `.agent/Camera
+      Presets and Motion Layers.md` (read its "layered preset
+      composition" section — it has the data-model implications:
+      presets as delta functions, per-shot layer list with
+      sub-range + envelope). The twirl-down is the editing surface
+      for those layers, contained within the camera track.
 3. **Pen tool — audio level keyframes** with interp modes
    (Linear/Hold/Ease). Affects playback gain. Largest single item.
 4. **Medium-tier hotkeys** — Ctrl+D duplicate, Up/Down jump to
