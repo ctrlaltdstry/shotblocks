@@ -19,8 +19,10 @@ export function BeatDots({ clip }: { clip: Clip }) {
   const offset = clip.mediaOffsetFrames ?? 0;
   const fpr = fps / sr;
 
+  // Bar downbeats are every 4th beat from the grid's barOffset.
+  const barOffset = clip.audioBeatGrid?.barOffset ?? 0;
   const dots: number[] = [];
-  for (let i = 0; i < peaks.length; i += 4) {
+  for (let i = barOffset; i < peaks.length; i += 4) {
     // Media sample → doc frame → fraction across the clip's width.
     const docFrame = clip.inFrame + (peaks[i] * fpr - offset);
     if (docFrame < clip.inFrame || docFrame > clip.outFrame) continue;

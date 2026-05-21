@@ -78,7 +78,7 @@ export interface Clip {
    *  `phaseSamples` are media-space audio sample frames (same rate as
    *  `audioPeaksSampleRate`); `confidence` is 0..1. Undefined when the
    *  autocorrelation didn't land a clear pulse. */
-  audioBeatGrid?: { periodSamples: number; phaseSamples: number; confidence: number };
+  audioBeatGrid?: { periodSamples: number; phaseSamples: number; confidence: number; barOffset: number };
   /** Stable identifier for the underlying audio media. The audio
    *  blob (audioStore) and the persisted bytes (C++ helper) are keyed
    *  by THIS, not by `id` — so when a clip is split, both halves
@@ -340,7 +340,7 @@ export interface State {
     mediaId: number,
     audioPeaks: number[],
     audioPeaksSampleRate: number,
-    audioBeatGrid: { periodSamples: number; phaseSamples: number; confidence: number } | null,
+    audioBeatGrid: { periodSamples: number; phaseSamples: number; confidence: number; barOffset: number } | null,
   ) => void;
 
   /** Append a clip to the named track (e.g. 'V1' or 'A2'). Returns
@@ -671,9 +671,10 @@ export function audioPeakDocFrames(state: State): number[] {
 }
 
 /** Like `audioPeakDocFrames`, but tags each beat as a BAR downbeat
- *  (every 4th tracked beat from the start — 4/4 assumption) or an
- *  interim beat. Used by the BeatGrid overlay to draw the FCP-style
- *  two-tier grid: solid lines for bars, dashed for interim beats. */
+ *  (every 4th beat, 4/4 assumption) or an interim beat. Used by the
+ *  BeatGrid overlay to draw the FCP-style two-tier grid: solid lines
+ *  for bars, dashed for interim beats. Bar parity uses the grid's
+ *  `barOffset` so the downbeats stay locked to the tracked beat 0. */
 export function audioBeatLines(state: State): { frame: number; isBar: boolean }[] {
   const out: { frame: number; isBar: boolean }[] = [];
   const fps = state.fps > 0 ? state.fps : 30;
@@ -683,11 +684,12 @@ export function audioBeatLines(state: State): { frame: number; isBar: boolean }[
       const sr = c.audioPeaksSampleRate;
       if (!peaks || !peaks.length || !sr || sr <= 0) continue;
       const offset = c.mediaOffsetFrames ?? 0;
+      const barOffset = c.audioBeatGrid?.barOffset ?? 0;
       const fpr = fps / sr;
       for (let i = 0; i < peaks.length; i++) {
         const docFrame = c.inFrame + (peaks[i] * fpr - offset);
         if (docFrame >= c.inFrame && docFrame <= c.outFrame) {
-          out.push({ frame: docFrame, isBar: i % 4 === 0 });
+          out.push({ frame: docFrame, isBar: (i - barOffset) % 4 === 0 });
         }
       }
     }

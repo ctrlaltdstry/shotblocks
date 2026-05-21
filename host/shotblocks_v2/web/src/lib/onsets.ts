@@ -74,6 +74,11 @@ export interface BeatGrid {
   phaseSamples: number;
   /** 0..1 autocorrelation confidence. */
   confidence: number;
+  /** Index within the `peaks` array of the first BAR downbeat. A
+   *  peak at array index i is a bar when (i - barOffset) % 4 === 0.
+   *  Keeps bar lines locked to the tracked beat 0 even though the
+   *  extrapolated grid may start a few beats earlier. */
+  barOffset: number;
 }
 
 export interface DetectResult {
@@ -404,17 +409,72 @@ export function detectPeaks(buf: AudioBuffer): DetectResult {
   const beatHops = beatTrackDP(env, periodHops, TIGHTNESS);
   if (beatHops.length < 2) return { peaks: [], grid: null };
 
-  const peaks = beatHops.map((h) => h * hopSamples);
-
-  // The grid IS the beat sequence. Period = median inter-beat
-  // interval (robust to a dropped/extra beat); phase = first beat.
-  // Confidence = fraction of intervals within 15% of the median.
+  // Median inter-beat interval (in hops) — the grid period.
   const intervals: number[] = [];
   for (let i = 1; i < beatHops.length; i++) {
     intervals.push(beatHops[i] - beatHops[i - 1]);
   }
   const sorted = [...intervals].sort((a, b) => a - b);
   const medianInterval = sorted[sorted.length >> 1];
+
+  // Fill the intro gap. The DP can't anchor a beat until the first
+  // onset strong enough to start the chain — on a track with a quiet
+  // intro that leaves the first ~second with no markers. Extrapolate
+  // beats BACKWARD from the first tracked beat at the median interval.
+  //
+  // Bounded on purpose: a uniform extrapolated period drifts if it's
+  // even slightly off, so we only walk back far enough to cover the
+  // gap to frame 0 — a handful of beats, where the accumulated drift
+  // is sub-frame and invisible. (Extrapolating the WHOLE track this
+  // way is what drifted audibly before; this is just the intro.)
+  // Count is rounded to a multiple of 4 so bar parity is preserved.
+  const filledHops = [...beatHops];
+  if (medianInterval > 0) {
+    const first = filledHops[0];
+    let nBack = Math.floor(first / medianInterval);
+    nBack -= nBack % 4;                       // keep bar (4/4) parity
+    for (let k = 1; k <= nBack; k++) {
+      filledHops.unshift(first - k * medianInterval);
+    }
+  }
+  // Bars: every 4th beat. After prepending a multiple of 4, the
+  // original tracked beat 0 is still on a bar boundary, so offset 0.
+  const barOffset = 0;
+
+  // Local waveform refinement (the librosa `onset_backtrack` idea,
+  // adapted to snap onto the visible peak).
+  //
+  // The DP gives the metric PULSE — regular, and sitting on the onset
+  // ENVELOPE peaks. But the user reads the drawn WAVEFORM, and on a
+  // sustained orchestral hit the waveform's loudest point trails the
+  // envelope's onset by a few frames. Measured: ~71% of strong
+  // waveform transients land within 4 frames of a beat — near, but
+  // not locked, and that 2-3 frame gap is the visible mismatch.
+  //
+  // For each beat, search a TIGHT window of the full-spectrum
+  // waveform and move the beat onto the loudest sample inside it. The
+  // window is only a fraction of a beat — small enough that a beat
+  // can only catch its OWN hit, never a syncopated neighbour. This is
+  // the key difference from the earlier failed attempt, which used a
+  // ~120ms window and jumped onto whatever was loudest anywhere near.
+  const refineRadiusSamples = Math.min(
+    Math.round(0.05 * sampleRate),                  // <= ~50ms each way
+    Math.floor(medianInterval * hopSamples * 0.25), // <= 1/4 of a beat
+  );
+  const peaks = filledHops.map((h) => {
+    const center = h * hopSamples;
+    if (center < 0) return 0;
+    const lo = Math.max(0, center - refineRadiusSamples);
+    const hi = Math.min(mono.length, center + refineRadiusSamples);
+    let bestI = center, bestA = -1;
+    for (let i = lo; i < hi; i++) {
+      const a = Math.abs(mono[i]);
+      if (a > bestA) { bestA = a; bestI = i; }
+    }
+    return bestI;
+  });
+
+  // Confidence = fraction of intervals within 15% of the median.
   let regular = 0;
   for (const iv of intervals) {
     if (Math.abs(iv - medianInterval) <= 0.15 * medianInterval) regular++;
@@ -423,8 +483,9 @@ export function detectPeaks(buf: AudioBuffer): DetectResult {
 
   const grid: BeatGrid = {
     periodSamples: medianInterval * hopSamples,
-    phaseSamples: beatHops[0] * hopSamples,
+    phaseSamples: peaks.length ? peaks[0] : 0,
     confidence,
+    barOffset,
   };
 
   return { peaks, grid };

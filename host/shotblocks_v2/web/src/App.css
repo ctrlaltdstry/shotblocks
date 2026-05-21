@@ -727,62 +727,62 @@ body.va-splitter-hover .stack__divider.is-grabbable,
      pattern without an SVG / border-image. */
   background-image: linear-gradient(
     to bottom,
-    rgba(74, 222, 110, 0.45) 0 4px,
+    rgba(255, 255, 255, 0.18) 0 4px,
     transparent 4px 9px
   );
   background-size: 1px 9px;
 }
 .beat-grid-line.is-bar {
-  /* Bar downbeat — solid, fully opaque 1px line so it reads as the
-     structural line against the dashed interim beats. */
+  /* Bar downbeat — solid 1px line, brighter than the dashed interim
+     beats so it reads as the structural line. */
   background-image: none;
-  background-color: rgb(74, 222, 110);
+  background-color: rgba(255, 255, 255, 0.275);
 }
 
-/* Beat-grid connector dots — green circles on an audio clip's top
-   edge, one per bar downbeat. They visually link the clip to the
-   grid lines running behind it (Final Cut Pro model). Sit just
-   inside the clip's top edge so the lane's overflow:hidden doesn't
-   clip them. */
+/* Beat-grid connector dots — small circles on an audio clip's BOTTOM
+   edge, one per bar downbeat. They link the clip to the beat-grid
+   lines running behind it (Final Cut Pro model). Bottom edge keeps
+   them clear of the track name + the V/A splitter bar. Sit just
+   inside the edge so the lane's overflow:hidden doesn't clip them. */
 .beat-dots {
   position: absolute;
-  top: 0; left: 0; right: 0;
+  bottom: 0; left: 0; right: 0;
   height: 0;
   pointer-events: none;
   z-index: 6;
 }
 .beat-dot {
   position: absolute;
-  top: 4px;
-  width: 7px;
-  height: 7px;
-  margin-left: -3.5px;
+  bottom: 0;
+  width: 5px;
+  height: 5px;
+  margin-left: -2.5px;
   border-radius: 50%;
-  background: rgb(74, 222, 110);
+  background: var(--color-beat-grid);
   box-shadow: 0 0 0 1.5px rgba(0, 0, 0, 0.35);
+  /* Centre the dot ON the clip's bottom edge — half above, half
+     below — so it reads as hovering on the edge, not inset. */
+  transform: translateY(50%);
 }
 .lane {
   flex: 0 0 var(--track-h);
-  /* Transparent so the beat-grid overlay (behind the lanes-stack)
-     shows through the empty part of each track. Clips themselves are
-     opaque and occlude the lines. */
+  /* Lanes are an invisible LAYOUT + hit-testing structure only — no
+     drawn box. Final-Cut-style: the eye reads the clips, tracks are
+     denoted by the headers column, not by lane backgrounds. The lane
+     div still exists (positioning, drop-targeting, empty-area click /
+     marquee hit target) — it just paints nothing.
+     overflow:visible so edge dots / brackets hover freely past a
+     clip's box without being clipped at the lane border. Clips clip
+     their OWN content via .shot-block__content. */
   background: transparent;
-  border-bottom: 1px solid var(--color-grey-16);
   position: relative;
-  overflow: hidden;
-}
-/* While a body drag is in progress, the dragged clip is translated
-   via CSS transform — possibly far enough up/down to leave its
-   source LANE on its way to a neighbor lane or the spawn-buffer
-   slot above V<max> / below A<max>. We open the overflow on the
-   lane only, NOT on the parent stack — the stack stays clipped at
-   its edge so the dragged clip can't visually spill past the V/A
-   divider into the other side. The clip's destination is always
-   within its own stack (cross-side drag is rejected), so lane-only
-   overflow is enough. */
-body.is-clip-dragging .lane {
   overflow: visible;
 }
+/* (Lanes are now permanently overflow:visible — see `.lane` above —
+   so the old `body.is-clip-dragging .lane { overflow: visible }` rule
+   that opened them only mid-drag is no longer needed. The parent
+   stack stays clipped at its edge so a dragged clip can't spill past
+   the V/A divider.) */
 /* Earlier we flattened lane transforms during drag because the
    per-lane translateY scroll-pan was making each lane a stacking
    context, scoping the dragged clip's z-index lift to its source
@@ -811,7 +811,9 @@ body.is-clip-dragging .lane {
    om-drop / om-cancel. */
 .drop-ghost {
   position: absolute;
-  top: 0; bottom: 0;
+  /* Match .shot-block's 2px inset so the ghost previews where the
+     real clip will land. */
+  top: 2px; bottom: 2px;
   background: #0c1621;
   border: 1px solid var(--color-timeline-primary-highlight);
   border-radius: 4px;
@@ -843,7 +845,10 @@ body.is-clip-dragging .lane {
    icon bottom-left. Thin (<32px lane): label fills row, icon right. */
 .shot-block {
   position: absolute;
-  top: 0; bottom: 0;            /* fills full lane height; no inset */
+  /* 2px inset top + bottom — with lanes now invisible, this is what
+     creates the small dark gap between stacked tracks' clips so each
+     track reads as its own row. */
+  top: 2px; bottom: 2px;
   border-radius: 4px;
   /* overflow:visible (default) — required so the edge-hover bracket
      and selected-outline overlays can extend 1px outside the clip's

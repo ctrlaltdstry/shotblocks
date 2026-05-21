@@ -21,6 +21,10 @@
   --color-timeline-orphan-block:         #ff6259;
   --color-timeline-hover:                #ffffff4d;
   --color-timeline-edge-highlight:       #EDA840;
+  /* Beat-detection grid (lines + connector dots). Neutral white so it
+     reads as quiet structural guides and doesn't compete with the
+     green audio waveforms. */
+  --color-beat-grid:                     #ffffff;
 
   /* Layout */
   --topbar-h:    26px;

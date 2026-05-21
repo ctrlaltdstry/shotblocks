@@ -48,7 +48,7 @@ interface SavedClip {
   // detection results survive doc reload.
   audioPeaks?: number[];
   audioPeaksSampleRate?: number;
-  audioBeatGrid?: { periodSamples: number; phaseSamples: number; confidence: number };
+  audioBeatGrid?: { periodSamples: number; phaseSamples: number; confidence: number; barOffset: number };
 }
 interface SavedTrack {
   id: number;
