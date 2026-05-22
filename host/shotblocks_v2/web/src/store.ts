@@ -7,6 +7,12 @@ import { create } from 'zustand';
  *  current pxPerFrame. */
 export const SNAP_PIXEL_RADIUS = 8;
 
+/** Track-headers column width bounds (px). The minimum is the
+ *  original fixed width — the column can be widened, never narrowed
+ *  below it. */
+export const HEADERS_MIN_W = 200;
+export const HEADERS_MAX_W = 600;
+
 export type ToolId = 'select' | 'razor' | 'pen' | 'slip';
 export type ClipState = 'unselected' | 'selected' | 'orphaned' | 'orphaned-selected' | 'locked';
 
@@ -194,6 +200,11 @@ export interface State {
   // and the headers stack via flex-grow CSS vars.
   vaShare: number;
 
+  // Track-headers column width in px. User-resizable by dragging the
+  // headers/timeline seam; clamped to [HEADERS_MIN_W, HEADERS_MAX_W].
+  // Drives the --headers-w grid column.
+  headersWidth: number;
+
   // Currently active tool palette tool. Drives `.is-active` styling
   // and gets sent to C++ so it can drive whatever editing semantics
   // the tool implies (none wired yet).
@@ -352,6 +363,9 @@ export interface State {
   setVVideoVisible: (vMin: number, vMax: number) => void;
   setVAudioVisible: (vMin: number, vMax: number) => void;
   setVaShare: (share: number) => void;
+  /** Set the track-headers column width (px). Clamped to
+   *  [HEADERS_MIN_W, HEADERS_MAX_W]. */
+  setHeadersWidth: (w: number) => void;
   setActiveTool: (tool: ToolId) => void;
   setInspectorOpen: (open: boolean) => void;
   setC4dAudioFollows: (on: boolean) => void;
@@ -953,6 +967,7 @@ export const useStore = create<State>((set) => ({
   vVideo: { min: 0, max: 2,   vMin: 0.5, vMax: 1.5 },
   vAudio: { min: 0, max: 2,   vMin: 0.5, vMax: 1.5 },
   vaShare: 0.5,
+  headersWidth: HEADERS_MIN_W,
   activeTool: 'select',
   inspectorOpen: false,
   c4dAudioFollows: true,
@@ -1032,6 +1047,9 @@ export const useStore = create<State>((set) => ({
   })),
 
   setVaShare: (share) => set({ vaShare: Math.max(0, Math.min(1, share)) }),
+  setHeadersWidth: (w) => set({
+    headersWidth: Math.max(HEADERS_MIN_W, Math.min(HEADERS_MAX_W, Math.round(w))),
+  }),
 
   setActiveTool: (tool) => set({ activeTool: tool }),
   setInspectorOpen: (open) => set({ inspectorOpen: open }),

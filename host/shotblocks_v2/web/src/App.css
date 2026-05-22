@@ -38,6 +38,9 @@
   min-height: 0;
   transition: grid-template-columns 160ms ease;
 }
+/* While dragging the headers-column resize handle, the transition
+   must be off or the column lags 160ms behind the cursor. */
+body.is-resizing-headers .body { transition: none; }
 .body.inspector-open {
   --inspector-w: 264px;
 }
@@ -397,6 +400,23 @@
   position: relative;
   z-index: 2;
 }
+/* Resize handle on the headers / timeline seam. A thin invisible
+   grab strip overhanging the column's right edge; the col-resize
+   cursor is the affordance. */
+.headers__resize {
+  position: absolute;
+  top: 0; bottom: 0; right: -3px;
+  width: 7px;
+  cursor: col-resize;
+  z-index: 6;
+}
+.headers__resize:hover {
+  background: linear-gradient(
+    to right, transparent 0, transparent 2px,
+    var(--color-timeline-primary-highlight) 2px,
+    var(--color-timeline-primary-highlight) 4px,
+    transparent 4px, transparent 7px);
+}
 
 .stack {
   flex: 1 1 auto;
@@ -492,12 +512,18 @@
 .track-header.is-audio,
 .stack__audios .lane { flex-basis: var(--audio-track-h); }
 
-/* Track-header inner layout — matches Figma nodes 120:431 / 120:697.
-   A space-between row: lock | (eye | M/S) | label. The row fills the
-   header so the three items spread evenly regardless of the headers-
-   column width (Figma's 184px is the value at its 200px artboard). */
+/* Track-header inner layout — [lock + eye/MS] | label, based on the
+   Figma track-header components (nodes 120:431 / 120:697). The lock
+   and the per-side control live in a fixed-width controls group
+   (space-between, so they sit at its two ends with even spacing);
+   the label column takes all remaining width, so a wider headers
+   column grows the label while the icons stay put + aligned. */
 .track-header__row {
-  flex: 1 0 0; min-width: 0;
+  flex: 1 1 0; min-width: 0;
+  display: flex; align-items: center;
+}
+.track-header__controls {
+  flex: 0 0 96px;
   display: flex; align-items: center; justify-content: space-between;
 }
 
@@ -567,17 +593,44 @@
 .track-header__ms-m.is-on:hover { color: #EDA840; }
 .track-header__ms-s.is-on,
 .track-header__ms-s.is-on:hover { color: var(--color-timeline-primary-highlight); }
+/* Label column — grows with the headers-column width so the lock +
+   eye/M-S icons keep the same x across every track. The name
+   right-aligns inside and ellipsis-clips when it can't fit. */
 .track-header__label-wrap {
-  flex: 0 0 auto;
+  flex: 1 1 0; min-width: 0;
+  overflow: hidden;
   display: flex; align-items: center; justify-content: flex-end;
+  /* Left padding keeps a long (ellipsis-clipped) name from crashing
+     into the controls group; right padding is the Figma inset. */
+  padding-left: 14px;
   padding-right: 10px;
 }
 .track-header__label {
+  flex: 1 1 0; min-width: 0;
   font-family: Inter, sans-serif;
   font-size: 12px; font-weight: 400;
   color: var(--color-grey-50);
-  line-height: normal; white-space: nowrap;
+  line-height: normal;
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
   text-align: right;
+  cursor: text;
+}
+.track-header__label:hover { color: var(--color-grey-white); }
+/* Inline rename field — looks like the label, just editable. Fills
+   the same fixed label column so icons don't shift while renaming. */
+.track-header__label-input {
+  flex: 1 1 0; min-width: 0;
+  margin: 0; padding: 1px 3px;
+  font-family: Inter, sans-serif;
+  font-size: 12px; font-weight: 400;
+  color: var(--color-grey-white);
+  text-align: right;
+  background: var(--color-grey-7);
+  border: 1px solid var(--color-timeline-primary-highlight);
+  border-radius: 3px;
+  outline: none;
+  -webkit-appearance: none; appearance: none;
+  box-sizing: border-box;
 }
 
 /* row 2 col 3 — stage (lanes) */

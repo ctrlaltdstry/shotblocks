@@ -326,7 +326,50 @@ function HeadersColumn({
           <div className="lane-spacer" data-side="audio" />
         </div>
       </div>
+      <HeadersResizeHandle />
     </div>
+  );
+}
+
+/** Drag handle on the headers / timeline seam — widens or narrows the
+ *  track-headers column. Clamped in the store to [HEADERS_MIN_W,
+ *  HEADERS_MAX_W]. A thin invisible strip; the col-resize cursor is
+ *  the affordance. */
+function HeadersResizeHandle() {
+  const drag = useRef<{ startX: number; startW: number } | null>(null);
+  function onPointerDown(ev: React.PointerEvent<HTMLDivElement>) {
+    if (ev.button !== 0) return;
+    drag.current = {
+      startX: ev.clientX,
+      startW: useStore.getState().headersWidth,
+    };
+    ev.currentTarget.setPointerCapture(ev.pointerId);
+    // Suppress the body's grid-column transition for the duration of
+    // the drag — otherwise every setHeadersWidth animates 160ms and
+    // the column lags choppily behind the cursor.
+    document.body.classList.add('is-resizing-headers');
+    ev.preventDefault();
+    ev.stopPropagation();
+  }
+  function onPointerMove(ev: React.PointerEvent<HTMLDivElement>) {
+    const d = drag.current;
+    if (!d) return;
+    useStore.getState().setHeadersWidth(d.startW + (ev.clientX - d.startX));
+  }
+  function onPointerEnd(ev: React.PointerEvent<HTMLDivElement>) {
+    if (!drag.current) return;
+    drag.current = null;
+    document.body.classList.remove('is-resizing-headers');
+    try { ev.currentTarget.releasePointerCapture(ev.pointerId); } catch { /* noop */ }
+  }
+  return (
+    <div
+      className="headers__resize"
+      onPointerDown={onPointerDown}
+      onPointerMove={onPointerMove}
+      onPointerUp={onPointerEnd}
+      onPointerCancel={onPointerEnd}
+    />
   );
 }
 
@@ -703,6 +746,7 @@ function App() {
 
   const activeTool = useStore((s) => s.activeTool);
   const inspectorOpen = useStore((s) => s.inspectorOpen);
+  const headersWidth = useStore((s) => s.headersWidth);
 
   useVerticalZoomVars(lanesVideosRef, lanesAudiosRef);
 
@@ -724,9 +768,12 @@ function App() {
         <Timecode />
       </div>
 
-      <div className={'body'
-        + (activeTool === 'select' ? ' is-tool-select' : '')
-        + (inspectorOpen ? ' inspector-open' : '')}>
+      <div
+        className={'body'
+          + (activeTool === 'select' ? ' is-tool-select' : '')
+          + (inspectorOpen ? ' inspector-open' : '')}
+        style={{ '--headers-w': headersWidth + 'px' } as React.CSSProperties}
+      >
         {/* row 1, col 1 — logo */}
         <div className="logo">
           <img className="logo__mark" src={logoUrl} alt="Shotblocks" />

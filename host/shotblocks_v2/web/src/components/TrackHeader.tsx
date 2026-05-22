@@ -1,4 +1,4 @@
-import type { CSSProperties, MouseEvent } from 'react';
+import { useEffect, useRef, useState, type CSSProperties, type MouseEvent } from 'react';
 import { useStore, type Track } from '../store';
 
 /** Track header rendered inside the headers column. Layout matches the
@@ -16,6 +16,34 @@ import { useStore, type Track } from '../store';
 export function TrackHeader({ track, side }: { track: Track; side: 'video' | 'audio' }) {
   const isVideo = side === 'video';
   const trackId = (isVideo ? 'V' : 'A') + track.id;
+
+  // Inline rename. `editing` holds the in-progress text while the
+  // label is an <input>; the store only ever sees the committed name.
+  const [editing, setEditing] = useState<string | null>(null);
+  const inputRef = useRef<HTMLInputElement | null>(null);
+  // Focus + select-all only when editing STARTS (null -> non-null).
+  // Keying off `editing` itself would re-select on every keystroke,
+  // so each typed char would replace the whole field.
+  const isEditing = editing !== null;
+  useEffect(() => {
+    if (isEditing && inputRef.current) {
+      inputRef.current.focus();
+      inputRef.current.select();
+    }
+  }, [isEditing]);
+  function beginRename() {
+    setEditing(track.name);
+  }
+  function commitRename() {
+    if (editing === null) return;
+    useStore.getState().setTrackName(trackId, editing);
+    setEditing(null);
+  }
+  function onRenameKey(ev: React.KeyboardEvent<HTMLInputElement>) {
+    if (ev.key === 'Enter') { ev.preventDefault(); commitRename(); }
+    else if (ev.key === 'Escape') { ev.preventDefault(); setEditing(null); }
+  }
+
   function onContextMenu(ev: MouseEvent) {
     ev.preventDefault();
     ev.stopPropagation();
@@ -50,6 +78,7 @@ export function TrackHeader({ track, side }: { track: Track; side: 'video' | 'au
       onContextMenu={onContextMenu}
     >
       <div className="track-header__row">
+       <div className="track-header__controls">
         <button
           type="button"
           className={'track-header__lock track-header__btn'
@@ -112,8 +141,28 @@ export function TrackHeader({ track, side }: { track: Track; side: 'video' | 'au
             </button>
           </div>
         )}
+       </div>
         <div className="track-header__label-wrap">
-          <div className="track-header__label">{track.name}</div>
+          {editing !== null ? (
+            <input
+              ref={inputRef}
+              className="track-header__label-input"
+              value={editing}
+              onChange={(e) => setEditing(e.target.value)}
+              onKeyDown={onRenameKey}
+              onBlur={commitRename}
+              onPointerDown={(e) => e.stopPropagation()}
+            />
+          ) : (
+            <div
+              className="track-header__label"
+              title="Rename track"
+              onDoubleClick={beginRename}
+              onClick={beginRename}
+            >
+              {track.name}
+            </div>
+          )}
         </div>
       </div>
     </div>
