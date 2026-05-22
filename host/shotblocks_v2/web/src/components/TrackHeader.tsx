@@ -30,6 +30,10 @@ export function TrackHeader({ track, side }: { track: Track; side: 'video' | 'au
     ev.stopPropagation();
     useStore.getState().setTrackFlag(trackId, 'locked', !track.locked);
   }
+  function toggleVisible(ev: MouseEvent) {
+    ev.stopPropagation();
+    useStore.getState().setTrackFlag(trackId, 'visible', !track.visible);
+  }
   return (
     <div
       className={'track-header ' + (isVideo ? 'is-video' : 'is-audio')
@@ -53,12 +57,27 @@ export function TrackHeader({ track, side }: { track: Track; side: 'video' | 'au
           />
         </button>
         {isVideo ? (
-          <div className="track-header__eye">
-            <span
-              className="icon icon--eye"
-              style={{ '--icon-w': '18px', '--icon-h': '12.94px' } as CSSProperties}
-            />
-          </div>
+          <button
+            type="button"
+            className={'track-header__eye track-header__btn'
+              + (track.visible ? '' : ' is-off')}
+            title={track.visible ? 'Hide track' : 'Show track'}
+            aria-pressed={!track.visible}
+            onClick={toggleVisible}
+            onMouseDown={(e) => e.preventDefault()}
+          >
+            {track.visible ? (
+              <span
+                className="icon icon--eye"
+                style={{ '--icon-w': '18px', '--icon-h': '12.94px' } as CSSProperties}
+              />
+            ) : (
+              <span
+                className="icon icon--hidden"
+                style={{ '--icon-w': '18px', '--icon-h': '9.56px' } as CSSProperties}
+              />
+            )}
+          </button>
         ) : (
           <div className="track-header__ms">
             <span className="track-header__ms-m">M</span>

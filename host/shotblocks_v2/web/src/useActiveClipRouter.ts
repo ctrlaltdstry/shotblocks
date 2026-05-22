@@ -10,10 +10,13 @@ import { send } from './lib/host';
  *  Returns null when no clip covers the frame (gap). */
 function activeClipAt(
   frame: number,
-  videoTracks: { id: number; clips: Clip[] }[],
+  videoTracks: { id: number; clips: Clip[]; visible: boolean }[],
 ): { clip: Clip; trackId: number } | null {
   let best: { clip: Clip; trackId: number } | null = null;
   for (const t of videoTracks) {
+    // An eye-off (hidden) track never wins camera routing — its clips
+    // stay on the timeline but won't drive the C4D viewport camera.
+    if (!t.visible) continue;
     for (const c of t.clips) {
       if (frame < c.inFrame || frame >= c.outFrame) continue;
       if (!best

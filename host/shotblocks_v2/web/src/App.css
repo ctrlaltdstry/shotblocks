@@ -537,6 +537,15 @@
   width: 30px; height: 30px;
   display: flex; align-items: center; justify-content: center;
 }
+/* Eye-on is the primary-highlight blue (Figma node 120:431); the
+   hidden (eye-off) state shows the closed-eye icon in grey. */
+.track-header__eye .icon--eye {
+  background-color: var(--color-timeline-primary-highlight);
+}
+.track-header__eye .icon--hidden {
+  background-color: var(--color-grey-50);
+}
+.track-header__eye:hover .icon { background-color: var(--color-grey-white); }
 .track-header__ms {
   flex: 0 0 auto;
   width: 32px;
