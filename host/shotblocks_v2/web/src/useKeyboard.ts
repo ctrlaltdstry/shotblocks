@@ -198,14 +198,13 @@ function rangeToSelectionOrAll(s: ReturnType<typeof useStore.getState>) {
   void send({ kind: 'set-play-range', inFrame: newIn, outFrame: newOut });
 }
 
-/** Remove every clip in `ids` from its track. Tracks that empty out
- *  beyond V1/A1 are culled by the same rule moveClip uses. */
+/** Remove every clip in `ids` from its track. Clips on a locked track
+ *  are left untouched (NLE convention — a locked track ignores edits,
+ *  the rest of the selection still deletes). */
 function deleteSelection(ids: Set<number>) {
   const s = useStore.getState();
-  const filterTrack = (t: typeof s.videoTracks[number]) => ({
-    ...t,
-    clips: t.clips.filter((c) => !ids.has(c.id)),
-  });
+  const filterTrack = (t: typeof s.videoTracks[number]) =>
+    t.locked ? t : { ...t, clips: t.clips.filter((c) => !ids.has(c.id)) };
   const v = s.videoTracks.map(filterTrack);
   const a = s.audioTracks.map(filterTrack);
   useStore.setState({
@@ -216,13 +215,16 @@ function deleteSelection(ids: Set<number>) {
 }
 
 /** Shift every selected clip by `delta` frames. Clamps so no clip
- *  goes below frame 0; preserves relative offsets for groups. */
+ *  goes below frame 0; preserves relative offsets for groups. Clips
+ *  on a locked track don't move (and don't constrain the clamp). */
 function nudgeSelection(ids: Set<number>, delta: number) {
   const s = useStore.getState();
   if (delta === 0) return;
-  // Min in across selected so we can clamp the group.
+  // Min in across the clips that will actually move (locked-track
+  // clips are excluded so they neither move nor clamp the group).
   let minIn = Infinity;
   for (const t of [...s.videoTracks, ...s.audioTracks]) {
+    if (t.locked) continue;
     for (const c of t.clips) {
       if (ids.has(c.id) && c.inFrame < minIn) minIn = c.inFrame;
     }
@@ -231,12 +233,13 @@ function nudgeSelection(ids: Set<number>, delta: number) {
   let dx = delta;
   if (minIn + dx < 0) dx = -minIn;
   if (dx === 0) return;
-  const shift = (t: typeof s.videoTracks[number]) => ({
-    ...t,
-    clips: t.clips.map((c) => ids.has(c.id)
-      ? { ...c, inFrame: c.inFrame + dx, outFrame: c.outFrame + dx }
-      : c),
-  });
+  const shift = (t: typeof s.videoTracks[number]) =>
+    t.locked ? t : {
+      ...t,
+      clips: t.clips.map((c) => ids.has(c.id)
+        ? { ...c, inFrame: c.inFrame + dx, outFrame: c.outFrame + dx }
+        : c),
+    };
   useStore.setState({
     videoTracks: s.videoTracks.map(shift),
     audioTracks: s.audioTracks.map(shift),

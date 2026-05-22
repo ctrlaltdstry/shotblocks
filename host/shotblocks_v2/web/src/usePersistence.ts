@@ -55,11 +55,33 @@ interface SavedTrack {
   id: number;
   name: string;
   clips: SavedClip[];
+  // Per-track flags. Optional in the type so docs saved before these
+  // fields existed still parse — load backfills sane defaults.
+  muted?: boolean;
+  solo?: boolean;
+  locked?: boolean;
+  visible?: boolean;
+  nameIsCustom?: boolean;
 }
 interface SavedState {
   videoTracks: SavedTrack[];
   audioTracks: SavedTrack[];
   nextClipId: number;
+}
+
+/** Resolve a saved track's per-track flags, defaulting any the doc
+ *  didn't carry (visible defaults true, everything else false). */
+function trackFlagsFromSaved(t: SavedTrack): {
+  muted: boolean; solo: boolean; locked: boolean;
+  visible: boolean; nameIsCustom: boolean;
+} {
+  return {
+    muted: !!t.muted,
+    solo: !!t.solo,
+    locked: !!t.locked,
+    visible: t.visible !== false,
+    nameIsCustom: !!t.nameIsCustom,
+  };
 }
 
 export function usePersistence(): void {
@@ -151,6 +173,7 @@ async function loadFromHost(skipNextSave: React.MutableRefObject<boolean>) {
     const videoTracks: Track[] = parsed.videoTracks.map((t) => ({
       id: t.id,
       name: t.name,
+      ...trackFlagsFromSaved(t),
       clips: t.clips.map((c) => ({
         id: c.id,
         inFrame: c.inFrame,
@@ -170,6 +193,7 @@ async function loadFromHost(skipNextSave: React.MutableRefObject<boolean>) {
     const audioTracks: Track[] = parsed.audioTracks.map((t) => ({
       id: t.id,
       name: t.name,
+      ...trackFlagsFromSaved(t),
       clips: t.clips.map((c) => {
         // Media-window backfill: audio clips saved before the
         // media-window model have no mediaDuration/mediaOffset. A
@@ -234,6 +258,11 @@ function saveToHost() {
     videoTracks: s.videoTracks.map((t) => ({
       id: t.id,
       name: t.name,
+      muted: t.muted,
+      solo: t.solo,
+      locked: t.locked,
+      visible: t.visible,
+      nameIsCustom: t.nameIsCustom,
       clips: t.clips.map((c) => ({
         id: c.id,
         inFrame: c.inFrame,
@@ -253,6 +282,11 @@ function saveToHost() {
     audioTracks: s.audioTracks.map((t) => ({
       id: t.id,
       name: t.name,
+      muted: t.muted,
+      solo: t.solo,
+      locked: t.locked,
+      visible: t.visible,
+      nameIsCustom: t.nameIsCustom,
       clips: t.clips.map((c) => ({
         id: c.id,
         inFrame: c.inFrame,

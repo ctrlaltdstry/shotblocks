@@ -1,5 +1,5 @@
 import { useEffect, type RefObject } from 'react';
-import { useStore } from './store';
+import { useStore, isTrackLocked } from './store';
 
 /** Pixel slop before pointerdown becomes a marquee drag. Below this
  *  we treat the gesture as a click (which clears selection). Matches
@@ -135,6 +135,10 @@ function clipsInRect(
     const cy2 = cr.bottom - areaRect.top;
     if (cx2 < rx1 || cx1 > rx2) continue;
     if (cy2 < ry1 || cy1 > ry2) continue;
+    // Skip clips on a locked track — a locked track's clips can't be
+    // selected (and so can't be edited via the selection).
+    const laneTrack = clipEl.closest('.lane')?.getAttribute('data-track');
+    if (laneTrack && isTrackLocked(laneTrack)) continue;
     const id = parseInt(clipEl.getAttribute('data-clip') || '', 10);
     if (Number.isFinite(id)) hits.push(id);
   }

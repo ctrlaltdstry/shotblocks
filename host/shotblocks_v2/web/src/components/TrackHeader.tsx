@@ -3,10 +3,10 @@ import { useStore, type Track } from '../store';
 
 /** Track header rendered inside the headers column. Layout matches the
  *  Figma track-header components (nodes 120:431 video / 120:697 audio):
- *  a 65px row with a lock icon, a per-side control (eye for video,
+ *  a 65px row with a lock toggle, a per-side control (eye for video,
  *  M/S for audio), and the track-name label.
  *
- *  Controls are not yet wired — this is the visual structure only.
+ *  Lock is wired; the eye / M/S controls are visual-only for now.
  *  (The motion-layer twirl lives on the clip, not here.)
  *
  *  Right-click opens the track-header context menu (Delete Track).
@@ -26,19 +26,32 @@ export function TrackHeader({ track, side }: { track: Track; side: 'video' | 'au
       targetTrackId: trackId,
     });
   }
+  function toggleLock(ev: MouseEvent) {
+    ev.stopPropagation();
+    useStore.getState().setTrackFlag(trackId, 'locked', !track.locked);
+  }
   return (
     <div
-      className={'track-header ' + (isVideo ? 'is-video' : 'is-audio')}
+      className={'track-header ' + (isVideo ? 'is-video' : 'is-audio')
+        + (track.locked ? ' is-locked' : '')}
       data-track={trackId}
       onContextMenu={onContextMenu}
     >
       <div className="track-header__row">
-        <div className="track-header__lock">
+        <button
+          type="button"
+          className={'track-header__lock track-header__btn'
+            + (track.locked ? ' is-on' : '')}
+          title={track.locked ? 'Unlock track' : 'Lock track'}
+          aria-pressed={track.locked}
+          onClick={toggleLock}
+          onMouseDown={(e) => e.preventDefault()}
+        >
           <span
-            className="icon icon--lock"
+            className={'icon ' + (track.locked ? 'icon--locked' : 'icon--lock')}
             style={{ '--icon-w': '12px', '--icon-h': '13.2px' } as CSSProperties}
           />
-        </div>
+        </button>
         {isVideo ? (
           <div className="track-header__eye">
             <span

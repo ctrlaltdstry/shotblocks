@@ -1,6 +1,6 @@
 import { useEffect, useRef, type RefObject } from 'react';
 import { gsap } from 'gsap';
-import { useStore, magneticSnap, audioPeakDocFrames, SNAP_PIXEL_RADIUS, type Clip } from './store';
+import { useStore, magneticSnap, audioPeakDocFrames, isTrackLocked, SNAP_PIXEL_RADIUS, type Clip } from './store';
 import { setSlipPreview, clearSlipPreview } from './lib/slipPreview';
 
 /** Pixel slop before a pointerdown becomes a real drag. Below this we
@@ -510,6 +510,12 @@ export function useClipDrag(
 
     function onDown(ev: PointerEvent) {
       if (ev.button !== 0) return;
+
+      // A locked track ignores every clip gesture — no select, no
+      // body/edge drag, no razor split. The store actions also reject
+      // these (defence in depth), but bailing here means the clip
+      // never even enters a drag preview that would snap back.
+      if (isTrackLocked(trackId)) return;
 
       // Razor tool: click splits the clip at the cursor frame instead
       // of starting a drag. Map cursor X → frame via the lane's

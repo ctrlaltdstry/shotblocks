@@ -84,6 +84,7 @@ export function Lane({ track, side }: { track: Track; side: 'video' | 'audio' })
     }
     // Trim / roll edge-hover detection belongs to the SELECT tool only.
     // Skip it when:
+    //  - the track is locked — no edits, so no trim/roll affordance.
     //  - the razor or slip tool is active — those tools own the seam
     //    with their own behavior (cut / slip); showing a trim or roll
     //    cursor there would promise an action the click doesn't do.
@@ -91,7 +92,8 @@ export function Lane({ track, side }: { track: Track; side: 'video' | 'audio' })
     //    edges sweep under the cursor and would flip the mode (and the
     //    cursor) every frame.
     const tool = useStore.getState().activeTool;
-    if (tool !== 'select'
+    if (track.locked
+        || tool !== 'select'
         || useStore.getState().slipDragging
         || useStore.getState().dragClip) {
       if (cursorMode !== 'default') setCursorMode('default');
@@ -188,6 +190,9 @@ export function Lane({ track, side }: { track: Track; side: 'video' | 'audio' })
     setCursorMode('default');
   }
   function onPointerDown(ev: React.PointerEvent<HTMLDivElement>) {
+    // A locked track accepts no trim / roll gesture (cursorMode is
+    // already pinned to 'default' above, but guard the start too).
+    if (track.locked) return;
     // Rolling-edit drag start. The seam case has edgeHover containing
     // BOTH clipA:right and clipB:left (set by the seam-third-detection
     // in onPointerMove above). We move both edges together; rollEdit
@@ -420,6 +425,7 @@ export function Lane({ track, side }: { track: Track; side: 'video' | 'audio' })
           />
         );
       })}
+      {track.locked && <div className="lane__locked-overlay" />}
     </div>
   );
 }

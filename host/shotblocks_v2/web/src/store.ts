@@ -107,7 +107,32 @@ export interface Track {
   id: number;
   name: string;
   clips: Clip[];
+  /** Audio only — silences the track during playback / scrub. */
+  muted: boolean;
+  /** Audio only — if ANY audio track is soloed, only soloed tracks
+   *  are audible. */
+  solo: boolean;
+  /** Both sides — prevents clip edits (move/trim/roll/slip/split/
+   *  delete/nudge) on every clip this track owns. */
+  locked: boolean;
+  /** Video only — the eye toggle. When false the track's clips never
+   *  win active-camera routing (their camera won't take the C4D
+   *  viewport). The clips still render on the timeline. */
+  visible: boolean;
+  /** True once the user has renamed the track. Governs whether a
+   *  renumber (after a track delete) regenerates the auto name. */
+  nameIsCustom: boolean;
 }
+
+/** Default flag values for a freshly-minted track. Spread into every
+ *  Track literal so a new V2/A3/etc. starts unlocked, visible, etc. */
+export const TRACK_FLAG_DEFAULTS = {
+  muted: false,
+  solo: false,
+  locked: false,
+  visible: true,
+  nameIsCustom: false,
+} as const;
 
 /** Ghost preview of an OM drop that's being hovered. Cleared on
  *  om-cancel or after om-drop creates a real clip. */
@@ -517,6 +542,22 @@ export interface State {
    *  given side. Base track (V1 / A1) is preserved even if empty.
    *  Returns the number of tracks removed. */
   deleteEmptyTracks: (side: 'video' | 'audio') => number;
+
+  /** Toggle one of a track's per-track flags. `trackId` is 'V2'/'A1'
+   *  style. No-op if the track doesn't exist. muted/solo are meaningful
+   *  on audio tracks only, visible on video only; the action does not
+   *  enforce that — callers render the relevant control per side. */
+  setTrackFlag: (
+    trackId: string,
+    flag: 'muted' | 'solo' | 'locked' | 'visible',
+    value: boolean,
+  ) => void;
+
+  /** Rename a track. A non-empty name marks the track `nameIsCustom`
+   *  so a later renumber won't overwrite it. An empty/whitespace name
+   *  reverts to the default `Video N` / `Audio N` and clears the
+   *  custom flag. No-op if the track doesn't exist. */
+  setTrackName: (trackId: string, name: string) => void;
 }
 
 /** Monotonic clip id. Unique across all tracks for the session.
@@ -920,8 +961,8 @@ export const useStore = create<State>((set) => ({
   snapIndicatorFrames: [],
   detectingBeats: false,
   beatGridVisible: true,
-  videoTracks: [{ id: 1, name: 'Video 1', clips: [] }],
-  audioTracks: [{ id: 1, name: 'Audio 1', clips: [] }],
+  videoTracks: [{ id: 1, name: 'Video 1', clips: [], ...TRACK_FLAG_DEFAULTS }],
+  audioTracks: [{ id: 1, name: 'Audio 1', clips: [], ...TRACK_FLAG_DEFAULTS }],
   dragPreview: null,
   dragClip: null,
   slipDragging: false,
@@ -1053,6 +1094,10 @@ export const useStore = create<State>((set) => ({
       const tracks = side === 'video' ? s.videoTracks : s.audioTracks;
       const fromIdx = tracks.findIndex((t) => t.id === fromNum);
       if (fromIdx < 0) return s;
+      // A locked track accepts neither outgoing nor incoming clips.
+      if (tracks[fromIdx].locked) return s;
+      const destTrack = tracks.find((t) => t.id === toNum);
+      if (destTrack && destTrack.locked) return s;
       const moving = tracks[fromIdx].clips.find((c) => c.id === clipId);
       if (!moving) return s;
       const duration = moving.outFrame - moving.inFrame;
@@ -1064,7 +1109,7 @@ export const useStore = create<State>((set) => ({
       if (!working.some((t) => t.id === toNum)) {
         const maxId = working.reduce((m, t) => Math.max(m, t.id), 0);
         if (toNum !== maxId + 1) return s;
-        working = [...working, { id: toNum, name: (side === 'video' ? 'Video ' : 'Audio ') + toNum, clips: [] }];
+        working = [...working, { id: toNum, name: (side === 'video' ? 'Video ' : 'Audio ') + toNum, clips: [], ...TRACK_FLAG_DEFAULTS }];
       }
 
       // Place on dest at the cursor-derived inFrame, clamped to >= 0.
@@ -1122,6 +1167,7 @@ export const useStore = create<State>((set) => ({
       const tracks = side === 'video' ? s.videoTracks : s.audioTracks;
       const trackIdx = tracks.findIndex((t) => t.id === trackNum);
       if (trackIdx < 0) return s;
+      if (tracks[trackIdx].locked) return s;
       const clip = tracks[trackIdx].clips.find((c) => c.id === clipId);
       if (!clip) return s;
       let newIn = clip.inFrame;
@@ -1190,6 +1236,7 @@ export const useStore = create<State>((set) => ({
     set((s) => {
       const trackIdx = s.audioTracks.findIndex((t) => t.id === trackNum);
       if (trackIdx < 0) return s;
+      if (s.audioTracks[trackIdx].locked) return s;
       const clip = s.audioTracks[trackIdx].clips.find((c) => c.id === clipId);
       if (!clip) return s;
       if (clip.locked || clip.state === 'locked') return s;
@@ -1246,6 +1293,14 @@ export const useStore = create<State>((set) => ({
       // Frame and track deltas inferred from the anchor's move.
       let dxFrames = anchorNewInFrame - anchorLoc.inFrame;
       const dtTrack = anchorToNum - anchorFromNum;
+      // Block the whole group move if any selected clip sits on a
+      // locked track or would land on one.
+      const lockedIds = new Set(
+        tracks.filter((t) => t.locked).map((t) => t.id));
+      for (const loc of selectedLocs) {
+        if (lockedIds.has(loc.trackNum)) return s;
+        if (lockedIds.has(loc.trackNum + dtTrack)) return s;
+      }
       // Clamp so no selected clip goes below frame 0.
       const minIn = Math.min(...selectedLocs.map((l) => l.inFrame));
       if (minIn + dxFrames < 0) dxFrames = -minIn;
@@ -1267,7 +1322,7 @@ export const useStore = create<State>((set) => ({
         if (num < 1) return s;                    // can't go below V1/A1
         if (existingIds.has(num)) continue;
         if (num !== maxId + 1) return s;          // only one-step spawn allowed
-        working = [...working, { id: num, name: (side === 'video' ? 'Video ' : 'Audio ') + num, clips: [] }];
+        working = [...working, { id: num, name: (side === 'video' ? 'Video ' : 'Audio ') + num, clips: [], ...TRACK_FLAG_DEFAULTS }];
         existingIds.add(num);
       }
       // Build moved-clip list keyed by id for fast lookup.
@@ -1326,6 +1381,7 @@ export const useStore = create<State>((set) => ({
       const tracks = side === 'video' ? s.videoTracks : s.audioTracks;
       const trackIdx = tracks.findIndex((t) => t.id === trackNum);
       if (trackIdx < 0) return s;
+      if (tracks[trackIdx].locked) return s;
       const left  = tracks[trackIdx].clips.find((c) => c.id === leftClipId);
       const right = tracks[trackIdx].clips.find((c) => c.id === rightClipId);
       if (!left || !right) return s;
@@ -1379,6 +1435,7 @@ export const useStore = create<State>((set) => ({
       const tracks = side === 'video' ? s.videoTracks : s.audioTracks;
       const trackIdx = tracks.findIndex((t) => t.id === trackNum);
       if (trackIdx < 0) return s;
+      if (tracks[trackIdx].locked) return s;
       const clip = tracks[trackIdx].clips.find((c) => c.id === clipId);
       if (!clip) return s;
       // Locked clips don't accept structural edits.
@@ -1617,12 +1674,14 @@ export const useStore = create<State>((set) => ({
       if (remaining.length === 0) {
         // Auto-spawn an empty base track — the side must always have
         // somewhere to drop a clip.
-        next = [{ id: 1, name: namePrefix + '1', clips: [] }];
+        next = [{ id: 1, name: namePrefix + '1', clips: [], ...TRACK_FLAG_DEFAULTS }];
       } else {
         next = remaining.map((t, i) => ({
           ...t,
           id: i + 1,
-          name: namePrefix + (i + 1),
+          // Renumber regenerates the auto name only for tracks the
+          // user hasn't renamed; a custom name is kept verbatim.
+          name: t.nameIsCustom ? t.name : namePrefix + (i + 1),
         }));
       }
       ok = true;
@@ -1655,15 +1714,22 @@ export const useStore = create<State>((set) => ({
         .sort((a, b) => a.id - b.id);
       let next: Track[];
       if (occupied.length === 0) {
-        // No clips anywhere on this side. Keep a single base track
-        // even if its original id wasn't 1 — the base slot must
-        // always exist.
-        next = [{ id: 1, name: namePrefix + '1', clips: [] }];
+        // No clips anywhere on this side. Keep the lowest-id track as
+        // the surviving base slot (preserving its flags + custom name)
+        // rather than minting a fresh one.
+        const base = [...tracks].sort((a, b) => a.id - b.id)[0];
+        next = [{
+          ...base,
+          id: 1,
+          name: base.nameIsCustom ? base.name : namePrefix + '1',
+          clips: [],
+        }];
       } else {
         next = occupied.map((t, i) => ({
           ...t,
           id: i + 1,
-          name: namePrefix + (i + 1),
+          // Auto name regenerates on renumber; a custom name is kept.
+          name: t.nameIsCustom ? t.name : namePrefix + (i + 1),
         }));
       }
       removed = tracks.length - next.length;
@@ -1672,6 +1738,38 @@ export const useStore = create<State>((set) => ({
     });
     return removed;
   },
+
+  setTrackFlag: (trackId, flag, value) => set((s) => {
+    const side = trackId.startsWith('V') ? 'video'
+      : trackId.startsWith('A') ? 'audio' : null;
+    if (!side) return s;
+    const num = parseInt(trackId.slice(1), 10);
+    const tracks = side === 'video' ? s.videoTracks : s.audioTracks;
+    if (!tracks.some((t) => t.id === num)) return s;
+    const next = tracks.map((t) =>
+      t.id === num ? { ...t, [flag]: value } : t);
+    return side === 'video' ? { videoTracks: next } : { audioTracks: next };
+  }),
+
+  setTrackName: (trackId, name) => set((s) => {
+    const side = trackId.startsWith('V') ? 'video'
+      : trackId.startsWith('A') ? 'audio' : null;
+    if (!side) return s;
+    const num = parseInt(trackId.slice(1), 10);
+    const tracks = side === 'video' ? s.videoTracks : s.audioTracks;
+    if (!tracks.some((t) => t.id === num)) return s;
+    const trimmed = name.trim();
+    const next = tracks.map((t) => {
+      if (t.id !== num) return t;
+      if (trimmed === '') {
+        // Empty name → revert to the default, clear the custom flag.
+        const prefix = side === 'video' ? 'Video ' : 'Audio ';
+        return { ...t, name: prefix + t.id, nameIsCustom: false };
+      }
+      return { ...t, name: trimmed, nameIsCustom: true };
+    });
+    return side === 'video' ? { videoTracks: next } : { audioTracks: next };
+  }),
 
   setEdgeHover: (edges) => set((s) => {
     // Cheap identity check so we don't churn renders when the set
@@ -1756,6 +1854,20 @@ export const useStore = create<State>((set) => ({
     return added;
   },
 }));
+
+/** Whether the track named by `trackId` ('V2' / 'A1' style) is locked.
+ *  A locked track rejects every clip edit; UI gesture handlers call
+ *  this to refuse the gesture up front (rather than let it preview
+ *  and snap back on commit). Unknown trackId → false. */
+export function isTrackLocked(trackId: string, state?: State): boolean {
+  const s = state ?? useStore.getState();
+  const side = trackId.startsWith('V') ? 'video'
+    : trackId.startsWith('A') ? 'audio' : null;
+  if (!side) return false;
+  const num = parseInt(trackId.slice(1), 10);
+  const tracks = side === 'video' ? s.videoTracks : s.audioTracks;
+  return tracks.some((t) => t.id === num && t.locked);
+}
 
 // Debug hook: expose the store on window so CDP / DevTools sessions
 // can inspect live state via useStore.getState() without React's

@@ -501,11 +501,37 @@
   display: flex; align-items: center; justify-content: space-between;
 }
 
+/* Bare-button reset for the clickable header controls (lock, eye,
+   M/S). They carry no chrome — just the icon — and must not steal
+   keyboard focus (onMouseDown preventDefault in the component). */
+.track-header__btn {
+  margin: 0; padding: 0;
+  background: none; border: none;
+  cursor: pointer;
+  color: inherit;
+  -webkit-appearance: none; appearance: none;
+}
 .track-header__lock {
   flex: 0 0 auto;
   width: 19px; height: 20px;
   display: flex; align-items: center; justify-content: center;
 }
+/* Locked padlock renders red (Figma node 120:502); the unlocked
+   padlock keeps the default grey-50 from .icon. */
+.track-header__lock .icon--locked {
+  background-color: var(--color-semantic-danger, #FF3B30);
+}
+.track-header__lock:hover .icon { background-color: var(--color-grey-white); }
+.track-header__lock:hover .icon--locked {
+  background-color: var(--color-semantic-danger, #FF3B30);
+  opacity: 0.8;
+}
+/* A locked track dims its label + per-side control so the locked
+   state reads at a glance, while the red padlock itself stays at
+   full strength as the clear indicator. */
+.track-header.is-locked .track-header__label,
+.track-header.is-locked .track-header__eye,
+.track-header.is-locked .track-header__ms { opacity: 0.45; }
 .track-header__eye {
   flex: 0 0 auto;
   width: 30px; height: 30px;
@@ -760,6 +786,17 @@
   background: transparent;
   position: relative;
   overflow: visible;
+}
+/* Locked-track overlay — a transparent-black wash across the whole
+   lane so a locked track reads as "held" at a glance. Sits above the
+   clips; pointer-events:none since the gesture handlers already
+   reject edits on a locked track. */
+.lane__locked-overlay {
+  position: absolute;
+  inset: 0;
+  background: rgba(0, 0, 0, 0.45);
+  pointer-events: none;
+  z-index: 5;
 }
 /* (Lanes are now permanently overflow:visible — see `.lane` above —
    so the old `body.is-clip-dragging .lane { overflow: visible }` rule
