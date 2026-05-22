@@ -65,9 +65,13 @@ export function LevelCurve({ clip }: { clip: Clip }) {
   function gainToFrac(g: number): number {
     return 0.5 + (1 - g) * (CURVE_BOTTOM - 0.5);
   }
+  /** y fraction -> gain. RAW (unclamped) on purpose: the drag adds a
+   *  grab offset before clamping, so clamping here would let a node
+   *  grabbed off-centre get stuck short of unity (the offset would
+   *  subtract from an already-capped value). The store clamps the
+   *  final gain to 0..1. */
   function fracToGain(fy: number): number {
-    const g = 1 - (fy - 0.5) / (CURVE_BOTTOM - 0.5);
-    return Math.max(0, Math.min(1, g));
+    return 1 - (fy - 0.5) / (CURVE_BOTTOM - 0.5);
   }
 
   // --- drag state ---------------------------------------------------
@@ -155,6 +159,22 @@ export function LevelCurve({ clip }: { clip: Clip }) {
   function onPointerLeave() {
     if (!drag.current && hoverKf !== -1) setHoverKf(-1);
   }
+  function onContextMenu(ev: React.MouseEvent<SVGSVGElement>) {
+    if (!penActive) return;
+    const r = svgRef.current!.getBoundingClientRect();
+    const fx = r.width > 0 ? (ev.clientX - r.left) / r.width : 0;
+    const fy = r.height > 0 ? (ev.clientY - r.top) / r.height : 0;
+    const idx = hitNode(fx, fy, r.width, r.height);
+    if (idx < 0) return;   // not on a node — leave the default menu
+    ev.preventDefault();
+    ev.stopPropagation();
+    setSelectedKf(idx);
+    useStore.getState().setContextMenu({
+      x: ev.clientX, y: ev.clientY,
+      targetClipId: null, targetTrackId: null,
+      targetLevelKf: { clipId: clip.id, index: idx },
+    });
+  }
 
   // --- curve path (in 0..VB viewBox units) --------------------------
   const path = buildPath(kfs, afToFrac, gainToFrac);
@@ -171,6 +191,7 @@ export function LevelCurve({ clip }: { clip: Clip }) {
         onPointerUp={onPointerEnd}
         onPointerCancel={onPointerEnd}
         onPointerLeave={onPointerLeave}
+        onContextMenu={onContextMenu}
       >
         {/* Resting unity line — flat, dead-centre, on a clip with no
             curve yet. Brightens while the Pen tool is active. */}

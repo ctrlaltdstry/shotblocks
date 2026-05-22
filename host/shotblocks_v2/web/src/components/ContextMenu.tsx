@@ -1,5 +1,5 @@
 import { useEffect, useRef } from 'react';
-import { useStore } from '../store';
+import { useStore, type LevelInterp } from '../store';
 
 /** Right-click context menu. Rendered only when state.contextMenu is
  *  non-null. Closes on outside-click, Escape, or after any item is
@@ -21,6 +21,7 @@ type Item =
       label: string;
       hint?: string;
       disabled?: boolean;
+      checked?: boolean;
       onPick: () => void;
     };
 
@@ -52,6 +53,7 @@ export function ContextMenu() {
   const sel = state.selectedClipIds;
   const hasSelection = sel.size > 0;
   const clipboardHasItems = state.clipboard.length > 0;
+  const onLevelKf = menu.targetLevelKf != null;
   const onClip = menu.targetClipId != null;
   const onTrackHeader = menu.targetTrackId != null;
   const trackId = menu.targetTrackId;
@@ -72,7 +74,34 @@ export function ContextMenu() {
   function run(fn: () => void) { fn(); close(); }
 
   let items: Item[];
-  if (onTrackHeader) {
+  if (onLevelKf) {
+    // Pen-tool volume keyframe menu — delete the node, or set the
+    // interpolation of the segment leaving it.
+    const { clipId, index } = menu.targetLevelKf!;
+    const clip = [...state.videoTracks, ...state.audioTracks]
+      .flatMap((t) => t.clips).find((c) => c.id === clipId);
+    const node = clip?.levelKeyframes?.[index];
+    const cur = node?.interp ?? 'linear';
+    const interpItem = (label: string, mode: LevelInterp): Item => ({
+      kind: 'item',
+      label,
+      checked: cur === mode,
+      onPick: () => run(() => state.setLevelKeyframeInterp(clipId, index, mode)),
+    });
+    items = [
+      {
+        kind: 'item',
+        label: 'Delete Keyframe',
+        onPick: () => run(() => state.removeLevelKeyframe(clipId, index)),
+      },
+      { kind: 'separator' },
+      interpItem('Linear', 'linear'),
+      interpItem('Hold', 'hold'),
+      interpItem('Ease In', 'ease-in'),
+      interpItem('Ease Out', 'ease-out'),
+      interpItem('Ease In-Out', 'ease-in-out'),
+    ];
+  } else if (onTrackHeader) {
     const side: 'video' | 'audio' | null = trackId
       ? (trackId.startsWith('V') ? 'video' : trackId.startsWith('A') ? 'audio' : null)
       : null;
@@ -214,6 +243,7 @@ export function ContextMenu() {
               it.onPick();
             }}
           >
+            <span className="context-menu__check">{it.checked ? '✓' : ''}</span>
             <span className="context-menu__label">{it.label}</span>
             {it.hint && <span className="context-menu__hint">{it.hint}</span>}
           </div>

@@ -375,10 +375,11 @@ export interface State {
   // Right-click menu state. Non-null while a context menu is visible.
   // `x` / `y` are viewport-relative.
   //
-  // Three variants drive the menu's item list:
+  // Variants drive the menu's item list:
+  //   - targetLevelKf != null  → pen-tool node menu (Delete + interp)
   //   - targetClipId != null   → clip menu (Cut/Copy/Paste/Delete/...)
   //   - targetTrackId != null  → track-header menu (Delete Track)
-  //   - both null              → empty-area menu (Paste only)
+  //   - all null               → empty-area menu (Paste only)
   //
   // Menu items act on the current selection — right-clicking an
   // unselected clip first replaces the selection with that clip
@@ -388,6 +389,9 @@ export interface State {
     y: number;
     targetClipId: number | null;
     targetTrackId: string | null;
+    // Pen-tool: the volume keyframe right-clicked — its clip id and
+    // index into that clip's levelKeyframes. Null for non-node menus.
+    targetLevelKf?: { clipId: number; index: number } | null;
   } | null;
 
   // Actions
@@ -609,6 +613,7 @@ export interface State {
     y: number;
     targetClipId: number | null;
     targetTrackId: string | null;
+    targetLevelKf?: { clipId: number; index: number } | null;
   } | null) => void;
 
   /** Remove a track and all of its clips, then RENUMBER the remaining
