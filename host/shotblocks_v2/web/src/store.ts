@@ -103,37 +103,60 @@ export interface Clip {
 }
 
 /** A level-keyframe's segment interpolation. The named modes are
- *  presets; 'custom' means the node's `ease` handles were dragged
- *  freely. 'hold' is a step (evaluator special-case), not a bezier. */
+ *  presets that seed the node's bezier tangents; 'custom' means a
+ *  tangent handle was dragged freely. 'hold' is a step (evaluator
+ *  special-case), not a bezier. */
 export type LevelInterp =
   | 'linear' | 'hold' | 'ease-in' | 'ease-out' | 'ease-in-out' | 'custom';
+
+/** A bezier tangent handle on a level keyframe, in SEGMENT-NORMALIZED
+ *  units: `tx` is a fraction of the segment's time span, `ty` a
+ *  fraction of its gain span. `outTan` belongs to the segment leaving
+ *  the node; `inTan` to the segment arriving — measured BACK from the
+ *  node (so a positive `tx` reaches toward the previous node). */
+export interface LevelTangent {
+  tx: number;
+  ty: number;
+}
 
 /** One pen-tool volume keyframe (Clip.levelKeyframes).
  *
  *  `af` — MEDIA-space doc-frame (frames into the source media, same
  *  units as mediaOffsetFrames / mediaDurationFrames). Media-space so
- *  trim / slip / split don't invalidate the curve — they just reveal
- *  a different window onto it.
+ *  trim / slip / split don't invalidate the curve.
  *  `gain` — 0..1 linear multiplier, 1 = unity.
- *  `interp` — the segment shape FROM this node to the next.
- *  `ease` — cubic-bezier control points [x1,y1,x2,y2] in 0..1, the
- *  CSS-easing model. For a named preset this mirrors the preset
- *  value; for 'custom' it is whatever the user dragged. Ignored when
- *  `interp` is 'hold'. */
+ *  `interp` — the segment shape FROM this node to the next (the named
+ *  presets seed `outTan` + the next node's `inTan`; 'custom' once a
+ *  handle is dragged; 'hold' is a step).
+ *  `inTan` / `outTan` — per-node bezier handles (After Effects model).
+ *  A segment A->B is a cubic with control points A+(A.outTan) and
+ *  B-(B.inTan), each tangent scaled by that segment's span. */
 export interface LevelKeyframe {
   af: number;
   gain: number;
   interp: LevelInterp;
-  ease: [number, number, number, number];
+  inTan: LevelTangent;
+  outTan: LevelTangent;
 }
 
-/** Cubic-bezier control points for each named ease preset. 'hold'
- *  has no curve (the evaluator steps); 'custom' is per-node. */
-export const LEVEL_EASE_PRESETS: Record<string, [number, number, number, number]> = {
-  linear:        [0, 0, 1, 1],
-  'ease-in':     [0.42, 0, 1, 1],
-  'ease-out':    [0, 0, 0.58, 1],
-  'ease-in-out': [0.42, 0, 0.58, 1],
+/** Default tangents for a freshly-added keyframe — control points a
+ *  third of the segment along, HORIZONTAL (ty 0). Horizontal tangents
+ *  at both ends give a smooth ease-in-out S-curve between nodes (not
+ *  a straight ramp), and the handles draw flat so they're easy to
+ *  grab and adjust. */
+export const LEVEL_DEFAULT_TANGENT: LevelTangent = { tx: 1 / 3, ty: 0 };
+
+/** Per-preset tangents: [outTan, inTan-of-next]. The named ease
+ *  presets seed BOTH the node's outgoing handle and the next node's
+ *  incoming handle. 'hold' steps (no curve) and 'custom' is per-node,
+ *  so neither appears here. */
+export const LEVEL_PRESET_TANGENTS: Record<
+  string, { out: LevelTangent; nextIn: LevelTangent }
+> = {
+  linear:        { out: { tx: 1 / 3, ty: 1 / 3 }, nextIn: { tx: 1 / 3, ty: 1 / 3 } },
+  'ease-in':     { out: { tx: 0.42, ty: 0 },      nextIn: { tx: 1 / 3, ty: 1 / 3 } },
+  'ease-out':    { out: { tx: 1 / 3, ty: 1 / 3 }, nextIn: { tx: 0.42, ty: 0 } },
+  'ease-in-out': { out: { tx: 0.42, ty: 0 },      nextIn: { tx: 0.42, ty: 0 } },
 };
 
 /** One clip captured to the timeline-local clipboard. Snapshots the
@@ -571,15 +594,15 @@ export interface State {
   /** Pen-tool: delete keyframe `index` of an audio clip. */
   removeLevelKeyframe: (clipId: number, index: number) => void;
 
-  /** Pen-tool: set keyframe `index`'s outgoing interpolation. A named
-   *  preset also overwrites `ease` with the preset's control points;
-   *  'custom' / 'hold' leave `ease` as-is. */
+  /** Pen-tool: set keyframe `index`'s interpolation. A named preset
+   *  seeds this node's outgoing tangent + the next node's incoming
+   *  tangent; 'hold' / 'custom' leave the tangents as-is. */
   setLevelKeyframeInterp: (clipId: number, index: number, interp: LevelInterp) => void;
 
-  /** Pen-tool: set keyframe `index`'s custom cubic-bezier handles
-   *  (interp becomes 'custom'). Each control value clamps to 0..1. */
-  setLevelKeyframeEase: (
-    clipId: number, index: number, ease: [number, number, number, number],
+  /** Pen-tool: set keyframe `index`'s incoming or outgoing bezier
+   *  tangent handle (interp becomes 'custom'). */
+  setLevelKeyframeTangent: (
+    clipId: number, index: number, side: 'in' | 'out', tan: LevelTangent,
   ) => void;
 
   /** Copy the given clips' data into the timeline-local clipboard.
@@ -1611,9 +1634,12 @@ export const useStore = create<State>((set) => ({
           idx = kfs.findIndex((k) => k.af === a && k.gain === g);
           return { ...c, levelKeyframes: kfs };
         }
+        // New nodes default to a smooth ease (horizontal tangents) —
+        // a fresh segment curves gently rather than ramping linearly.
         const node: LevelKeyframe = {
-          af: a, gain: g, interp: 'linear',
-          ease: [...LEVEL_EASE_PRESETS.linear] as [number, number, number, number],
+          af: a, gain: g, interp: 'ease-in-out',
+          inTan: { ...LEVEL_DEFAULT_TANGENT },
+          outTan: { ...LEVEL_DEFAULT_TANGENT },
         };
         kfs.push(node);
         kfs.sort((p, q) => p.af - q.af);
@@ -1653,29 +1679,39 @@ export const useStore = create<State>((set) => ({
     const next = patchAudioClip(s.audioTracks, clipId, (c) => {
       const kfs = c.levelKeyframes;
       if (!kfs || index < 0 || index >= kfs.length) return c;
-      const preset = LEVEL_EASE_PRESETS[interp];
-      const out = kfs.map((k, i) => i === index
-        ? {
+      // A named preset seeds this node's OUTGOING tangent + the next
+      // node's INCOMING tangent (the preset shapes the whole segment).
+      // 'hold' / 'custom' carry no preset tangents.
+      const preset = LEVEL_PRESET_TANGENTS[interp];
+      const out = kfs.map((k, i) => {
+        if (i === index) {
+          return {
             ...k,
             interp,
-            // A named preset overwrites the handles; custom/hold keep
-            // whatever ease the node already had.
-            ease: preset ? ([...preset] as [number, number, number, number]) : k.ease,
-          }
-        : k);
+            outTan: preset ? { ...preset.out } : k.outTan,
+          };
+        }
+        if (i === index + 1 && preset) {
+          return { ...k, inTan: { ...preset.nextIn } };
+        }
+        return k;
+      });
       return { ...c, levelKeyframes: out };
     });
     return next ? { audioTracks: next } : s;
   }),
 
-  setLevelKeyframeEase: (clipId, index, ease) => set((s) => {
+  setLevelKeyframeTangent: (clipId, index, side, tan) => set((s) => {
     const next = patchAudioClip(s.audioTracks, clipId, (c) => {
       const kfs = c.levelKeyframes;
       if (!kfs || index < 0 || index >= kfs.length) return c;
-      const clamped = ease.map((v) => Math.max(0, Math.min(1, v))) as
-        [number, number, number, number];
       const out = kfs.map((k, i) => i === index
-        ? { ...k, interp: 'custom' as const, ease: clamped }
+        ? {
+            ...k,
+            // Dragging a handle makes the node 'custom'.
+            interp: 'custom' as const,
+            ...(side === 'in' ? { inTan: tan } : { outTan: tan }),
+          }
         : k);
       return { ...c, levelKeyframes: out };
     });

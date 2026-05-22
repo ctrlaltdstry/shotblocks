@@ -1,5 +1,5 @@
 import { useEffect, useRef } from 'react';
-import { useStore, getNextClipId, setNextClipId, type Track, type LevelKeyframe, type LevelInterp } from './store';
+import { useStore, getNextClipId, setNextClipId, LEVEL_DEFAULT_TANGENT, type Track, type LevelKeyframe, type LevelInterp, type LevelTangent } from './store';
 import { onMessage, send } from './lib/host';
 import { fetchAudio, removeAudio, hasAudio } from './lib/audioStore';
 
@@ -51,10 +51,11 @@ interface SavedClip {
   audioBeatGrid?: { periodSamples: number; phaseSamples: number; confidence: number; barOffset: number };
   audioSongParts?: number[];
   // Pen-tool volume automation. Each node: media-space af, 0..1 gain,
-  // segment interp, and the cubic-bezier handles.
+  // segment interp, and the per-node bezier tangents.
   levelKeyframes?: {
     af: number; gain: number; interp: string;
-    ease: [number, number, number, number];
+    inTan: { tx: number; ty: number };
+    outTan: { tx: number; ty: number };
   }[];
 }
 interface SavedTrack {
@@ -95,22 +96,26 @@ const LEVEL_INTERPS: LevelInterp[] =
 
 /** Coerce saved level-keyframes back to typed LevelKeyframe[]. JSON
  *  loses the union types and could carry stale interp names; this
- *  re-validates each node. Returns undefined for an empty/missing
- *  list so a clip with no automation stays clean. */
+ *  re-validates each node. A node missing tangents (older save) is
+ *  backfilled with the linear default. Returns undefined for an
+ *  empty/missing list so a clip with no automation stays clean. */
 function levelKeyframesFromSaved(
   raw: SavedClip['levelKeyframes'],
 ): LevelKeyframe[] | undefined {
   if (!raw || raw.length === 0) return undefined;
+  const tan = (t: { tx: number; ty: number } | undefined): LevelTangent =>
+    (t && typeof t.tx === 'number' && typeof t.ty === 'number')
+      ? { tx: t.tx, ty: t.ty }
+      : { ...LEVEL_DEFAULT_TANGENT };
   const out: LevelKeyframe[] = raw.map((k) => {
     const interp: LevelInterp = LEVEL_INTERPS.includes(k.interp as LevelInterp)
       ? (k.interp as LevelInterp) : 'linear';
-    const e = Array.isArray(k.ease) && k.ease.length === 4
-      ? k.ease : [0, 0, 1, 1];
     return {
       af: k.af | 0,
       gain: Math.max(0, Math.min(1, k.gain)),
       interp,
-      ease: [e[0], e[1], e[2], e[3]] as [number, number, number, number],
+      inTan: tan(k.inTan),
+      outTan: tan(k.outTan),
     };
   });
   out.sort((a, b) => a.af - b.af);

@@ -101,6 +101,12 @@ export function ContextMenu() {
       interpItem('Ease Out', 'ease-out'),
       interpItem('Ease In-Out', 'ease-in-out'),
     ];
+    // Show a 'Custom' entry only once the handles have been dragged —
+    // it's a state indicator, not a picker (you get custom by
+    // dragging a bezier handle). Picking it is a no-op.
+    if (cur === 'custom') {
+      items.push({ kind: 'item', label: 'Custom', checked: true, onPick: close });
+    }
   } else if (onTrackHeader) {
     const side: 'video' | 'audio' | null = trackId
       ? (trackId.startsWith('V') ? 'video' : trackId.startsWith('A') ? 'audio' : null)

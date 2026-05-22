@@ -1139,6 +1139,22 @@ body.is-resizing-headers .body { transition: none; }
   border-color: var(--color-timeline-primary-highlight);
   border-width: 2px;
 }
+/* Bezier handles for the selected node's outgoing segment — round
+   (vs the diamond nodes), blue, with thin connector lines. */
+.level-curve__handle-line {
+  stroke: var(--color-timeline-primary-highlight);
+  stroke-width: 1;
+  opacity: 0.6;
+}
+.level-curve__handle {
+  position: absolute;
+  width: 7px; height: 7px;
+  margin: -3.5px 0 0 -3.5px;
+  border-radius: 50%;
+  background: var(--color-timeline-primary-highlight);
+  border: 1px solid #141414;
+  pointer-events: none;
+}
 
 /* Clip label — a full-width header band (Figma node 287:1811). The
    label IS the band: a full-clip-width row, 3px/13px padding, with a

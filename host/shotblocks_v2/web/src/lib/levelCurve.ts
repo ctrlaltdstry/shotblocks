@@ -5,49 +5,32 @@
  *  audio frame — for both the rendered waveform (ducking) and the
  *  WebAudio playback gain.
  *
- *  Each node carries the cubic-bezier shaping the segment to the NEXT
- *  node (the CSS-easing model). 'hold' is a step. Before the first
- *  node / after the last the curve flatlines at the nearest node's
- *  gain (mirrors Python's evaluate_level). */
+ *  Per-node bezier (After Effects model): a segment A->B is a cubic
+ *  with endpoints (A.af,A.gain) and (B.af,B.gain), and control points
+ *    P1 = A + A.outTan scaled by the segment span
+ *    P2 = B - B.inTan  scaled by the segment span
+ *  Tangents are stored segment-normalized (tx = fraction of the
+ *  segment's time span, ty = fraction of its gain span).
+ *
+ *  'hold' is a step. Before the first node / after the last the curve
+ *  flatlines at the nearest node's gain. */
 
 import type { LevelKeyframe } from '../store';
 
-/** Solve a cubic-bezier easing y for a given x. The bezier's two
- *  control points are (x1,y1) and (x2,y2); the endpoints are fixed at
- *  (0,0) and (1,1). Standard CSS `cubic-bezier()` semantics. */
-export function cubicBezierEase(
-  x1: number, y1: number, x2: number, y2: number, x: number,
-): number {
-  if (x <= 0) return 0;
-  if (x >= 1) return 1;
-  // Bezier component as a function of the curve parameter t.
-  const cx = 3 * x1;
-  const bx = 3 * (x2 - x1) - cx;
-  const ax = 1 - cx - bx;
-  const cy = 3 * y1;
-  const by = 3 * (y2 - y1) - cy;
-  const ay = 1 - cy - by;
-  const sampleX = (t: number) => ((ax * t + bx) * t + cx) * t;
-  const sampleY = (t: number) => ((ay * t + by) * t + cy) * t;
-  const sampleDX = (t: number) => (3 * ax * t + 2 * bx) * t + cx;
-  // Newton-Raphson to invert x(t) = x, then read y(t).
-  let t = x;
-  for (let i = 0; i < 8; i++) {
-    const dx = sampleX(t) - x;
-    if (Math.abs(dx) < 1e-6) break;
-    const d = sampleDX(t);
-    if (Math.abs(d) < 1e-6) break;
-    t -= dx / d;
-  }
-  t = Math.max(0, Math.min(1, t));
-  return sampleY(t);
+/** Solve a 1-D cubic bezier value at parameter t (0..1), endpoints
+ *  p0 and p3, controls p1 and p2. */
+function cubic(p0: number, p1: number, p2: number, p3: number, t: number): number {
+  const u = 1 - t;
+  return u * u * u * p0
+    + 3 * u * u * t * p1
+    + 3 * u * t * t * p2
+    + t * t * t * p3;
 }
 
 /** Gain (0..1) at media-frame `af` for a sorted keyframe list.
- *  Empty list → unity. */
+ *  Empty list -> unity. */
 export function evaluateLevel(keyframes: LevelKeyframe[] | undefined, af: number): number {
   if (!keyframes || keyframes.length === 0) return 1;
-  // Flatline outside the node range.
   if (af <= keyframes[0].af) return clampGain(keyframes[0].gain);
   const last = keyframes[keyframes.length - 1];
   if (af >= last.af) return clampGain(last.gain);
@@ -61,15 +44,31 @@ export function evaluateLevel(keyframes: LevelKeyframe[] | undefined, af: number
       break;
     }
   }
-  const span = b.af - a.af;
-  if (span <= 0) return clampGain(b.gain);
-  const t = (af - a.af) / span;          // 0..1 across the segment
   if (a.interp === 'hold') return clampGain(a.gain);
-  // The ease maps normalized time → normalized progress; progress
-  // then lerps the two node gains.
-  const [x1, y1, x2, y2] = a.ease;
-  const progress = cubicBezierEase(x1, y1, x2, y2, t);
-  return clampGain(a.gain + (b.gain - a.gain) * progress);
+  const spanAf = b.af - a.af;
+  if (spanAf <= 0) return clampGain(b.gain);
+  const spanGain = b.gain - a.gain;
+  // Cubic control points in (af, gain) space.
+  const p1af = a.af + a.outTan.tx * spanAf;
+  const p1g  = a.gain + a.outTan.ty * spanGain;
+  const p2af = b.af - b.inTan.tx * spanAf;
+  const p2g  = b.gain - b.inTan.ty * spanGain;
+  // Find t where the bezier's af equals the target, then read gain.
+  // Newton-Raphson, seeded with the linear estimate.
+  let t = (af - a.af) / spanAf;
+  for (let i = 0; i < 8; i++) {
+    const cx = cubic(a.af, p1af, p2af, b.af, t) - af;
+    if (Math.abs(cx) < 1e-3) break;
+    // d/dt of the cubic.
+    const u = 1 - t;
+    const d = 3 * u * u * (p1af - a.af)
+      + 6 * u * t * (p2af - p1af)
+      + 3 * t * t * (b.af - p2af);
+    if (Math.abs(d) < 1e-6) break;
+    t -= cx / d;
+  }
+  t = Math.max(0, Math.min(1, t));
+  return clampGain(cubic(a.gain, p1g, p2g, b.gain, t));
 }
 
 function clampGain(g: number): number {
