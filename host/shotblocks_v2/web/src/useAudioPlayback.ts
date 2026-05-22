@@ -2,6 +2,7 @@ import { useEffect, useRef } from 'react';
 import { useStore, type Clip, type Track } from './store';
 import { onMessage } from './lib/host';
 import { getAudioBuffer } from './lib/audioStore';
+import { evaluateLevel } from './lib/levelCurve';
 
 /** Whether an audio track is currently audible. A muted track is
  *  silent; if ANY track is soloed, only soloed tracks are audible
@@ -9,6 +10,37 @@ import { getAudioBuffer } from './lib/audioStore';
 function isAudible(track: Track, anySolo: boolean): boolean {
   if (track.muted) return false;
   return !anySolo || track.solo;
+}
+
+/** Schedule the pen-tool volume curve onto a clip's GainNode for a
+ *  playback span. `bufOffsetSec` is where in the media buffer the
+ *  span starts (media seconds); the media-frame at buffer-second t is
+ *  t * fps. No curve → leave the node at unity. */
+function applyLevelCurve(
+  gainNode: GainNode,
+  clip: Clip,
+  whenSec: number,
+  bufOffsetSec: number,
+  durationSec: number,
+  fps: number,
+): void {
+  const kfs = clip.levelKeyframes;
+  if (!kfs || kfs.length === 0 || durationSec <= 0) return;
+  // Sample the curve ~60x/sec across the span — fine enough for
+  // smooth bezier segments, cheap enough for a long clip.
+  const steps = Math.max(2, Math.min(4096, Math.ceil(durationSec * 60)));
+  const curve = new Float32Array(steps);
+  for (let i = 0; i < steps; i++) {
+    const tSec = bufOffsetSec + (i / (steps - 1)) * durationSec;
+    curve[i] = evaluateLevel(kfs, tSec * fps);
+  }
+  try {
+    gainNode.gain.setValueCurveAtTime(curve, Math.max(0, whenSec), durationSec);
+  } catch {
+    // setValueCurveAtTime can throw on a past start time — fall back
+    // to a flat gain at the span's first sample.
+    gainNode.gain.value = curve[0];
+  }
 }
 
 /** Per-scrub blip length in seconds. Standard NLE convention: each
@@ -152,12 +184,23 @@ export function useAudioPlayback(): void {
         if (!buf) continue;
         // Buffer is the whole media; window starts mediaOffsetFrames in.
         const mediaOffsetFrames = clip.mediaOffsetFrames ?? 0;
-        const offset = (mediaOffsetFrames + (frame - clip.inFrame)) * fpsInv;
+        const mediaFrame = mediaOffsetFrames + (frame - clip.inFrame);
+        const offset = mediaFrame * fpsInv;
         const duration = Math.min(SCRUB_BLIP_SEC, buf.duration - offset);
         if (duration <= 0) continue;
         const node = ctx.createBufferSource();
         node.buffer = buf;
-        node.connect(ctx.destination);
+        // Pen-tool curve: a scrub blip is tiny — evaluate the volume
+        // curve once at the blip frame and apply it as a flat gain.
+        const blipGain = evaluateLevel(clip.levelKeyframes, mediaFrame);
+        if (blipGain >= 0.999) {
+          node.connect(ctx.destination);
+        } else {
+          const g = ctx.createGain();
+          g.gain.value = blipGain;
+          node.connect(g);
+          g.connect(ctx.destination);
+        }
         try {
           node.start(ctx.currentTime, offset, duration);
         } catch { /* timing race during rapid scrub */ }
@@ -253,7 +296,12 @@ export function useAudioPlayback(): void {
 
       const node = ctx.createBufferSource();
       node.buffer = buf;
-      node.connect(ctx.destination);
+      // Per-clip gain node — applies the pen-tool volume curve. With
+      // no curve it's a no-op pass-through at unity.
+      const gainNode = ctx.createGain();
+      node.connect(gainNode);
+      gainNode.connect(ctx.destination);
+      applyLevelCurve(gainNode, clip, when, offset, duration, fps);
       try {
         node.start(when, offset, duration);
       } catch (e) {

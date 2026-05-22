@@ -2,6 +2,7 @@ import { useEffect, useRef } from 'react';
 import { useStore } from '../store';
 import { getAudioBuffer } from '../lib/audioStore';
 import { getMeterEnvelope, sampleEnvelope, FLOOR_DBFS, type MeterEnvelope } from '../lib/audioMeter';
+import { evaluateLevel } from '../lib/levelCurve';
 
 /* Meter ballistics.
  *   - Bar: instant attack, METER_RELEASE_DB_S release while live
@@ -92,8 +93,16 @@ export function Meter() {
           const docFrameIntoMedia = mediaOffsetFrames + (frame - clip.inFrame);
           const audioFrame = (docFrameIntoMedia / fps) * env.sampleRate;
           const ch = sampleEnvelope(env, audioFrame);
+          // Apply the pen-tool volume curve: a linear gain shifts the
+          // dBFS reading by 20*log10(gain), floored. So the meter
+          // ducks with what's actually audible.
+          const gain = evaluateLevel(clip.levelKeyframes, docFrameIntoMedia);
+          const gainDb = gain > 0 ? 20 * Math.log10(gain) : -Infinity;
+          const withGain = (db: number) => Math.max(FLOOR_DBFS, db + gainDb);
           // Mono media → mirror channel 0 to both bars.
-          return ch.length >= 2 ? [ch[0], ch[1]] : [ch[0], ch[0]];
+          return ch.length >= 2
+            ? [withGain(ch[0]), withGain(ch[1])]
+            : [withGain(ch[0]), withGain(ch[0])];
         }
       }
       return [FLOOR_DBFS, FLOOR_DBFS];
