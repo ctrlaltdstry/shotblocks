@@ -73,14 +73,12 @@ export function useAltRightZoom() {
         anchorFrame = hStart.vMin + xFrac * hSpanStart;
       }
 
-      // ---- Vertical: which side(s) to zoom + their anchors ----
-      // A "target" describes one side's zoom: its window, the rect it
-      // occupies on screen, and the track-unit anchored under the
-      // cursor (kept under the cursor through the zoom).
+      // ---- Vertical: the audio zoom target (video never zooms) ----
+      // Audio zoom is anchored at the top edge (see applyVZoom), so a
+      // target only needs the side + the window snapshot.
       interface VTarget {
         side: 'video' | 'audio';
         win: VWin;
-        anchorUnit: number;
       }
       const vTargets: VTarget[] = [];
 
@@ -90,64 +88,44 @@ export function useAltRightZoom() {
         win: VWin,
       ): VTarget | null => {
         if (!rect || rect.height <= 0) return null;
-        const span = Math.max(0.01, win.vMax - win.vMin);
-        // yFrac 0 = rect top. Video stack is bottom-up (vMax at top),
-        // audio top-down (vMin at top).
-        const yFrac = Math.max(0, Math.min(1,
-          (startClientY - rect.top) / rect.height));
-        const anchorUnit = side === 'video'
-          ? win.vMax - yFrac * span
-          : win.vMin + yFrac * span;
-        return { side, win, anchorUnit };
+        return { side, win };
       };
 
-      const videosCanvas = document.getElementById('lanes-videos');
       const audiosCanvas = document.getElementById('lanes-audios');
-      const videosHeader = document.getElementById('headers-videos');
       const audiosHeader = document.getElementById('headers-audios');
 
+      // Video side is FIXED-HEIGHT — it never zooms vertically. Only
+      // the audio stack responds to vertical drag; the video headers
+      // are ignored entirely.
       if (headerScoped) {
-        // Only the side whose header was pressed.
-        const inVideoHeaders = !!target.closest('#headers-videos');
-        if (inVideoHeaders && videosHeader) {
-          const t = measure('video', videosHeader.getBoundingClientRect(), s0.vVideo);
-          if (t) vTargets.push(t);
-        } else if (audiosHeader) {
+        // Only the audio side zooms. A press in the video headers is
+        // a no-op (no vertical zoom, and headers carry no time axis).
+        const inAudioHeaders = !!target.closest('#headers-audios');
+        if (inAudioHeaders && audiosHeader) {
           const t = measure('audio', audiosHeader.getBoundingClientRect(), s0.vAudio);
           if (t) vTargets.push(t);
         }
       } else {
-        // Canvas scope: zoom BOTH sides. Each anchors on its own rect
-        // (the cursor only sits in one, but both zoom around their
-        // visible centre — the pressed side stays glued to the
-        // cursor, the other zooms about the equivalent fraction).
-        const tv = measure('video', videosCanvas?.getBoundingClientRect() ?? null, s0.vVideo);
+        // Canvas scope: horizontal zoom affects everything; vertical
+        // zoom is audio-only.
         const ta = measure('audio', audiosCanvas?.getBoundingClientRect() ?? null, s0.vAudio);
-        if (tv) vTargets.push(tv);
         if (ta) vTargets.push(ta);
       }
 
+      // Audio-only vertical zoom, anchored at the TOP edge (the V/A
+      // divider). The visible window's top is pinned to win.min — that
+      // is the position at which --audio-scroll-y is 0 and A1 sits flush
+      // against the divider. So A1 stays glued to the divider and the
+      // stack grows downward as you zoom; the top track is never
+      // clipped (a centre-anchored zoom did clip it), and the
+      // scrollbar thumb stays top-anchored to match.
       function applyVZoom(t: VTarget, factor: number) {
         const spanStart = Math.max(0.01, t.win.vMax - t.win.vMin);
-        const spanNew = Math.max(0.05, spanStart * factor);
-        const anchorFrac = t.side === 'video'
-          ? (t.win.vMax - t.anchorUnit) / spanStart
-          : (t.anchorUnit - t.win.vMin) / spanStart;
-        let nMin: number;
-        let nMax: number;
-        if (t.side === 'video') {
-          nMax = t.anchorUnit + anchorFrac * spanNew;
-          nMin = nMax - spanNew;
-        } else {
-          nMin = t.anchorUnit - anchorFrac * spanNew;
-          nMax = nMin + spanNew;
-        }
-        if (nMin < t.win.min) { nMax += t.win.min - nMin; nMin = t.win.min; }
-        if (nMax > t.win.max) { nMin -= nMax - t.win.max; nMax = t.win.max; }
-        nMin = Math.max(t.win.min, nMin);
-        nMax = Math.min(t.win.max, nMax);
-        if (t.side === 'video') useStore.getState().setVVideoVisible(nMin, nMax);
-        else useStore.getState().setVAudioVisible(nMin, nMax);
+        const spanNew = Math.max(0.05, Math.min(
+          t.win.max - t.win.min, spanStart * factor));
+        const nMin = t.win.min;
+        const nMax = nMin + spanNew;
+        useStore.getState().setVAudioVisible(nMin, nMax);
       }
 
       function onMove(mv: PointerEvent) {
