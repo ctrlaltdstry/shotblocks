@@ -1,8 +1,9 @@
 import type { CSSProperties, MouseEvent } from 'react';
 import { useStore, type Track } from '../store';
 
-/** Track header rendered inside the headers column. Visual is the same
- *  as the legacy timeline.html — twirl, lock, chip, eye/MS row, label.
+/** Track header rendered inside the headers column — lock, chip,
+ *  eye/MS row, label. (The motion-layer twirl lives on the clip, not
+ *  here — a track can hold clips from different cameras.)
  *
  *  Right-click opens the track-header context menu (Delete Track).
  *  V1 / A1 base tracks always exist; their Delete Track item is
@@ -27,9 +28,6 @@ export function TrackHeader({ track, side }: { track: Track; side: 'video' | 'au
       data-track={trackId}
       onContextMenu={onContextMenu}
     >
-      <div className="track-header__twirl">
-        <span className="icon icon--triangle" style={{ '--icon-w': '8px', '--icon-h': '10px', '--icon-rot': '90deg' } as CSSProperties} />
-      </div>
       <div className="track-header__lock-wrap">
         <span className={'icon ' + (isVideo ? 'icon--lock' : 'icon--lock-locked')} style={{ '--icon-w': '12px', '--icon-h': '12px' } as CSSProperties} />
       </div>
