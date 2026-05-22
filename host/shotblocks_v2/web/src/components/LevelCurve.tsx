@@ -4,89 +4,141 @@ import { useElementSize } from '../useElementSize';
 import { evaluateLevel } from '../lib/levelCurve';
 
 /** Pen-tool volume-automation overlay for an audio clip — the curve
- *  line, its diamond keyframe nodes, and (on the selected node) the
- *  bezier tangent handles.
+ *  line, its diamond keyframe nodes, and (on a single selected node)
+ *  the bezier tangent handles.
  *
  *  Lag-free layout. Everything is positioned in clip-relative
  *  FRACTIONS, never measured pixels — so it follows the clip's
  *  width/transform natively and never lags the waveform on zoom. The
  *  curve is an SVG with a fixed 1000x1000 viewBox +
- *  preserveAspectRatio="none", CSS-stretched to the clip; the nodes
- *  and handles are DOM divs positioned by left/top % so they stay
- *  square (the stretched SVG would squish SVG shapes).
+ *  preserveAspectRatio="none", CSS-stretched to the clip; the nodes /
+ *  handles are DOM divs positioned by left/top % so they stay square.
  *
- *  Per-node bezier (After Effects model): the selected node shows one
- *  handle on each side — `inTan` shapes the segment arriving from the
- *  previous node, `outTan` the segment leaving to the next. Tangents
- *  are segment-normalized; see store LevelKeyframe / LevelTangent.
+ *  Interaction — modelled on Premiere Pro / Adobe Audition / Pro Tools
+ *  envelope automation. With the Pen tool active (or Alt held):
  *
- *  af model. A node's `af` is a MEDIA-space doc-frame; the clip is a
- *  fixed window onto that media: xFrac(af) = (af - mediaOffset) /
- *  clipDuration. Gain 1 (unity) maps to the vertical CENTRE, gain 0
- *  to CURVE_BOTTOM. */
+ *   - press on a NODE   -> drag it. If the node is part of a multi-
+ *                          selection, the whole group moves together
+ *                          (Pro Tools Trimmer model). A plain press
+ *                          replaces the selection with just this node;
+ *                          Shift-press toggles it in/out of the
+ *                          selection.
+ *   - press on a HANDLE -> reshape the bezier (single-selection only).
+ *   - press elsewhere   -> begin a MARQUEE. Drag a rectangle; on
+ *                          release every node inside is selected
+ *                          (Shift-release = additive). The press can
+ *                          be anywhere in the lane, INCLUDING over the
+ *                          curve line — adding a node happens only on
+ *                          a click (release without dragging past the
+ *                          slop) when the press was on the line. A
+ *                          click off the line clears the selection.
+ *
+ *  Per-node bezier (After Effects model): inTan shapes the segment
+ *  arriving from the previous node, outTan the segment leaving to the
+ *  next. Tangents are segment-normalized (see store).
+ *
+ *  Selection lives in the store (levelKfSelection) so Delete and the
+ *  context menu can act on it. */
 
-/** viewBox extent — curve coordinates are 0..VB on both axes. */
 const VB = 1000;
-/** Gain 0 maps here (fraction of height); a small inset keeps the
- *  bottom diamond off the clip edge. */
 const CURVE_BOTTOM = 0.94;
-/** Node hit radius in px — generous so a normal click on the small
- *  diamond reliably GRABS it rather than missing + adding a node. */
 const NODE_HIT_PX = 14;
-/** Handle hit radius in px. Generous — the handle dot is small and a
- *  pointer click is rarely dead-on (measured ~10px aim error). */
 const HANDLE_HIT_PX = 18;
-/** Fixed on-screen length of a tangent handle, in px. The stored
- *  tangent sets the handle's DIRECTION (the curve shape); the handle
- *  is drawn this far from its node along that direction regardless of
- *  keyframe spacing or zoom — so handles never pile up on the node
- *  when nodes are close or the clip is zoomed wide. */
 const HANDLE_LEN_PX = 34;
-/** A click adds a node only within this many px of the curve line. */
+/** A click (no-drag release) within this many px of the curve line
+ *  adds a node at that point. */
 const LINE_HIT_PX = 16;
+/** Px the pointer must travel before a press becomes a marquee drag
+ *  (below this it's a click — adds a node on the line, or clears). */
+const DRAG_SLOP_PX = 4;
 
 type HandleSide = 'in' | 'out';
 
 export function LevelCurve({ clip }: { clip: Clip }) {
   const svgRef = useRef<SVGSVGElement | null>(null);
-  // Live SVG size — used ONLY to normalize the tangent handles to a
-  // fixed pixel length (px<->fraction conversion). The curve + nodes
-  // stay percentage-positioned and lag-free; a slight handle lag on
-  // zoom is fine since handles only show on the selected node.
   const { width: svgW, height: svgH } = useElementSize(svgRef);
   const activeTool = useStore((s) => s.activeTool);
-  // Re-render on zoom so the curve relayouts.
   const hMin = useStore((s) => s.h.vMin);
   const hMax = useStore((s) => s.h.vMax);
   void hMin; void hMax;
 
-  const penActive = activeTool === 'pen';
+  // Alt held — store-owned so useToolCursor sees the same value (the
+  // App-level useAltKey hook drives it). Plus altRmbZooming, set by
+  // useAltRightZoom; the pen tool must be suppressed while that
+  // gesture is in flight so Alt+RMB stays a zoom, not a pen invite.
+  const altHeld = useStore((s) => s.altHeld);
+  const altRmbZooming = useStore((s) => s.altRmbZooming);
+  const penActive = (activeTool === 'pen' || altHeld) && !altRmbZooming;
   const kfs = clip.levelKeyframes ?? [];
 
+  // The level-keyframe selection (store-owned). `sel` is THIS clip's
+  // selected indices; empty when the selection belongs to another
+  // clip or nothing is selected.
+  const levelKfSelection = useStore((s) => s.levelKfSelection);
+  const sel = levelKfSelection && levelKfSelection.clipId === clip.id
+    ? levelKfSelection.indices : [];
+  const selSet = new Set(sel);
+
   const [hoverKf, setHoverKf] = useState(-1);
-  const [selectedKf, setSelectedKf] = useState(-1);
+  const [marquee, setMarquee] = useState<
+    { x0: number; y0: number; x1: number; y1: number } | null
+  >(null);
 
   // --- coordinate mapping (fractions, 0..1) -------------------------
   const clipDur = Math.max(1, clip.outFrame - clip.inFrame);
   const mediaOffset = clip.mediaOffsetFrames ?? 0;
   const afToFrac = (af: number) => (af - mediaOffset) / clipDur;
   const fracToAf = (fx: number) => mediaOffset + fx * clipDur;
-  /** gain 0..1 -> y fraction (unity at centre 0.5). */
   const gainToFrac = (g: number) => 0.5 + (1 - g) * (CURVE_BOTTOM - 0.5);
-  /** y fraction -> gain. RAW (unclamped); the store clamps finally. */
   const fracToGain = (fy: number) => 1 - (fy - 0.5) / (CURVE_BOTTOM - 0.5);
 
+  function setSelection(indices: number[]) {
+    useStore.getState().setLevelKfSelection(
+      indices.length ? { clipId: clip.id, indices } : null);
+  }
+
   // --- drag state ---------------------------------------------------
-  // A node drag carries grabAf/grabGain — the cursor->node offset at
-  // grab time, applied each move so the node tracks the cursor 1:1.
-  // A handle drag reshapes one tangent of the selected node.
+  // `pending` = press tracked; resolves to a drag once the pointer
+  // moves past DRAG_SLOP_PX, or to a click on release without slop.
   const drag = useRef<
-    | { kind: 'node'; index: number; pointerId: number; grabAf: number; grabGain: number }
-    | { kind: 'handle'; index: number; side: HandleSide; pointerId: number }
+    | {
+        kind: 'pending';
+        pointerId: number; x0: number; y0: number;
+        // The pre-resolved gesture target. On slop-exceeded:
+        //   target.kind === 'node'   -> start a node-drag (group if
+        //                               the node is in a multiselection
+        //                               and shiftKey wasn't held).
+        //   target.kind === 'handle' -> start a handle drag.
+        //   target.kind === 'empty'  -> start a marquee.
+        target:
+          | { kind: 'node'; index: number }
+          | { kind: 'handle'; side: HandleSide }
+          | { kind: 'empty' };
+        shiftKey: boolean;
+        // On a click (no slop) on the line, this is the gain at the
+        // click frame — used to add the new node ON the line.
+        lineGain: number | null;
+      }
+    | {
+        kind: 'node-drag';
+        pointerId: number; index: number; group: number[];
+        anchorStartAf: number; anchorStartGain: number;
+        grabAf: number; grabGain: number;
+        // For group drags the store action is RELATIVE (k.af + dA), so
+        // each move must send only the NEW incremental delta — the
+        // cumulative delta would compound every frame. Track what we
+        // already applied so the next move sends `total - prev`.
+        prevDAf: number; prevDGain: number;
+      }
+    | { kind: 'handle-drag'; pointerId: number; side: HandleSide; index: number }
+    | {
+        kind: 'marquee-drag';
+        pointerId: number; x0: number; y0: number; shiftKey: boolean;
+        baseSet: Set<number>;
+      }
     | null
   >(null);
 
-  /** Pointer position as clip-relative fractions + the live rect. */
   function localFrac(ev: React.PointerEvent) {
     const r = svgRef.current!.getBoundingClientRect();
     return {
@@ -97,7 +149,6 @@ export function LevelCurve({ clip }: { clip: Clip }) {
     };
   }
 
-  /** Nearest node within NODE_HIT_PX of (fx,fy), or -1. */
   function hitNode(fx: number, fy: number, rw: number, rh: number): number {
     let best = -1;
     let bestD = Infinity;
@@ -109,47 +160,37 @@ export function LevelCurve({ clip }: { clip: Clip }) {
     return bestD <= NODE_HIT_PX ? best : -1;
   }
 
-  /** The selected node's tangent-handle screen positions (clip
-   *  fractions). `in` exists when there's a previous node, `out` when
-   *  there's a next node; a 'hold' segment contributes no handle.
-   *
-   *  The handle's DIRECTION comes from the tangent (the curve shape);
-   *  its on-screen DISTANCE from the node is clamped to a fixed pixel
-   *  band so it never collapses onto the node (when nodes are close /
-   *  the clip is zoomed wide) nor flies off. The clamp is display-only
-   *  — `setHandleFromFrac` maps the raw drag back to the real tangent. */
+  /** Tangent handles — shown only when exactly ONE node is selected. */
   function selectedHandles(): { side: HandleSide; hx: number; hy: number }[] {
     const out: { side: HandleSide; hx: number; hy: number }[] = [];
-    if (selectedKf < 0 || selectedKf >= kfs.length) return out;
-    if (svgW <= 0 || svgH <= 0) return out;
-    const node = kfs[selectedKf];
+    if (sel.length !== 1) return out;
+    const idx = sel[0];
+    if (idx < 0 || idx >= kfs.length || svgW <= 0 || svgH <= 0) return out;
+    const node = kfs[idx];
     const nx = afToFrac(node.af);
     const ny = gainToFrac(node.gain);
-    // Place a handle a clamped pixel distance along (dxFrac,dyFrac).
     const place = (side: HandleSide, ctlXFrac: number, ctlYFrac: number) => {
       let dx = ctlXFrac - nx;
       let dy = ctlYFrac - ny;
-      // Length in px.
       const lenPx = Math.hypot(dx * svgW, dy * svgH);
       const clamped = Math.max(HANDLE_LEN_PX, Math.min(HANDLE_LEN_PX * 2.4, lenPx));
       if (lenPx > 1e-4) {
         const k = clamped / lenPx;
         dx *= k; dy *= k;
       } else {
-        // Degenerate (flat, zero-length) — point straight out.
         dx = (side === 'out' ? 1 : -1) * (HANDLE_LEN_PX / svgW);
         dy = 0;
       }
       out.push({ side, hx: nx + dx, hy: ny + dy });
     };
-    if (selectedKf < kfs.length - 1 && node.interp !== 'hold') {
-      const b = kfs[selectedKf + 1];
+    if (idx < kfs.length - 1 && node.interp !== 'hold') {
+      const b = kfs[idx + 1];
       place('out',
         afToFrac(node.af + node.outTan.tx * (b.af - node.af)),
         gainToFrac(node.gain + node.outTan.ty * (b.gain - node.gain)));
     }
-    if (selectedKf > 0 && kfs[selectedKf - 1].interp !== 'hold') {
-      const z = kfs[selectedKf - 1];
+    if (idx > 0 && kfs[idx - 1].interp !== 'hold') {
+      const z = kfs[idx - 1];
       place('in',
         afToFrac(node.af - node.inTan.tx * (node.af - z.af)),
         gainToFrac(node.gain - node.inTan.ty * (node.gain - z.gain)));
@@ -157,7 +198,6 @@ export function LevelCurve({ clip }: { clip: Clip }) {
     return out;
   }
 
-  /** Which selected-node handle side is within HANDLE_HIT_PX, or null. */
   function hitHandle(fx: number, fy: number, rw: number, rh: number): HandleSide | null {
     for (const h of selectedHandles()) {
       if (Math.hypot((h.hx - fx) * rw, (h.hy - fy) * rh) <= HANDLE_HIT_PX) {
@@ -167,17 +207,15 @@ export function LevelCurve({ clip }: { clip: Clip }) {
     return null;
   }
 
-  /** Write the selected node's `in` or `out` tangent from a handle
-   *  position (clip fractions). Inverts the handle->segment-normalized
-   *  mapping; tx is clamped to [0,1] so a handle can't cross a node. */
   function setHandleFromFrac(side: HandleSide, fx: number, fy: number) {
-    if (selectedKf < 0 || selectedKf >= kfs.length) return;
-    const node = kfs[selectedKf];
+    if (sel.length !== 1) return;
+    const idx = sel[0];
+    const node = kfs[idx];
     const af = fracToAf(fx);
     const gain = fracToGain(fy);
     let tan: LevelTangent;
     if (side === 'out') {
-      const b = kfs[selectedKf + 1];
+      const b = kfs[idx + 1];
       if (!b) return;
       const spanAf = b.af - node.af;
       const spanGain = b.gain - node.gain;
@@ -186,7 +224,7 @@ export function LevelCurve({ clip }: { clip: Clip }) {
         ty: spanGain !== 0 ? (gain - node.gain) / spanGain : 0,
       };
     } else {
-      const z = kfs[selectedKf - 1];
+      const z = kfs[idx - 1];
       if (!z) return;
       const spanAf = node.af - z.af;
       const spanGain = node.gain - z.gain;
@@ -195,7 +233,7 @@ export function LevelCurve({ clip }: { clip: Clip }) {
         ty: spanGain !== 0 ? (node.gain - gain) / spanGain : 0,
       };
     }
-    useStore.getState().setLevelKeyframeTangent(clip.id, selectedKf, side, tan);
+    useStore.getState().setLevelKeyframeTangent(clip.id, idx, side, tan);
   }
 
   function onPointerDown(ev: React.PointerEvent<SVGSVGElement>) {
@@ -203,54 +241,172 @@ export function LevelCurve({ clip }: { clip: Clip }) {
     ev.stopPropagation();
     ev.preventDefault();
     const { fx, fy, rw, rh } = localFrac(ev);
-    const store = useStore.getState();
-    // Tangent handles of the selected node take priority — they sit
-    // near the curve and would otherwise be shadowed by add/line hits.
-    const side = hitHandle(fx, fy, rw, rh);
-    if (side) {
-      drag.current = { kind: 'handle', index: selectedKf, side, pointerId: ev.pointerId };
-      svgRef.current!.setPointerCapture(ev.pointerId);
-      return;
+
+    // Decide what the press is OVER. The actual gesture (drag vs click)
+    // is resolved on the first move past slop, or on release.
+    const handleSide = hitHandle(fx, fy, rw, rh);
+    const nodeIdx = handleSide ? -1 : hitNode(fx, fy, rw, rh);
+    let lineGain: number | null = null;
+    if (handleSide === null && nodeIdx < 0) {
+      const g = evaluateLevel(kfs, fracToAf(fx));
+      if (Math.abs(gainToFrac(g) - fy) * rh <= LINE_HIT_PX) lineGain = g;
     }
-    let index = hitNode(fx, fy, rw, rh);
-    let grabAf = 0;
-    let grabGain = 0;
-    if (index < 0) {
-      // Not on a node — only add one if the click lands ON the curve
-      // line. The new node lands exactly on the line (no kink).
-      const lineGain = evaluateLevel(kfs, fracToAf(fx));
-      if (Math.abs(gainToFrac(lineGain) - fy) * rh > LINE_HIT_PX) return;
-      index = store.addLevelKeyframe(clip.id, fracToAf(fx), lineGain) ?? -1;
-      if (index < 0) return;
-    } else {
-      // Grabbed an existing node — capture the cursor->node offset so
-      // the drag tracks 1:1 (kfs[] is current; no add happened).
-      grabAf = fracToAf(fx) - kfs[index].af;
-      grabGain = fracToGain(fy) - kfs[index].gain;
-    }
-    drag.current = { kind: 'node', index, pointerId: ev.pointerId, grabAf, grabGain };
-    setSelectedKf(index);
+
+    drag.current = {
+      kind: 'pending',
+      pointerId: ev.pointerId,
+      x0: fx, y0: fy,
+      target: handleSide
+        ? { kind: 'handle', side: handleSide }
+        : nodeIdx >= 0
+          ? { kind: 'node', index: nodeIdx }
+          : { kind: 'empty' },
+      shiftKey: ev.shiftKey,
+      lineGain,
+    };
     svgRef.current!.setPointerCapture(ev.pointerId);
   }
+
   function onPointerMove(ev: React.PointerEvent<SVGSVGElement>) {
     const d = drag.current;
     const { fx, fy, rw, rh } = localFrac(ev);
-    if (d) {
-      if (d.kind === 'node') {
-        useStore.getState().moveLevelKeyframe(
-          clip.id, d.index,
-          fracToAf(fx) - d.grabAf, fracToGain(fy) - d.grabGain);
+
+    if (!d) {
+      const hov = hitNode(fx, fy, rw, rh);
+      if (hov !== hoverKf) setHoverKf(hov);
+      return;
+    }
+
+    // Resolve a pending press into a drag once the pointer moves past
+    // the slop. The PRESS already captured what was under it.
+    if (d.kind === 'pending') {
+      const moved = Math.hypot((fx - d.x0) * rw, (fy - d.y0) * rh);
+      if (moved < DRAG_SLOP_PX) return;
+      if (d.target.kind === 'handle') {
+        // Reshape: the press was on a handle of the (single) selected node.
+        const idx = sel[0] ?? -1;
+        drag.current = { kind: 'handle-drag', pointerId: d.pointerId, side: d.target.side, index: idx };
+        useStore.getState().setLevelCurveDragging(true);
+      } else if (d.target.kind === 'node') {
+        // Group-drag if the node was part of a multi-selection AND
+        // shift wasn't held; otherwise single (selecting just it).
+        const idx = d.target.index;
+        const inMulti = selSet.has(idx) && sel.length > 1 && !d.shiftKey;
+        const group = inMulti ? [...sel] : [idx];
+        if (!inMulti) {
+          if (d.shiftKey) {
+            // Shift-drag a node starts a single drag of that node, but
+            // toggles it into the selection rather than replacing.
+            const nextSel = selSet.has(idx)
+              ? sel.filter((i) => i !== idx)
+              : [...sel, idx];
+            setSelection(nextSel);
+          } else {
+            setSelection([idx]);
+          }
+        }
+        drag.current = {
+          kind: 'node-drag',
+          pointerId: d.pointerId, index: idx, group,
+          anchorStartAf: kfs[idx].af, anchorStartGain: kfs[idx].gain,
+          grabAf: fracToAf(d.x0) - kfs[idx].af,
+          grabGain: fracToGain(d.y0) - kfs[idx].gain,
+          prevDAf: 0, prevDGain: 0,
+        };
+        useStore.getState().setLevelCurveDragging(true);
       } else {
-        setHandleFromFrac(d.side, fx, fy);
+        // Empty / line — start a marquee. Shift extends the existing
+        // selection (additive); plain replaces it on release.
+        drag.current = {
+          kind: 'marquee-drag',
+          pointerId: d.pointerId,
+          x0: d.x0, y0: d.y0,
+          shiftKey: d.shiftKey,
+          baseSet: new Set(sel),
+        };
+      }
+      // Re-dispatch this move into the new state.
+      return onPointerMove(ev);
+    }
+
+    if (d.kind === 'handle-drag') {
+      setHandleFromFrac(d.side, fx, fy);
+      return;
+    }
+    if (d.kind === 'node-drag') {
+      const wantAf = fracToAf(fx) - d.grabAf;
+      const wantGain = fracToGain(fy) - d.grabGain;
+      if (d.group.length > 1) {
+        // moveLevelKeyframesBy adds dA to each node's CURRENT af, so
+        // the move param must be the incremental delta since the
+        // previous frame — not the cumulative delta (that would
+        // compound every frame and the group would race the cursor).
+        const totalDAf = wantAf - d.anchorStartAf;
+        const totalDGain = wantGain - d.anchorStartGain;
+        const stepDAf = totalDAf - d.prevDAf;
+        const stepDGain = totalDGain - d.prevDGain;
+        if (stepDAf !== 0 || stepDGain !== 0) {
+          useStore.getState().moveLevelKeyframesBy(
+            clip.id, d.group, stepDAf, stepDGain);
+          d.prevDAf = totalDAf;
+          d.prevDGain = totalDGain;
+        }
+      } else {
+        useStore.getState().moveLevelKeyframe(clip.id, d.index, wantAf, wantGain);
       }
       return;
     }
-    const hov = hitNode(fx, fy, rw, rh);
-    if (hov !== hoverKf) setHoverKf(hov);
+    if (d.kind === 'marquee-drag') {
+      setMarquee({ x0: d.x0, y0: d.y0, x1: fx, y1: fy });
+    }
   }
+
   function onPointerEnd(ev: React.PointerEvent<SVGSVGElement>) {
-    if (!drag.current) return;
+    const d = drag.current;
+    if (!d) return;
+    if (d.kind === 'pending') {
+      // No drag — this was a click. Resolve by what the press was over.
+      if (d.target.kind === 'node') {
+        const idx = d.target.index;
+        if (d.shiftKey) {
+          // Shift-click toggles the node in/out of the selection.
+          setSelection(selSet.has(idx)
+            ? sel.filter((i) => i !== idx)
+            : [...sel, idx]);
+        } else {
+          setSelection([idx]);
+        }
+      } else if (d.target.kind === 'handle') {
+        // Click on a handle without dragging — no-op (the selection /
+        // handle visibility already reflect the state).
+      } else if (d.lineGain !== null) {
+        // Click on the curve line → add a node and select it.
+        const added = useStore.getState().addLevelKeyframe(
+          clip.id, fracToAf(d.x0), d.lineGain) ?? -1;
+        if (added >= 0) setSelection([added]);
+      } else if (!d.shiftKey) {
+        // Click on empty space (off the line) → clear the selection.
+        setSelection([]);
+      }
+    } else if (d.kind === 'marquee-drag' && marquee) {
+      const lo = { x: Math.min(marquee.x0, marquee.x1), y: Math.min(marquee.y0, marquee.y1) };
+      const hi = { x: Math.max(marquee.x0, marquee.x1), y: Math.max(marquee.y0, marquee.y1) };
+      const picked: number[] = [];
+      for (let i = 0; i < kfs.length; i++) {
+        const x = afToFrac(kfs[i].af);
+        const y = gainToFrac(kfs[i].gain);
+        if (x >= lo.x && x <= hi.x && y >= lo.y && y <= hi.y) picked.push(i);
+      }
+      // Shift-release: additive — union with the pre-drag selection.
+      // Plain release: replace.
+      const next = d.shiftKey
+        ? Array.from(new Set([...d.baseSet, ...picked]))
+        : picked;
+      setSelection(next);
+    }
     drag.current = null;
+    setMarquee(null);
+    useStore.getState().setLevelCurveDragging(false);
     try { svgRef.current!.releasePointerCapture(ev.pointerId); } catch { /* noop */ }
   }
   function onPointerLeave() {
@@ -265,7 +421,10 @@ export function LevelCurve({ clip }: { clip: Clip }) {
     if (idx < 0) return;   // not on a node — leave the default menu
     ev.preventDefault();
     ev.stopPropagation();
-    setSelectedKf(idx);
+    // Right-clicking a node outside the selection makes it the
+    // selection; right-clicking inside keeps the group (standard NLE
+    // convention).
+    if (!selSet.has(idx)) setSelection([idx]);
     useStore.getState().setContextMenu({
       x: ev.clientX, y: ev.clientY,
       targetClipId: null, targetTrackId: null,
@@ -275,7 +434,13 @@ export function LevelCurve({ clip }: { clip: Clip }) {
 
   const path = buildPath(kfs, afToFrac, gainToFrac);
   const handles = penActive ? selectedHandles() : [];
-  const selNode = selectedKf >= 0 && selectedKf < kfs.length ? kfs[selectedKf] : null;
+  const selNode = sel.length === 1 ? kfs[sel[0]] : null;
+  const mRect = marquee ? {
+    left: Math.min(marquee.x0, marquee.x1) * 100,
+    top: Math.min(marquee.y0, marquee.y1) * 100,
+    width: Math.abs(marquee.x1 - marquee.x0) * 100,
+    height: Math.abs(marquee.y1 - marquee.y0) * 100,
+  } : null;
 
   return (
     <>
@@ -291,8 +456,6 @@ export function LevelCurve({ clip }: { clip: Clip }) {
         onPointerLeave={onPointerLeave}
         onContextMenu={onContextMenu}
       >
-        {/* Resting unity line — flat, dead-centre, on a clip with no
-            curve yet. Brightens while the Pen tool is active. */}
         {kfs.length === 0 && (
           <line
             className="level-curve__unity"
@@ -308,7 +471,6 @@ export function LevelCurve({ clip }: { clip: Clip }) {
             vectorEffect="non-scaling-stroke"
           />
         )}
-        {/* Tangent connector lines — selected node to each handle. */}
         {selNode && handles.map((h) => (
           <line
             key={h.side}
@@ -319,21 +481,18 @@ export function LevelCurve({ clip }: { clip: Clip }) {
           />
         ))}
       </svg>
-      {/* Diamond nodes — DOM divs positioned by %, so they stay square
-          and follow the clip width with zero lag. */}
       {kfs.map((k, i) => (
         <div
           key={i}
           className={'level-curve__node'
             + (i === hoverKf ? ' is-hover' : '')
-            + (i === selectedKf ? ' is-selected' : '')}
+            + (selSet.has(i) ? ' is-selected' : '')}
           style={{
             left: (afToFrac(k.af) * 100) + '%',
             top: (gainToFrac(k.gain) * 100) + '%',
           }}
         />
       ))}
-      {/* Round bezier handle dots for the selected node's tangents. */}
       {handles.map((h) => (
         <div
           key={h.side}
@@ -341,6 +500,15 @@ export function LevelCurve({ clip }: { clip: Clip }) {
           style={{ left: (h.hx * 100) + '%', top: (h.hy * 100) + '%' }}
         />
       ))}
+      {mRect && (
+        <div
+          className="level-curve__marquee"
+          style={{
+            left: mRect.left + '%', top: mRect.top + '%',
+            width: mRect.width + '%', height: mRect.height + '%',
+          }}
+        />
+      )}
     </>
   );
 }
@@ -349,10 +517,6 @@ function clamp01(v: number): number {
   return v < 0 ? 0 : v > 1 ? 1 : v;
 }
 
-/** Build the SVG curve path (0..VB viewBox units): a flat lead-in to
- *  the first node, a cubic per segment (or a step for 'hold'), a flat
- *  lead-out. The cubic control points come from each node's tangents,
- *  matching evaluateLevel. */
 function buildPath(
   kfs: LevelKeyframe[],
   afToFrac: (af: number) => number,

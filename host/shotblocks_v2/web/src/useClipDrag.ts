@@ -521,7 +521,12 @@ export function useClipDrag(
       // gesture (add / drag volume keyframes). The overlay's React
       // stopPropagation can't stop this NATIVE listener, so the clip
       // would otherwise start a body-drag underneath the curve edit.
-      if (side === 'audio' && useStore.getState().activeTool === 'pen') return;
+      // Alt held counts the same (Alt is the pen modifier — see
+      // useToolCursor / LevelCurve's penActive).
+      if (side === 'audio') {
+        const st = useStore.getState();
+        if (st.activeTool === 'pen' || (st.altHeld && !st.altRmbZooming)) return;
+      }
 
       // Razor tool: click splits the clip at the cursor frame instead
       // of starting a drag. Map cursor X → frame via the lane's

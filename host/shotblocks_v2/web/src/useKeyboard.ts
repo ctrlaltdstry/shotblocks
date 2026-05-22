@@ -148,9 +148,19 @@ export function useKeyboard(): void {
         return;
       }
 
-      // Delete / Backspace → delete selection.
+      // Delete / Backspace → delete selection. A pen-tool level-
+      // keyframe selection takes priority over the clip selection.
       if (ev.key === 'Delete' || ev.key === 'Backspace') {
-        const sel = useStore.getState().selectedClipIds;
+        const st = useStore.getState();
+        const lk = st.levelKfSelection;
+        if (lk && lk.indices.length) {
+          ev.preventDefault();
+          ev.stopPropagation();
+          st.removeLevelKeyframes(lk.clipId, lk.indices);
+          st.setLevelKfSelection(null);
+          return;
+        }
+        const sel = st.selectedClipIds;
         if (sel.size === 0) return;
         ev.preventDefault();
         ev.stopPropagation();

@@ -594,6 +594,18 @@ export interface State {
   /** Pen-tool: delete keyframe `index` of an audio clip. */
   removeLevelKeyframe: (clipId: number, index: number) => void;
 
+  /** Pen-tool: delete a set of keyframes (by index) at once. */
+  removeLevelKeyframes: (clipId: number, indices: number[]) => void;
+
+  /** Pen-tool: shift a set of keyframes by (dAf, dGain) rigidly. The
+   *  delta clamps so no selected node crosses an UN-selected
+   *  neighbour or leaves the media; gains clamp to 0..1. Mirrors Pro
+   *  Tools' Trimmer model. */
+  moveLevelKeyframesBy: (clipId: number, indices: number[], dAf: number, dGain: number) => void;
+
+  /** Pen-tool: set the interpolation of a set of keyframes at once. */
+  setLevelKeyframesInterp: (clipId: number, indices: number[], interp: LevelInterp) => void;
+
   /** Pen-tool: set keyframe `index`'s interpolation. A named preset
    *  seeds this node's outgoing tangent + the next node's incoming
    *  tangent; 'hold' / 'custom' leave the tangents as-is. */
@@ -604,6 +616,30 @@ export interface State {
   setLevelKeyframeTangent: (
     clipId: number, index: number, side: 'in' | 'out', tan: LevelTangent,
   ) => void;
+
+  /** Pen-tool: the current level-keyframe selection — a clip id and a
+   *  set of keyframe indices into that clip's levelKeyframes. Lives in
+   *  the store so the Delete key and the context menu can act on it.
+   *  Null = nothing selected. */
+  levelKfSelection: { clipId: number; indices: number[] } | null;
+  setLevelKfSelection: (sel: { clipId: number; indices: number[] } | null) => void;
+
+  /** True while a node / handle drag is in flight inside LevelCurve.
+   *  useToolCursor holds the pen cursor for the whole drag so it
+   *  doesn't blink off as the pointer crosses overlay boundaries. */
+  levelCurveDragging: boolean;
+  setLevelCurveDragging: (on: boolean) => void;
+
+  /** Alt key held globally. Lets the pen tool be used with any
+   *  active tool (modifier-as-tool). Set by an App-level listener. */
+  altHeld: boolean;
+  setAltHeld: (on: boolean) => void;
+
+  /** True while an Alt+RMB zoom gesture is in flight. useToolCursor
+   *  must NOT show the pen cursor during this — Alt is the zoom
+   *  modifier here, not a pen modifier. */
+  altRmbZooming: boolean;
+  setAltRmbZooming: (on: boolean) => void;
 
   /** Copy the given clips' data into the timeline-local clipboard.
    *  Existing clipboard contents are replaced. */
@@ -1107,6 +1143,10 @@ export const useStore = create<State>((set) => ({
   razorHoverClipBand: null,
   clipboard: [],
   contextMenu: null,
+  levelKfSelection: null,
+  levelCurveDragging: false,
+  altHeld: false,
+  altRmbZooming: false,
 
   setTick: (frame, fps, playing) => set((s) => ({
     currentFrame: frame,
@@ -1675,6 +1715,65 @@ export const useStore = create<State>((set) => ({
     return next ? { audioTracks: next } : s;
   }),
 
+  removeLevelKeyframes: (clipId, indices) => set((s) => {
+    const drop = new Set(indices);
+    const next = patchAudioClip(s.audioTracks, clipId, (c) => {
+      const kfs = c.levelKeyframes;
+      if (!kfs) return c;
+      return { ...c, levelKeyframes: kfs.filter((_, i) => !drop.has(i)) };
+    });
+    return next ? { audioTracks: next } : s;
+  }),
+
+  moveLevelKeyframesBy: (clipId, indices, dAf, dGain) => set((s) => {
+    const sel = new Set(indices);
+    const next = patchAudioClip(s.audioTracks, clipId, (c) => {
+      const kfs = c.levelKeyframes;
+      if (!kfs || sel.size === 0) return c;
+      const mediaDur = c.mediaDurationFrames ?? (c.outFrame - c.inFrame);
+      // Clamp the af delta so no SELECTED node crosses an UN-selected
+      // neighbour or leaves [0, mediaDur]. Walk every selected node
+      // and tighten the delta to the most restrictive bound.
+      let dA = Math.round(dAf);
+      for (let i = 0; i < kfs.length; i++) {
+        if (!sel.has(i)) continue;
+        const prevFree = i > 0 && !sel.has(i - 1) ? kfs[i - 1].af + 1 : 0;
+        const nextFree = i < kfs.length - 1 && !sel.has(i + 1)
+          ? kfs[i + 1].af - 1 : mediaDur;
+        dA = Math.max(prevFree - kfs[i].af, Math.min(nextFree - kfs[i].af, dA));
+      }
+      const out = kfs.map((k, i) => sel.has(i)
+        ? {
+            ...k,
+            af: k.af + dA,
+            gain: Math.max(0, Math.min(1, k.gain + dGain)),
+          }
+        : k);
+      return { ...c, levelKeyframes: out };
+    });
+    return next ? { audioTracks: next } : s;
+  }),
+
+  setLevelKeyframesInterp: (clipId, indices, interp) => set((s) => {
+    const sel = new Set(indices);
+    const preset = LEVEL_PRESET_TANGENTS[interp];
+    const next = patchAudioClip(s.audioTracks, clipId, (c) => {
+      const kfs = c.levelKeyframes;
+      if (!kfs) return c;
+      const out = kfs.map((k, i) => {
+        if (sel.has(i)) {
+          return { ...k, interp, outTan: preset ? { ...preset.out } : k.outTan };
+        }
+        if (preset && sel.has(i - 1)) {
+          return { ...k, inTan: { ...preset.nextIn } };
+        }
+        return k;
+      });
+      return { ...c, levelKeyframes: out };
+    });
+    return next ? { audioTracks: next } : s;
+  }),
+
   setLevelKeyframeInterp: (clipId, index, interp) => set((s) => {
     const next = patchAudioClip(s.audioTracks, clipId, (c) => {
       const kfs = c.levelKeyframes;
@@ -1881,6 +1980,10 @@ export const useStore = create<State>((set) => ({
   },
 
   setContextMenu: (menu) => set({ contextMenu: menu }),
+  setLevelKfSelection: (sel) => set({ levelKfSelection: sel }),
+  setLevelCurveDragging: (on) => set({ levelCurveDragging: on }),
+  setAltHeld: (on) => set({ altHeld: on }),
+  setAltRmbZooming: (on) => set({ altRmbZooming: on }),
 
   deleteTrack: (trackId) => {
     const side = trackId.startsWith('V') ? 'video' : trackId.startsWith('A') ? 'audio' : null;

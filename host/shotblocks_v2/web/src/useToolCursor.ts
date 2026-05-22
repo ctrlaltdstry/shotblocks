@@ -75,8 +75,18 @@ export function useToolCursor(): void {
         // Razor cuts any clip — video or audio.
         return pointerOverRect(x, y, '.shot-block') ? 'razor' : 'default';
       }
-      if (s.activeTool === 'pen') {
-        // Pen draws volume automation on audio clips only.
+      // Pen-tool cursor. Active when:
+      //   - the Pen tool is selected, OR
+      //   - Alt is held (modifier-as-tool, modelled on Premiere /
+      //     Audition) — BUT not while an Alt+RMB zoom is in flight,
+      //     because Alt is the zoom modifier there, not a pen invite.
+      // Sticky during a LevelCurve drag — once a node/handle drag
+      // starts the cursor stays pen until release even if the pointer
+      // strays off the clip (so a fast drag never blinks back to
+      // default). Matches Premiere's behaviour for tool drags.
+      const penMode = (s.activeTool === 'pen' || s.altHeld) && !s.altRmbZooming;
+      if (penMode) {
+        if (s.levelCurveDragging) return 'pen';
         return pointerOverRect(x, y, '.shot-block.is-audio') ? 'pen' : 'default';
       }
       // Select tool: no custom cursor. The OS default arrow handles
@@ -114,7 +124,10 @@ export function useToolCursor(): void {
       if (s.activeTool !== prev.activeTool
         || s.slipDragging !== prev.slipDragging
         || s.rollEditActive !== prev.rollEditActive
-        || s.rangeHandleDragging !== prev.rangeHandleDragging) {
+        || s.rangeHandleDragging !== prev.rangeHandleDragging
+        || s.altHeld !== prev.altHeld
+        || s.altRmbZooming !== prev.altRmbZooming
+        || s.levelCurveDragging !== prev.levelCurveDragging) {
         reevaluate();
       }
     });

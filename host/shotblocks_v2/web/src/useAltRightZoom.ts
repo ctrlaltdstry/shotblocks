@@ -155,7 +155,9 @@ export function useAltRightZoom() {
         window.removeEventListener('pointermove', onMove);
         window.removeEventListener('pointerup', onUp);
         window.removeEventListener('pointercancel', onUp);
+        useStore.getState().setAltRmbZooming(false);
       }
+      useStore.getState().setAltRmbZooming(true);
       window.addEventListener('pointermove', onMove);
       window.addEventListener('pointerup', onUp);
       window.addEventListener('pointercancel', onUp);

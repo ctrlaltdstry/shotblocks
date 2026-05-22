@@ -75,24 +75,33 @@ export function ContextMenu() {
 
   let items: Item[];
   if (onLevelKf) {
-    // Pen-tool volume keyframe menu — delete the node, or set the
-    // interpolation of the segment leaving it.
+    // Pen-tool volume keyframe menu — acts on the level-keyframe
+    // SELECTION (the right-clicked node was folded into it before the
+    // menu opened). Delete removes all selected; an interp mode
+    // applies to all selected.
     const { clipId, index } = menu.targetLevelKf!;
+    const lkSel = state.levelKfSelection;
+    const indices = lkSel && lkSel.clipId === clipId && lkSel.indices.length
+      ? lkSel.indices : [index];
     const clip = [...state.videoTracks, ...state.audioTracks]
       .flatMap((t) => t.clips).find((c) => c.id === clipId);
     const node = clip?.levelKeyframes?.[index];
     const cur = node?.interp ?? 'linear';
+    const multi = indices.length > 1;
     const interpItem = (label: string, mode: LevelInterp): Item => ({
       kind: 'item',
       label,
-      checked: cur === mode,
-      onPick: () => run(() => state.setLevelKeyframeInterp(clipId, index, mode)),
+      checked: !multi && cur === mode,
+      onPick: () => run(() => state.setLevelKeyframesInterp(clipId, indices, mode)),
     });
     items = [
       {
         kind: 'item',
-        label: 'Delete Keyframe',
-        onPick: () => run(() => state.removeLevelKeyframe(clipId, index)),
+        label: multi ? `Delete ${indices.length} Keyframes` : 'Delete Keyframe',
+        onPick: () => run(() => {
+          state.removeLevelKeyframes(clipId, indices);
+          state.setLevelKfSelection(null);
+        }),
       },
       { kind: 'separator' },
       interpItem('Linear', 'linear'),
@@ -101,10 +110,7 @@ export function ContextMenu() {
       interpItem('Ease Out', 'ease-out'),
       interpItem('Ease In-Out', 'ease-in-out'),
     ];
-    // Show a 'Custom' entry only once the handles have been dragged —
-    // it's a state indicator, not a picker (you get custom by
-    // dragging a bezier handle). Picking it is a no-op.
-    if (cur === 'custom') {
+    if (!multi && cur === 'custom') {
       items.push({ kind: 'item', label: 'Custom', checked: true, onPick: close });
     }
   } else if (onTrackHeader) {

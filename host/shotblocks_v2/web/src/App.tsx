@@ -668,6 +668,29 @@ function usePageZoomSuppress() {
   }, []);
 }
 
+/** Mirror the Alt key into the store so LevelCurve / useToolCursor
+ *  can treat Alt as a pen-tool modifier without each owning its own
+ *  listener (which would also miss keys delivered to elements that
+ *  prevent bubbling). `blur` clears the flag so Alt-tabbing out
+ *  doesn't leave the app stuck in alt-down. */
+function useAltKey() {
+  useEffect(() => {
+    const setAlt = useStore.getState().setAltHeld;
+    const down = (e: KeyboardEvent) => { if (e.key === 'Alt') setAlt(true); };
+    const up = (e: KeyboardEvent) => { if (e.key === 'Alt') setAlt(false); };
+    const blur = () => setAlt(false);
+    window.addEventListener('keydown', down);
+    window.addEventListener('keyup', up);
+    window.addEventListener('blur', blur);
+    return () => {
+      window.removeEventListener('keydown', down);
+      window.removeEventListener('keyup', up);
+      window.removeEventListener('blur', blur);
+      setAlt(false);
+    };
+  }, []);
+}
+
 /** Mouse-wheel vertical pan over the lanes. Wheel over the video stack
  *  pans the vVideo window; over the audio stack pans vAudio. Pan only —
  *  no zoom (that's Alt+RMB). Each notch moves ~one third of a track
@@ -721,6 +744,7 @@ function App() {
   useMmbPan();
   useWheelScroll();
   useToolCursor();
+  useAltKey();
   const lanesAreaRef = useRef<HTMLDivElement | null>(null);
   useMarquee(lanesAreaRef);
   const headersStackRef = useRef<HTMLDivElement | null>(null);
