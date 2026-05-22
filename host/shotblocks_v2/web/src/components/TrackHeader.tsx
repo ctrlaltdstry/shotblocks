@@ -1,9 +1,13 @@
 import type { CSSProperties, MouseEvent } from 'react';
 import { useStore, type Track } from '../store';
 
-/** Track header rendered inside the headers column — lock, chip,
- *  eye/MS row, label. (The motion-layer twirl lives on the clip, not
- *  here — a track can hold clips from different cameras.)
+/** Track header rendered inside the headers column. Layout matches the
+ *  Figma track-header components (nodes 120:431 video / 120:697 audio):
+ *  a 65px row with a lock icon, a per-side control (eye for video,
+ *  M/S for audio), and the track-name label.
+ *
+ *  Controls are not yet wired — this is the visual structure only.
+ *  (The motion-layer twirl lives on the clip, not here.)
  *
  *  Right-click opens the track-header context menu (Delete Track).
  *  V1 / A1 base tracks always exist; their Delete Track item is
@@ -28,25 +32,28 @@ export function TrackHeader({ track, side }: { track: Track; side: 'video' | 'au
       data-track={trackId}
       onContextMenu={onContextMenu}
     >
-      <div className="track-header__lock-wrap">
-        <span className={'icon ' + (isVideo ? 'icon--lock' : 'icon--lock-locked')} style={{ '--icon-w': '12px', '--icon-h': '12px' } as CSSProperties} />
-      </div>
-      <div className="track-header__chip-wrap">
-        <div className="track-header__chip">{(isVideo ? 'V' : 'A') + track.id}</div>
-      </div>
-      <div className="track-header__right">
-        <div className="track-header__right-col">
-          {isVideo ? (
-            <span className="icon icon--eye" style={{
-              '--icon-w': '18px', '--icon-h': '18px',
-              backgroundColor: 'var(--color-timeline-primary-highlight)',
-            } as CSSProperties} />
-          ) : (
-            <div className="track-header__icons-row"><span>M</span><span className="s">S</span></div>
-          )}
-          <div className="track-header__label-wrap">
-            <div className="track-header__label">{track.name}</div>
+      <div className="track-header__row">
+        <div className="track-header__lock">
+          <span
+            className="icon icon--lock"
+            style={{ '--icon-w': '12px', '--icon-h': '13.2px' } as CSSProperties}
+          />
+        </div>
+        {isVideo ? (
+          <div className="track-header__eye">
+            <span
+              className="icon icon--eye"
+              style={{ '--icon-w': '18px', '--icon-h': '12.94px' } as CSSProperties}
+            />
           </div>
+        ) : (
+          <div className="track-header__ms">
+            <span className="track-header__ms-m">M</span>
+            <span className="track-header__ms-s">S</span>
+          </div>
+        )}
+        <div className="track-header__label-wrap">
+          <div className="track-header__label">{track.name}</div>
         </div>
       </div>
     </div>

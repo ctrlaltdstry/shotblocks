@@ -457,8 +457,7 @@
 .stack__divider {
   flex: 0 0 var(--va-divider-h);
   background: var(--color-grey-7);
-  box-sizing: content-box;
-  border-bottom: 1px solid var(--color-grey-16);
+  box-sizing: border-box;
   pointer-events: none;
 }
 
@@ -478,71 +477,63 @@
   min-height: 0;
   overflow: hidden;
   background: var(--color-grey-12);
-  border-bottom: 1px solid var(--color-grey-16);
-  display: flex; align-items: center; justify-content: space-between;
+  /* 2px gap between tracks — drawn as a bottom border in the column
+     background (grey-10) so it reads as a gap without adding a flex
+     row and breaking the 1:1 header/lane alignment. box-sizing keeps
+     the row at --track-h. Matches the Figma layout's 2px track gap. */
+  box-sizing: border-box;
+  border-bottom: 2px solid var(--color-grey-10);
+  display: flex; align-items: center; justify-content: center;
   padding: 0 8px;
   position: relative;
-}
-.stack__videos .track-header:first-child {
-  border-top: 1px solid var(--color-grey-16);
 }
 .track-header.is-video,
 .stack__videos .lane { flex-basis: var(--video-track-h); }
 .track-header.is-audio,
 .stack__audios .lane { flex-basis: var(--audio-track-h); }
 
-.track-header__lock-wrap {
-  flex: 0 0 auto;
-  display: flex; align-items: center;
+/* Track-header inner layout — matches Figma nodes 120:431 / 120:697.
+   A space-between row: lock | (eye | M/S) | label. The row fills the
+   header so the three items spread evenly regardless of the headers-
+   column width (Figma's 184px is the value at its 200px artboard). */
+.track-header__row {
+  flex: 1 0 0; min-width: 0;
+  display: flex; align-items: center; justify-content: space-between;
 }
-.track-header__chip-wrap {
+
+.track-header__lock {
   flex: 0 0 auto;
-  align-self: stretch;
-  display: flex; align-items: center;
-  padding: 0 10px;
-}
-.track-header__chip {
-  width: 30px;
-  align-self: stretch;
-  border-radius: 4px;
-  color: #fff;
-  font-family: Inter, sans-serif;
-  font-size: 11px; font-weight: 600;
+  width: 19px; height: 20px;
   display: flex; align-items: center; justify-content: center;
 }
-.track-header.is-video .track-header__chip { background: var(--color-timeline-primary-highlight); }
-.track-header.is-audio .track-header__chip { background: var(--color-grey-24); }
-.track-header__right {
+.track-header__eye {
   flex: 0 0 auto;
-  display: flex; align-items: center; justify-content: flex-end;
-  padding: 0 24px 0 6px;
+  width: 30px; height: 30px;
+  display: flex; align-items: center; justify-content: center;
 }
-.track-header__right-col {
-  width: 28px;
-  display: flex; flex-direction: column;
-  align-items: center; justify-content: center;
-  gap: 6px;
-}
-.track-header.is-audio .track-header__right-col { padding: 3px 0; }
-
-.track-header__icons-row {
+.track-header__ms {
+  flex: 0 0 auto;
+  width: 32px;
   display: flex; align-items: center; justify-content: space-between;
-  width: 30px;
-  color: var(--color-grey-50);
   font-family: Inter, sans-serif;
-  font-size: 10px; font-weight: 700;
+  font-size: 12px; font-weight: 700;
+  user-select: none;
 }
-.track-header__icons-row .s { color: var(--color-timeline-primary-highlight); }
+.track-header__ms-m,
+.track-header__ms-s {
+  color: var(--color-grey-50);
+}
 .track-header__label-wrap {
   flex: 0 0 auto;
-  width: 53px;
-  display: flex; align-items: center; justify-content: center;
+  display: flex; align-items: center; justify-content: flex-end;
+  padding-right: 10px;
 }
 .track-header__label {
   font-family: Inter, sans-serif;
-  font-size: 10px; font-weight: 400;
+  font-size: 12px; font-weight: 400;
   color: var(--color-grey-50);
-  line-height: 1; white-space: nowrap;
+  line-height: normal; white-space: nowrap;
+  text-align: right;
 }
 
 /* row 2 col 3 — stage (lanes) */
