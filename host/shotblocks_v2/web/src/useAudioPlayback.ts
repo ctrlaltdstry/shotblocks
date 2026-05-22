@@ -1,7 +1,15 @@
 import { useEffect, useRef } from 'react';
-import { useStore, type Clip } from './store';
+import { useStore, type Clip, type Track } from './store';
 import { onMessage } from './lib/host';
 import { getAudioBuffer } from './lib/audioStore';
+
+/** Whether an audio track is currently audible. A muted track is
+ *  silent; if ANY track is soloed, only soloed tracks are audible
+ *  (the standard mixer mute/solo rule). */
+function isAudible(track: Track, anySolo: boolean): boolean {
+  if (track.muted) return false;
+  return !anySolo || track.solo;
+}
 
 /** Per-scrub blip length in seconds. Standard NLE convention: each
  *  scrub event plays a short slice of audio at the cursor position.
@@ -134,7 +142,9 @@ export function useAudioPlayback(): void {
     }
     const fpsInv = 1 / fps;
     const s = useStore.getState();
+    const anySolo = s.audioTracks.some((t) => t.solo);
     for (const t of s.audioTracks) {
+      if (!isAudible(t, anySolo)) continue;
       for (const clip of t.clips) {
         if (frame < clip.inFrame || frame >= clip.outFrame) continue;
         const mediaId = clip.mediaId ?? clip.id;
@@ -189,11 +199,16 @@ export function useAudioPlayback(): void {
     anchorCtxTimeRef.current = startCtxTime;
     anchorFrameRef.current = frame;
 
-    // Snapshot all audio clips at this instant. We schedule everything
-    // up front rather than per-tick; the audio clock takes over.
+    // Snapshot the clips of every AUDIBLE audio track at this instant.
+    // Muted / solo'd-out tracks contribute nothing. We schedule
+    // everything up front rather than per-tick; the audio clock takes
+    // over.
     const s = useStore.getState();
+    const anySolo = s.audioTracks.some((t) => t.solo);
     const audioClips: Clip[] = [];
-    for (const t of s.audioTracks) audioClips.push(...t.clips);
+    for (const t of s.audioTracks) {
+      if (isAudible(t, anySolo)) audioClips.push(...t.clips);
+    }
 
     for (const clip of audioClips) {
       // Skip clips that end before the play start (no future audio).

@@ -34,6 +34,14 @@ export function TrackHeader({ track, side }: { track: Track; side: 'video' | 'au
     ev.stopPropagation();
     useStore.getState().setTrackFlag(trackId, 'visible', !track.visible);
   }
+  function toggleMute(ev: MouseEvent) {
+    ev.stopPropagation();
+    useStore.getState().setTrackFlag(trackId, 'muted', !track.muted);
+  }
+  function toggleSolo(ev: MouseEvent) {
+    ev.stopPropagation();
+    useStore.getState().setTrackFlag(trackId, 'solo', !track.solo);
+  }
   return (
     <div
       className={'track-header ' + (isVideo ? 'is-video' : 'is-audio')
@@ -80,8 +88,28 @@ export function TrackHeader({ track, side }: { track: Track; side: 'video' | 'au
           </button>
         ) : (
           <div className="track-header__ms">
-            <span className="track-header__ms-m">M</span>
-            <span className="track-header__ms-s">S</span>
+            <button
+              type="button"
+              className={'track-header__ms-m track-header__btn'
+                + (track.muted ? ' is-on' : '')}
+              title={track.muted ? 'Unmute track' : 'Mute track'}
+              aria-pressed={track.muted}
+              onClick={toggleMute}
+              onMouseDown={(e) => e.preventDefault()}
+            >
+              M
+            </button>
+            <button
+              type="button"
+              className={'track-header__ms-s track-header__btn'
+                + (track.solo ? ' is-on' : '')}
+              title={track.solo ? 'Unsolo track' : 'Solo track'}
+              aria-pressed={track.solo}
+              onClick={toggleSolo}
+              onMouseDown={(e) => e.preventDefault()}
+            >
+              S
+            </button>
           </div>
         )}
         <div className="track-header__label-wrap">

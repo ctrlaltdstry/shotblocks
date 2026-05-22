@@ -557,7 +557,16 @@
 .track-header__ms-m,
 .track-header__ms-s {
   color: var(--color-grey-50);
+  font: inherit;
+  line-height: 1;
 }
+.track-header__ms-m:hover,
+.track-header__ms-s:hover { color: var(--color-grey-white); }
+/* Muted = amber, soloed = primary-highlight blue. */
+.track-header__ms-m.is-on,
+.track-header__ms-m.is-on:hover { color: #EDA840; }
+.track-header__ms-s.is-on,
+.track-header__ms-s.is-on:hover { color: var(--color-timeline-primary-highlight); }
 .track-header__label-wrap {
   flex: 0 0 auto;
   display: flex; align-items: center; justify-content: flex-end;
@@ -796,16 +805,31 @@
   position: relative;
   overflow: visible;
 }
-/* Locked-track overlay — a transparent-black wash across the whole
-   lane so a locked track reads as "held" at a glance. Sits above the
-   clips; pointer-events:none since the gesture handlers already
-   reject edits on a locked track. */
-.lane__locked-overlay {
+/* Disabled-track overlays — wash a lane to mark it inactive. Both
+   sit above the clips; pointer-events:none (gesture handlers already
+   enforce the actual behaviour).
+     - locked:   a diagonal zebra-stripe hatch over a dark wash —
+                 a track whose clips can't be edited.
+     - silenced: a plain dark wash — a muted audio lane, or (when any
+                 track is soloed) a non-soloed audio lane; inaudible
+                 but still editable. */
+.lane__locked-overlay,
+.lane__silenced-overlay {
   position: absolute;
   inset: 0;
-  background: rgba(0, 0, 0, 0.45);
   pointer-events: none;
   z-index: 5;
+}
+.lane__locked-overlay {
+  background:
+    repeating-linear-gradient(
+      -45deg,
+      rgba(255, 255, 255, 0.055) 0,   rgba(255, 255, 255, 0.055) 1.5px,
+      rgba(255, 255, 255, 0)     1.5px, rgba(255, 255, 255, 0)     8px),
+    rgba(0, 0, 0, 0.45);
+}
+.lane__silenced-overlay {
+  background: rgba(0, 0, 0, 0.3);
 }
 /* (Lanes are now permanently overflow:visible — see `.lane` above —
    so the old `body.is-clip-dragging .lane { overflow: visible }` rule

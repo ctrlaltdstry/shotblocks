@@ -59,7 +59,11 @@ export function Meter() {
       const s = useStore.getState();
       const frame = s.scrubFrame ?? s.currentFrame;
       const fps = s.fps || 30;
+      const anySolo = s.audioTracks.some((t) => t.solo);
       for (const t of s.audioTracks) {
+        // A muted / solo'd-out track reads silent on the meter, just
+        // as it is silent in playback.
+        if (t.muted || (anySolo && !t.solo)) continue;
         for (const clip of t.clips) {
           if (frame < clip.inFrame || frame >= clip.outFrame) continue;
           const mediaId = clip.mediaId ?? clip.id;
