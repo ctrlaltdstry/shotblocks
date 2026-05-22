@@ -1,8 +1,10 @@
 import { useEffect, useState, type RefObject } from 'react';
 
 /** Subscribes to ResizeObserver for the given ref. Returns the current
- *  contentRect width/height (0/0 until first observation). */
-export function useElementSize(ref: RefObject<HTMLElement | null>): { width: number; height: number } {
+ *  contentRect width/height (0/0 until first observation). Accepts any
+ *  Element (HTML or SVG) — both expose getBoundingClientRect and are
+ *  ResizeObserver-observable. */
+export function useElementSize(ref: RefObject<Element | null>): { width: number; height: number } {
   const [size, setSize] = useState({ width: 0, height: 0 });
   useEffect(() => {
     const el = ref.current;

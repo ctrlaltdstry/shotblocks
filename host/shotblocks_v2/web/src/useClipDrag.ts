@@ -517,6 +517,12 @@ export function useClipDrag(
       // never even enters a drag preview that would snap back.
       if (isTrackLocked(trackId)) return;
 
+      // Pen tool on an audio clip: the LevelCurve overlay owns the
+      // gesture (add / drag volume keyframes). The overlay's React
+      // stopPropagation can't stop this NATIVE listener, so the clip
+      // would otherwise start a body-drag underneath the curve edit.
+      if (side === 'audio' && useStore.getState().activeTool === 'pen') return;
+
       // Razor tool: click splits the clip at the cursor frame instead
       // of starting a drag. Map cursor X → frame via the lane's
       // pxPerFrame, then call splitClip. Validation (frame inside

@@ -96,7 +96,45 @@ export interface Clip {
    *  re-decoded. Set once on import; carried verbatim to both halves
    *  of every split via the object spread. Undefined on video. */
   mediaId?: number;
+  /** Pen-tool volume automation — a sorted list of level keyframes
+   *  (audio clips only). Undefined / empty = no automation (unity
+   *  everywhere). See LevelKeyframe. */
+  levelKeyframes?: LevelKeyframe[];
 }
+
+/** A level-keyframe's segment interpolation. The named modes are
+ *  presets; 'custom' means the node's `ease` handles were dragged
+ *  freely. 'hold' is a step (evaluator special-case), not a bezier. */
+export type LevelInterp =
+  | 'linear' | 'hold' | 'ease-in' | 'ease-out' | 'ease-in-out' | 'custom';
+
+/** One pen-tool volume keyframe (Clip.levelKeyframes).
+ *
+ *  `af` — MEDIA-space doc-frame (frames into the source media, same
+ *  units as mediaOffsetFrames / mediaDurationFrames). Media-space so
+ *  trim / slip / split don't invalidate the curve — they just reveal
+ *  a different window onto it.
+ *  `gain` — 0..1 linear multiplier, 1 = unity.
+ *  `interp` — the segment shape FROM this node to the next.
+ *  `ease` — cubic-bezier control points [x1,y1,x2,y2] in 0..1, the
+ *  CSS-easing model. For a named preset this mirrors the preset
+ *  value; for 'custom' it is whatever the user dragged. Ignored when
+ *  `interp` is 'hold'. */
+export interface LevelKeyframe {
+  af: number;
+  gain: number;
+  interp: LevelInterp;
+  ease: [number, number, number, number];
+}
+
+/** Cubic-bezier control points for each named ease preset. 'hold'
+ *  has no curve (the evaluator steps); 'custom' is per-node. */
+export const LEVEL_EASE_PRESETS: Record<string, [number, number, number, number]> = {
+  linear:        [0, 0, 1, 1],
+  'ease-in':     [0.42, 0, 1, 1],
+  'ease-out':    [0, 0, 0.58, 1],
+  'ease-in-out': [0.42, 0, 0.58, 1],
+};
 
 /** One clip captured to the timeline-local clipboard. Snapshots the
  *  clip data plus the track it lived on so paste can prefer the same
@@ -511,6 +549,34 @@ export interface State {
    *  (sourceName, sourceType, objectId, state, locked) are carried
    *  to both halves. */
   splitClip: (clipId: number, trackId: string, frame: number) => number | null;
+
+  /** Pen-tool: add a level keyframe to an audio clip at media-frame
+   *  `af` with `gain` (0..1). A click within MERGE_AF of an existing
+   *  node updates that node instead of adding a duplicate. The list
+   *  is kept sorted by `af`. New nodes default to a linear segment.
+   *  Returns the index of the added/updated node, or null on failure
+   *  (clip not found, not an audio clip). */
+  addLevelKeyframe: (clipId: number, af: number, gain: number) => number | null;
+
+  /** Pen-tool: move keyframe `index` of an audio clip to a new
+   *  media-frame `af` and `gain`. `af` is clamped strictly between
+   *  the neighbouring nodes so nodes can't cross; `gain` clamps to
+   *  0..1. Re-sorts if needed (it won't, given the clamp). */
+  moveLevelKeyframe: (clipId: number, index: number, af: number, gain: number) => void;
+
+  /** Pen-tool: delete keyframe `index` of an audio clip. */
+  removeLevelKeyframe: (clipId: number, index: number) => void;
+
+  /** Pen-tool: set keyframe `index`'s outgoing interpolation. A named
+   *  preset also overwrites `ease` with the preset's control points;
+   *  'custom' / 'hold' leave `ease` as-is. */
+  setLevelKeyframeInterp: (clipId: number, index: number, interp: LevelInterp) => void;
+
+  /** Pen-tool: set keyframe `index`'s custom cubic-bezier handles
+   *  (interp becomes 'custom'). Each control value clamps to 0..1. */
+  setLevelKeyframeEase: (
+    clipId: number, index: number, ease: [number, number, number, number],
+  ) => void;
 
   /** Copy the given clips' data into the timeline-local clipboard.
    *  Existing clipboard contents are replaced. */
@@ -949,6 +1015,28 @@ export function replaceOverlap(existing: Clip[], target: { inFrame: number; outF
     }
   }
   return out;
+}
+
+/** Pen-tool: a click within this many media audio-frames of an
+ *  existing level keyframe moves that node instead of adding a
+ *  duplicate. Mirrors Python's MERGE_AF_TOL. */
+export const LEVEL_MERGE_AF = 8;
+
+/** Apply `fn` to the audio clip with id `clipId` wherever it lives.
+ *  Returns a fresh audioTracks array, or null if the clip wasn't
+ *  found — callers fall back to the unchanged state. */
+function patchAudioClip(
+  audioTracks: Track[],
+  clipId: number,
+  fn: (clip: Clip) => Clip,
+): Track[] | null {
+  let found = false;
+  const next = audioTracks.map((t) => {
+    if (!t.clips.some((c) => c.id === clipId)) return t;
+    found = true;
+    return { ...t, clips: t.clips.map((c) => (c.id === clipId ? fn(c) : c)) };
+  });
+  return found ? next : null;
 }
 
 export const useStore = create<State>((set) => ({
@@ -1501,6 +1589,93 @@ export const useStore = create<State>((set) => ({
     });
     return newRightId;
   },
+
+  addLevelKeyframe: (clipId, af, gain) => {
+    let idx: number | null = null;
+    set((s) => {
+      const next = patchAudioClip(s.audioTracks, clipId, (c) => {
+        const kfs = [...(c.levelKeyframes ?? [])];
+        const a = Math.round(af);
+        const g = Math.max(0, Math.min(1, gain));
+        // A click within MERGE_AF of an existing node moves that node
+        // rather than adding a duplicate (Python's MERGE_AF_TOL = 8).
+        const hit = kfs.findIndex((k) => Math.abs(k.af - a) <= LEVEL_MERGE_AF);
+        if (hit >= 0) {
+          kfs[hit] = { ...kfs[hit], af: a, gain: g };
+          kfs.sort((p, q) => p.af - q.af);
+          idx = kfs.findIndex((k) => k.af === a && k.gain === g);
+          return { ...c, levelKeyframes: kfs };
+        }
+        const node: LevelKeyframe = {
+          af: a, gain: g, interp: 'linear',
+          ease: [...LEVEL_EASE_PRESETS.linear] as [number, number, number, number],
+        };
+        kfs.push(node);
+        kfs.sort((p, q) => p.af - q.af);
+        idx = kfs.indexOf(node);
+        return { ...c, levelKeyframes: kfs };
+      });
+      return next ? { audioTracks: next } : s;
+    });
+    return idx;
+  },
+
+  moveLevelKeyframe: (clipId, index, af, gain) => set((s) => {
+    const next = patchAudioClip(s.audioTracks, clipId, (c) => {
+      const kfs = c.levelKeyframes;
+      if (!kfs || index < 0 || index >= kfs.length) return c;
+      // Clamp af strictly between the neighbours so nodes can't cross.
+      const lo = index > 0 ? kfs[index - 1].af + 1 : -Infinity;
+      const hi = index < kfs.length - 1 ? kfs[index + 1].af - 1 : Infinity;
+      const a = Math.max(lo, Math.min(hi, Math.round(af)));
+      const g = Math.max(0, Math.min(1, gain));
+      const out = kfs.map((k, i) => i === index ? { ...k, af: a, gain: g } : k);
+      return { ...c, levelKeyframes: out };
+    });
+    return next ? { audioTracks: next } : s;
+  }),
+
+  removeLevelKeyframe: (clipId, index) => set((s) => {
+    const next = patchAudioClip(s.audioTracks, clipId, (c) => {
+      const kfs = c.levelKeyframes;
+      if (!kfs || index < 0 || index >= kfs.length) return c;
+      return { ...c, levelKeyframes: kfs.filter((_, i) => i !== index) };
+    });
+    return next ? { audioTracks: next } : s;
+  }),
+
+  setLevelKeyframeInterp: (clipId, index, interp) => set((s) => {
+    const next = patchAudioClip(s.audioTracks, clipId, (c) => {
+      const kfs = c.levelKeyframes;
+      if (!kfs || index < 0 || index >= kfs.length) return c;
+      const preset = LEVEL_EASE_PRESETS[interp];
+      const out = kfs.map((k, i) => i === index
+        ? {
+            ...k,
+            interp,
+            // A named preset overwrites the handles; custom/hold keep
+            // whatever ease the node already had.
+            ease: preset ? ([...preset] as [number, number, number, number]) : k.ease,
+          }
+        : k);
+      return { ...c, levelKeyframes: out };
+    });
+    return next ? { audioTracks: next } : s;
+  }),
+
+  setLevelKeyframeEase: (clipId, index, ease) => set((s) => {
+    const next = patchAudioClip(s.audioTracks, clipId, (c) => {
+      const kfs = c.levelKeyframes;
+      if (!kfs || index < 0 || index >= kfs.length) return c;
+      const clamped = ease.map((v) => Math.max(0, Math.min(1, v))) as
+        [number, number, number, number];
+      const out = kfs.map((k, i) => i === index
+        ? { ...k, interp: 'custom' as const, ease: clamped }
+        : k);
+      return { ...c, levelKeyframes: out };
+    });
+    return next ? { audioTracks: next } : s;
+  }),
 
   setRazorHoverX: (x, clipBand = null) => set((s) => {
     const bandSame =

@@ -2,6 +2,12 @@ import { useEffect, useRef } from 'react';
 import { pickLevel } from '../lib/peaks';
 import { useStore, type Clip } from '../store';
 import { registerWaveformRedraw, getSlipPreviewOffset } from '../lib/slipPreview';
+import { evaluateLevel } from '../lib/levelCurve';
+
+/** Minimum gain the waveform is DRAWN at — a fully-ducked region
+ *  keeps a thin visible sliver instead of vanishing. Affects only the
+ *  render; the level curve / playback gain is still a true 0..1. */
+const WAVE_MIN_GAIN = 0.08;
 
 /** Renders an audio clip's waveform as a filled min/max envelope.
  *
@@ -48,7 +54,7 @@ export function WaveformCanvas({ clip }: { clip: Clip }) {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [clip.peakLevels, hMin, hMax, clip.inFrame, clip.outFrame,
       clip.mediaOffsetFrames, clip.mediaDurationFrames,
-      clip.audioPeaks, clip.audioBeatGrid, fps]);
+      clip.audioPeaks, clip.audioBeatGrid, clip.levelKeyframes, fps]);
 
   useEffect(() => {
     const canvas = canvasRef.current;
@@ -250,6 +256,11 @@ export function WaveformCanvas({ clip }: { clip: Clip }) {
     const tys = new Float32Array(n);
     const bys = new Float32Array(n);
     const backingPxPerCssPx = w / visibleCssW;
+    // Pen-tool volume automation: the rendered waveform amplitude is
+    // scaled by the level curve's gain at each bucket's media frame,
+    // so a ducked region visibly narrows. Peak data is untouched —
+    // this is a live render-time multiply.
+    const levelKfs = clip.levelKeyframes;
     for (let i = 0; i < n; i++) {
       const b = firstBucket + i;
       // bucket center in MEDIA-space CSS-x
@@ -261,8 +272,15 @@ export function WaveformCanvas({ clip }: { clip: Clip }) {
       xs[i] = (cssCxClip - visibleLeftCssPx) * backingPxPerCssPx;
       const lo = peaks[b * 2];
       const hi = peaks[b * 2 + 1];
-      tys[i] = mid - ampToY(hi);
-      bys[i] = mid + ampToY(lo);
+      // bucket center in MEDIA-space doc-frames → curve gain. The
+      // DRAW gain is floored at WAVE_MIN_GAIN so a fully-ducked
+      // region still shows a thin sliver of waveform (the level
+      // curve / playback gain itself stays a true 0..1).
+      const gain = levelKfs && levelKfs.length
+        ? Math.max(WAVE_MIN_GAIN, evaluateLevel(levelKfs, cssCxMedia / cssPxPerFrame))
+        : 1;
+      tys[i] = mid - ampToY(hi) * gain;
+      bys[i] = mid + ampToY(lo) * gain;
     }
 
     // Trace as one filled polygon. Top edge: quadratic Bézier through

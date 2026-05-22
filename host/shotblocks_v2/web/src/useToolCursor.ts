@@ -19,7 +19,7 @@ import { send } from './lib/host';
  *  Adding a future tool cursor = one more case here + a `.cur` file
  *  + a mode id in the C++ CursorMode enum.
  */
-type CursorMode = 'slip' | 'razor' | 'select' | 'av-split' | 'roll' | 'play-range' | 'default';
+type CursorMode = 'slip' | 'razor' | 'pen' | 'select' | 'av-split' | 'roll' | 'play-range' | 'default';
 
 export function useToolCursor(): void {
   useEffect(() => {
@@ -74,6 +74,10 @@ export function useToolCursor(): void {
       if (s.activeTool === 'razor') {
         // Razor cuts any clip — video or audio.
         return pointerOverRect(x, y, '.shot-block') ? 'razor' : 'default';
+      }
+      if (s.activeTool === 'pen') {
+        // Pen draws volume automation on audio clips only.
+        return pointerOverRect(x, y, '.shot-block.is-audio') ? 'pen' : 'default';
       }
       // Select tool: no custom cursor. The OS default arrow handles
       // everything the Select tool controls — this removed the

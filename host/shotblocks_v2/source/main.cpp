@@ -1004,6 +1004,8 @@ private:
 				m = CURSOR_ROLL;
 			else if (body.find("\"mode\":\"play-range\"") != std::string::npos)
 				m = CURSOR_PLAY_RANGE;
+			else if (body.find("\"mode\":\"pen\"") != std::string::npos)
+				m = CURSOR_PEN;
 			_cursorMode.store(m);
 			{
 				char b[64];
@@ -1699,6 +1701,7 @@ private:
 		CURSOR_AV_SPLIT   = 4,
 		CURSOR_ROLL       = 5,
 		CURSOR_PLAY_RANGE = 6,
+		CURSOR_PEN        = 7,
 	};
 
 	// Load one multi-resolution .cur from <plugin>/web/cursors/.
@@ -1739,11 +1742,13 @@ private:
 		_avSplitCursor   = LoadCursorFile(path, L"av-split.cur");
 		_rollCursor      = LoadCursorFile(path, L"roll.cur");
 		_playRangeCursor = LoadCursorFile(path, L"play-range.cur");
-		char b[192];
+		_penCursor       = LoadCursorFile(path, L"pen.cur");
+		char b[224];
 		_snprintf_s(b, sizeof(b), _TRUNCATE,
-			"[Shotblocks/v2] cursors loaded: slip=%d razor=%d avsplit=%d roll=%d playrange=%d",
+			"[Shotblocks/v2] cursors loaded: slip=%d razor=%d avsplit=%d roll=%d playrange=%d pen=%d",
 			_slipCursor ? 1 : 0, _razorCursor ? 1 : 0,
-			_avSplitCursor ? 1 : 0, _rollCursor ? 1 : 0, _playRangeCursor ? 1 : 0);
+			_avSplitCursor ? 1 : 0, _rollCursor ? 1 : 0, _playRangeCursor ? 1 : 0,
+			_penCursor ? 1 : 0);
 		GePrint(maxon::String(b));
 	}
 
@@ -1758,6 +1763,7 @@ private:
 			case CURSOR_AV_SPLIT:   return _avSplitCursor;
 			case CURSOR_ROLL:       return _rollCursor;
 			case CURSOR_PLAY_RANGE: return _playRangeCursor;
+			case CURSOR_PEN:        return _penCursor;
 			default:                return nullptr;
 		}
 	}
@@ -1858,6 +1864,7 @@ private:
 	HCURSOR              _avSplitCursor{nullptr};
 	HCURSOR              _rollCursor{nullptr};
 	HCURSOR              _playRangeCursor{nullptr};
+	HCURSOR              _penCursor{nullptr};
 	std::atomic<int>     _cursorMode{0};   // CursorMode id; 0 = no override
 	HWND                 _cursorSubclassed{nullptr};
 

@@ -1,5 +1,5 @@
 import { useEffect, useRef } from 'react';
-import { useStore, getNextClipId, setNextClipId, type Track } from './store';
+import { useStore, getNextClipId, setNextClipId, type Track, type LevelKeyframe, type LevelInterp } from './store';
 import { onMessage, send } from './lib/host';
 import { fetchAudio, removeAudio, hasAudio } from './lib/audioStore';
 
@@ -50,6 +50,12 @@ interface SavedClip {
   audioPeaksSampleRate?: number;
   audioBeatGrid?: { periodSamples: number; phaseSamples: number; confidence: number; barOffset: number };
   audioSongParts?: number[];
+  // Pen-tool volume automation. Each node: media-space af, 0..1 gain,
+  // segment interp, and the cubic-bezier handles.
+  levelKeyframes?: {
+    af: number; gain: number; interp: string;
+    ease: [number, number, number, number];
+  }[];
 }
 interface SavedTrack {
   id: number;
@@ -82,6 +88,33 @@ function trackFlagsFromSaved(t: SavedTrack): {
     visible: t.visible !== false,
     nameIsCustom: !!t.nameIsCustom,
   };
+}
+
+const LEVEL_INTERPS: LevelInterp[] =
+  ['linear', 'hold', 'ease-in', 'ease-out', 'ease-in-out', 'custom'];
+
+/** Coerce saved level-keyframes back to typed LevelKeyframe[]. JSON
+ *  loses the union types and could carry stale interp names; this
+ *  re-validates each node. Returns undefined for an empty/missing
+ *  list so a clip with no automation stays clean. */
+function levelKeyframesFromSaved(
+  raw: SavedClip['levelKeyframes'],
+): LevelKeyframe[] | undefined {
+  if (!raw || raw.length === 0) return undefined;
+  const out: LevelKeyframe[] = raw.map((k) => {
+    const interp: LevelInterp = LEVEL_INTERPS.includes(k.interp as LevelInterp)
+      ? (k.interp as LevelInterp) : 'linear';
+    const e = Array.isArray(k.ease) && k.ease.length === 4
+      ? k.ease : [0, 0, 1, 1];
+    return {
+      af: k.af | 0,
+      gain: Math.max(0, Math.min(1, k.gain)),
+      interp,
+      ease: [e[0], e[1], e[2], e[3]] as [number, number, number, number],
+    };
+  });
+  out.sort((a, b) => a.af - b.af);
+  return out;
 }
 
 export function usePersistence(): void {
@@ -220,6 +253,7 @@ async function loadFromHost(skipNextSave: React.MutableRefObject<boolean>) {
           audioPeaksSampleRate: c.audioPeaksSampleRate,
           audioBeatGrid: c.audioBeatGrid,
           audioSongParts: c.audioSongParts,
+          levelKeyframes: levelKeyframesFromSaved(c.levelKeyframes),
           // Backfill mediaId: pre-media-window scenes keyed audio
           // bytes in the C++ helper by the (then-unsplit) clipId, so
           // the clip's own id IS the correct media key for old data.
@@ -306,6 +340,7 @@ function saveToHost() {
         audioPeaksSampleRate: c.audioPeaksSampleRate,
         audioBeatGrid: c.audioBeatGrid,
         audioSongParts: c.audioSongParts,
+        levelKeyframes: c.levelKeyframes,
       })),
     })),
     nextClipId: getNextClipId(),

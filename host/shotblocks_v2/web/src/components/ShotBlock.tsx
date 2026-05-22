@@ -2,6 +2,7 @@ import { useRef, type CSSProperties } from 'react';
 import { useStore, SNAP_PIXEL_RADIUS, type Clip } from '../store';
 import { useClipDrag } from '../useClipDrag';
 import { WaveformCanvas } from './WaveformCanvas';
+import { LevelCurve } from './LevelCurve';
 import { BeatDots } from './BeatDots';
 
 /** Shot block (a clip rendered inside a Lane). Visual matrix per
@@ -142,6 +143,10 @@ export function ShotBlock({
         <div className="shot-block__icon-wrap">
           <span className={iconClass} />
         </div>
+        {/* LevelCurve renders LAST so its pen-tool hit area covers the
+            whole clip — incl. the strip under the label band, where
+            the curve line actually sits. */}
+        {side === 'audio' && <LevelCurve clip={clip} />}
       </div>
       {/* Beat-grid connector dots — a CHILD of the clip so they ride
           the clip's transform during a drag (no lag, no z-order
