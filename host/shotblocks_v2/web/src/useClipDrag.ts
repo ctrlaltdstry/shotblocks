@@ -1,150 +1,9 @@
 import { useEffect, useRef, type RefObject } from 'react';
 import { gsap } from 'gsap';
 import { useStore, magneticSnap, audioPeakDocFrames, isTrackLocked, SNAP_PIXEL_RADIUS, clipEdgeZonePx, type Clip } from './store';
-import { setSlipPreview, clearSlipPreview } from './lib/slipPreview';
-
-/** Pixel slop before a pointerdown becomes a real drag. Below this we
- *  treat it as a click (selection, later). */
-const DRAG_THRESHOLD_PX = 3;
-
-interface DragRef {
-  active: boolean;
-  pointerId: number;
-  startClientX: number;
-  startClientY: number;
-  startInFrame: number;
-  startOutFrame: number;
-  pxPerFrame: number;
-  // The track + frame the live preview currently resolves to. Read on
-  // release to commit the move via moveClip().
-  previewTrackId: string;
-  previewInFrame: number;
-  // The clip's CURRENT track id in the store. Differs from `trackId`
-  // (closure-captured original track) after a cross-track live-ripple
-  // commit migrated the clip. Used as `fromTrackId` for the next
-  // ripple commit so moveClip can locate the moving clip.
-  currentTrackId: string;
-  // dx/dy applied as a CSS transform on the clip element each move.
-  // Stored so we can clear on cancel/end. lastDx is the latest
-  // horizontal target (cursor-driven, written direct). lastDy is the
-  // VERTICAL TARGET — the value the clip is heading toward — and may
-  // differ from animatedDy mid-glide. animatedDy is what's actually
-  // written to the element; gsap tweens it toward lastDy whenever a
-  // track-change makes lastDy jump, giving the clip a smooth ~180ms
-  // ease.out vertical glide between lanes.
-  lastDx: number;
-  lastDy: number;
-  animatedDy: number;
-  // Live Shift state. Read on every pointermove so the user can
-  // toggle ripple on/off mid-drag (Premiere/Resolve UX). When the
-  // mode flips, we re-anchor startClientX + startInFrame to the
-  // current pointer + the dragged clip's live position so each
-  // mode's delta math stays coherent across the toggle. Neighbors
-  // that ripple already pushed stay pushed (user-confirmed UX call).
-  //
-  // Group drag ignores this — Python falls back to replace for groups
-  // (sb_shot_model.py:356) and v2 mirrors that.
-  rippleMode: boolean;
-  // Group drag: if non-null, the drag moves every clip in this set
-  // together. The anchor (= clip.id) drives snap targeting. Group
-  // drags commit LIVE via moveClips on every pointermove (no CSS
-  // transform), so all selected clips visually follow each other.
-  groupIds: Set<number> | null;
-}
-
-type LaneTarget =
-  | { kind: 'existing'; trackId: string }
-  | { kind: 'spawn'; trackId: string }
-  | null;
-
-/** Resolve which lane (or spawn-slot) the pointer is over, restricted
- *  to the source clip's side (video↔video, audio↔audio — see memory
- *  v2-audio-source-is-file-only).
- *
- *  Spawn rule: dragging the pointer above the topmost track on the
- *  video side or below the bottommost on the audio side resolves to a
- *  new track one step out (V<max+1> or A<max+1>). Per memory
- *  project_v2_auto_track_lifecycle, tracks are implicit — no add UI. */
-function resolveLane(
-  clientX: number,
-  clientY: number,
-  side: 'video' | 'audio',
-): LaneTarget {
-  const stack = document.getElementById(
-    side === 'video' ? 'lanes-videos' : 'lanes-audios',
-  );
-  if (!stack) return null;
-  const stackRect = stack.getBoundingClientRect();
-
-  // Compute spawn id for this side, so we can return it whether the
-  // cursor is past the stack edge or just hovering the outermost lane.
-  const lanes = Array.from(stack.querySelectorAll<HTMLElement>('.lane'));
-  const ids = lanes
-    .map((l) => parseInt((l.getAttribute('data-track') || '').slice(1), 10))
-    .filter((n) => Number.isFinite(n));
-  const maxId = ids.length ? Math.max(...ids) : 0;
-  const spawnId = (side === 'video' ? 'V' : 'A') + (maxId + 1);
-
-  // Resolve which lane the cursor is hovering, if any. We can't use
-  // elementsFromPoint because the dragged ShotBlock has its
-  // pointer-events set to none during drag — and even with that
-  // working, lane lookup by bounding-rect is simpler and more direct.
-  let hoverLane: HTMLElement | null = null;
-  if (clientX >= stackRect.left && clientX <= stackRect.right) {
-    for (const lane of lanes) {
-      if (lane.getAttribute('data-side') !== side) continue;
-      const r = lane.getBoundingClientRect();
-      if (clientY >= r.top && clientY <= r.bottom) {
-        hoverLane = lane;
-        break;
-      }
-    }
-  }
-
-  // Cursor inside a lane: check whether we should spawn instead.
-  // Spawn rule: when hovering the OUTERMOST track on this side (the
-  // V<maxId> for video, A<maxId> for audio), only a THIN band at the
-  // lane's outer edge (farthest from the V/A splitter) resolves to a
-  // new track. A narrow band — not the whole outer half — so a normal
-  // horizontal drag through the lane never accidentally spawns; the
-  // user has to deliberately push to the outer edge to create V2.
-  if (hoverLane) {
-    const trackId = hoverLane.getAttribute('data-track');
-    if (!trackId) return null;
-    const trackNum = parseInt(trackId.slice(1), 10);
-    if (trackNum === maxId) {
-      const r = hoverLane.getBoundingClientRect();
-      // Spawn band: the outer 22% of the lane, capped at 14px so it
-      // stays a thin trigger even on tall lanes.
-      const band = Math.min(14, r.height * 0.22);
-      // Video: V1 is at the BOTTOM of its stack (closest to splitter),
-      // V<max> is at the TOP. So the spawn band is at the lane TOP.
-      // Audio: A1 is at the TOP of its stack (closest to splitter),
-      // A<max> is at the BOTTOM. So the spawn band is at the lane BOTTOM.
-      if (side === 'video' && clientY < r.top + band) {
-        return { kind: 'spawn', trackId: spawnId };
-      }
-      if (side === 'audio' && clientY > r.bottom - band) {
-        return { kind: 'spawn', trackId: spawnId };
-      }
-    }
-    return { kind: 'existing', trackId };
-  }
-
-  // Cursor outside the stack horizontally → reject.
-  if (clientX < stackRect.left || clientX > stackRect.right) return null;
-
-  // Cursor past the outer edge of the stack (above lanes-videos top
-  // or below lanes-audios bottom) — also a spawn target. Lets the
-  // user "throw" the clip well past the lane to commit a spawn.
-  if (side === 'video' && clientY < stackRect.top) {
-    return { kind: 'spawn', trackId: spawnId };
-  }
-  if (side === 'audio' && clientY > stackRect.bottom) {
-    return { kind: 'spawn', trackId: spawnId };
-  }
-  return null;
-}
+import { DRAG_THRESHOLD_PX, type DragRef } from './hooks/clipDrag/types';
+import { resolveLane } from './hooks/clipDrag/resolveLane';
+import { startSlipDrag } from './hooks/clipDrag/startSlipDrag';
 
 /** Pointer-driven body drag on a ShotBlock.
  *
@@ -560,7 +419,7 @@ export function useClipDrag(
         const st = useStore.getState();
         const slipActive = side === 'audio' && st.activeTool === 'slip';
         if (slipActive) {
-          startSlipDrag(ev);
+          startSlipDrag(ev, el!, clip.id, trackId);
           return;
         }
       }
@@ -631,82 +490,6 @@ export function useClipDrag(
       window.addEventListener('pointerup', onUp);
       window.addEventListener('pointercancel', onCancel);
       window.addEventListener('keydown', onKey);
-    }
-
-    // ---- Slip drag (audio only) -------------------------------------
-    // Self-contained: own pointer listeners, no transform, commits
-    // live to the store via slipClip. The clip does NOT move on the
-    // timeline — only mediaOffsetFrames changes, so the waveform
-    // slides under a fixed clip box. Direction follows Python /
-    // Premiere: drag RIGHT → media moves backward → earlier audio
-    // plays under the clip → mediaOffsetFrames DECREASES
-    // (sb_canvas_audio.py:1788).
-    function startSlipDrag(downEv: PointerEvent) {
-      const laneEl = el!.closest('.lane') as HTMLElement | null;
-      if (!laneEl) return;
-      const laneRect = laneEl.getBoundingClientRect();
-      const st0 = useStore.getState();
-      const span = Math.max(1, st0.h.vMax - st0.h.vMin);
-      const pxPerFrame = laneRect.width / span;
-      if (pxPerFrame <= 0) return;
-
-      // Snapshot the clip's starting offset + media bounds from the
-      // live store so the preview can clamp the same way slipClip does.
-      let startOffset = 0;
-      let clipDur = 1;
-      let mediaDur = 1;
-      for (const t of st0.audioTracks) {
-        const c = t.clips.find((cc) => cc.id === clip.id);
-        if (c) {
-          startOffset = c.mediaOffsetFrames ?? 0;
-          clipDur = Math.max(1, c.outFrame - c.inFrame);
-          mediaDur = c.mediaDurationFrames ?? clipDur;
-          break;
-        }
-      }
-      const maxOffset = Math.max(0, mediaDur - clipDur);
-      const startClientX = downEv.clientX;
-      const pointerId = downEv.pointerId;
-      // Flag the slip so the Lane stops running edge-hover detection
-      // for the duration.
-      useStore.getState().setSlipDragging(true);
-
-      // CRITICAL: during the drag we do NOT commit to the store —
-      // committing per move re-renders the audio clip + WaveformCanvas,
-      // and that React re-render is what makes WebView2 drop the
-      // native cursor mid-gesture (proven by diagnosis). Instead we
-      // push the in-flight offset to the slip-preview module, which
-      // repaints the waveform IMPERATIVELY (no React). The real
-      // slipClip commit happens once, on release.
-      function previewAt(ev: PointerEvent): number {
-        const dxFrames = Math.round((ev.clientX - startClientX) / pxPerFrame);
-        // Drag right → earlier audio → offset decreases. Clamp to the
-        // legal window range, same as slipClip.
-        const want = startOffset - dxFrames;
-        return Math.max(0, Math.min(maxOffset, want));
-      }
-      function onSlipMove(ev: PointerEvent) {
-        if (ev.pointerId !== pointerId) return;
-        setSlipPreview(clip.id, previewAt(ev));
-      }
-      function endSlip(ev: PointerEvent) {
-        if (ev.pointerId !== pointerId) return;
-        window.removeEventListener('pointermove', onSlipMove);
-        window.removeEventListener('pointerup', endSlip);
-        window.removeEventListener('pointercancel', endSlip);
-        // Commit the final offset to the store, clear the preview.
-        const finalOffset = previewAt(ev);
-        useStore.getState().slipClip(clip.id, trackId, finalOffset);
-        clearSlipPreview();
-        useStore.getState().setSlipDragging(false);
-        // Cursor: the C++ host owns it (WM_SETCURSOR subclass on the
-        // C4D dialog window). useSlipCursor keeps the host's cursor
-        // mode in sync with tool + pointer position — nothing to do
-        // here.
-      }
-      window.addEventListener('pointermove', onSlipMove);
-      window.addEventListener('pointerup', endSlip);
-      window.addEventListener('pointercancel', endSlip);
     }
 
     el.addEventListener('pointerdown', onDown);
