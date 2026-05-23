@@ -69,7 +69,11 @@ export function Ruler() {
     for (const t of s.audioTracks) {
       for (const c of t.clips) editPoints.push(c.inFrame, c.outFrame);
     }
-    for (const f of audioPeakDocFrames(s)) editPoints.push(f);
+    // Beat positions are snap targets only when the grid is visible
+    // (user-confirmed UX: invisible lines shouldn't snap).
+    if (s.beatGridVisible) {
+      for (const f of audioPeakDocFrames(s)) editPoints.push(f);
+    }
     const snapFrames = Math.max(1, SNAP_PIXEL_RADIUS / Math.max(0.0001, pxPerFrame));
     // duration=0 → snap the single playhead frame directly to the
     // nearest edit point, no "other edge" to also align.

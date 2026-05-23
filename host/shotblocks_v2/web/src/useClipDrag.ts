@@ -186,8 +186,13 @@ export function useClipDrag(
         }
       }
       editPoints.push(state.scrubFrame ?? state.currentFrame);
-      // Snap-to-peak: detected audio peaks are valid snap targets too.
-      for (const f of audioPeakDocFrames(state)) editPoints.push(f);
+      // Snap-to-peak: detected audio peaks are valid snap targets,
+      // but ONLY when the beat-grid overlay is visible. If the user
+      // toggled the grid off, the beat positions are off-screen — and
+      // user-confirmed: invisible lines shouldn't magnet the drag.
+      if (state.beatGridVisible) {
+        for (const f of audioPeakDocFrames(state)) editPoints.push(f);
+      }
       // Snap gating (Premiere model): snap is active when the Snap
       // toggle is on, OR while Shift is held — Shift temporarily
       // force-enables snap for this drag even with the toggle off.

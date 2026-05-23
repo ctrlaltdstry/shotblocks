@@ -309,7 +309,11 @@ export function Lane({ track, side }: { track: Track; side: 'video' | 'audio' })
       }
     }
     editPoints.push(state.scrubFrame ?? state.currentFrame);
-    for (const f of audioPeakDocFrames(state)) editPoints.push(f);
+    // Beat positions are snap targets only when the beat grid is
+    // visible (user-confirmed UX: invisible lines shouldn't snap).
+    if (state.beatGridVisible) {
+      for (const f of audioPeakDocFrames(state)) editPoints.push(f);
+    }
     // Snap gating (Premiere model): active when the Snap toggle is on
     // OR Shift is held — Shift force-enables snap for this trim even
     // with the toggle off. snapFrames=0 short-circuits magneticSnap.
@@ -360,7 +364,9 @@ export function Lane({ track, side }: { track: Track; side: 'video' | 'audio' })
       }
     }
     editPoints.push(state.scrubFrame ?? state.currentFrame);
-    for (const f of audioPeakDocFrames(state)) editPoints.push(f);
+    if (state.beatGridVisible) {
+      for (const f of audioPeakDocFrames(state)) editPoints.push(f);
+    }
     // Same gating as trim (Premiere model) — snap active when the Snap
     // toggle is on OR Shift is held. Roll has no ripple mode.
     const snapActive = state.snapEnabled || ev.shiftKey;
