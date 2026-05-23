@@ -95,7 +95,12 @@ export const createUiSlice: StateCreator<State, [], [], UiSlice> = (set) => ({
   }),
   setDetectingBeats: (on) => set({ detectingBeats: on }),
   setBeatGridVisible: (on) => set({ beatGridVisible: on }),
-  setAltHeld: (on) => set({ altHeld: on }),
+  // Identity-checked: useAltKey calls this on every pointer/wheel/key
+  // event (it derives altHeld from e.altKey as ground truth to dodge
+  // the Windows alt-eats-keyup quirk). Without this skip, every
+  // pointermove during a no-alt-state-change drag would wake every
+  // subscriber to the full state via Zustand's subscribe().
+  setAltHeld: (on) => set((s) => (s.altHeld === on ? s : { altHeld: on })),
   setAltRmbZooming: (on) => set({ altRmbZooming: on }),
 
   setDragPreview: (preview) => set({ dragPreview: preview }),

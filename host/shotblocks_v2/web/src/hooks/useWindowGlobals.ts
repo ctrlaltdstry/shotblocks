@@ -45,20 +45,43 @@ export function usePageZoomSuppress() {
 /** Mirror the Alt key into the store so LevelCurve / useToolCursor
  *  can treat Alt as a pen-tool modifier without each owning its own
  *  listener (which would also miss keys delivered to elements that
- *  prevent bubbling). `blur` clears the flag so Alt-tabbing out
- *  doesn't leave the app stuck in alt-down. */
+ *  prevent bubbling).
+ *
+ *  Why we read e.altKey on EVERY event instead of keydown/keyup only:
+ *  Windows + WebView2 has a quirk where pressing Alt also activates
+ *  the window's menu-bar focus mode, and the OS sometimes swallows
+ *  the matching keyup. With pure keydown/keyup tracking, the user
+ *  saw Alt "stick" — one tap entered alt-mode, a second tap exited.
+ *  Reading e.altKey from pointer/wheel/key events as ground truth
+ *  keeps `altHeld` at most one event-tick stale instead of
+ *  permanently wrong. `blur` still clears the flag so Alt-tabbing
+ *  out doesn't leave the app stuck. */
 export function useAltKey() {
   useEffect(() => {
     const setAlt = useStore.getState().setAltHeld;
-    const down = (e: KeyboardEvent) => { if (e.key === 'Alt') setAlt(true); };
-    const up = (e: KeyboardEvent) => { if (e.key === 'Alt') setAlt(false); };
+    function sync(e: { altKey: boolean }) {
+      // Ref-equality-skip happens inside the store action; calling
+      // setAlt(true) when it's already true is a no-op for renders.
+      setAlt(e.altKey);
+    }
     const blur = () => setAlt(false);
-    window.addEventListener('keydown', down);
-    window.addEventListener('keyup', up);
+    // Cover every UI event that surfaces `altKey` on the event object.
+    // Together these run on virtually every interaction — the alt flag
+    // never drifts more than one event-tick away from physical reality.
+    window.addEventListener('keydown', sync);
+    window.addEventListener('keyup', sync);
+    window.addEventListener('pointermove', sync, true);
+    window.addEventListener('pointerdown', sync, true);
+    window.addEventListener('pointerup', sync, true);
+    window.addEventListener('wheel', sync, true);
     window.addEventListener('blur', blur);
     return () => {
-      window.removeEventListener('keydown', down);
-      window.removeEventListener('keyup', up);
+      window.removeEventListener('keydown', sync);
+      window.removeEventListener('keyup', sync);
+      window.removeEventListener('pointermove', sync, true);
+      window.removeEventListener('pointerdown', sync, true);
+      window.removeEventListener('pointerup', sync, true);
+      window.removeEventListener('wheel', sync, true);
       window.removeEventListener('blur', blur);
       setAlt(false);
     };
