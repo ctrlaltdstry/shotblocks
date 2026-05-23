@@ -36,6 +36,7 @@ import { useMarquee } from './useMarquee';
 import { DebugOverlay } from './DebugOverlay';
 import { useElementSize } from './useElementSize';
 import { useDragRecovery } from './hooks/useDragRecovery';
+import { useFlipLanes } from './hooks/useFlipLanes';
 import {
   useSuppressNativeContextMenu,
   usePageZoomSuppress,
@@ -76,6 +77,7 @@ function App() {
   usePageZoomSuppress();
   useSuppressNativeContextMenu();
   useDragRecovery();
+  useFlipLanes();
   useAltRightZoom();
   useMmbPan();
   useWheelScroll();
