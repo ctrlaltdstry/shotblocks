@@ -1,4 +1,4 @@
-import { useRef, useState } from 'react';
+import { useMemo, useRef, useState } from 'react';
 import { useStore, type Clip, type LevelKeyframe, type LevelTangent } from '../store';
 import { useElementSize } from '../useElementSize';
 import { evaluateLevel } from '../lib/levelCurve';
@@ -432,7 +432,15 @@ export function LevelCurve({ clip }: { clip: Clip }) {
     });
   }
 
-  const path = buildPath(kfs, afToFrac, gainToFrac);
+  // Memoize the SVG path string — it only depends on the keyframes
+  // and the clip's media-window bounds. Cheap to compute per call,
+  // but called on every render (which includes every zoom step,
+  // every selection change, every keyframe drag tick). The memo skips
+  // the rebuild when nothing the path depends on actually changed.
+  const path = useMemo(
+    () => buildPath(kfs, clip.inFrame, clip.outFrame, mediaOffset),
+    [kfs, clip.inFrame, clip.outFrame, mediaOffset],
+  );
   const handles = penActive ? selectedHandles() : [];
   const selNode = sel.length === 1 ? kfs[sel[0]] : null;
   const mRect = marquee ? {
@@ -519,10 +527,14 @@ function clamp01(v: number): number {
 
 function buildPath(
   kfs: LevelKeyframe[],
-  afToFrac: (af: number) => number,
-  gainToFrac: (g: number) => number,
+  clipInFrame: number,
+  clipOutFrame: number,
+  mediaOffset: number,
 ): string {
   if (kfs.length === 0) return '';
+  const clipDur = Math.max(1, clipOutFrame - clipInFrame);
+  const afToFrac = (af: number) => (af - mediaOffset) / clipDur;
+  const gainToFrac = (g: number) => 0.5 + (1 - g) * (CURVE_BOTTOM - 0.5);
   const X = (af: number) => (afToFrac(af) * VB).toFixed(2);
   const Y = (g: number) => (gainToFrac(g) * VB).toFixed(2);
   const seg: string[] = [];
