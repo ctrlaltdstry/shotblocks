@@ -272,86 +272,119 @@ export const createTimelineSlice: StateCreator<State, [], [], TimelineSlice> = (
     const fromSide = anchorFromTrackId.startsWith('V') ? 'video' : anchorFromTrackId.startsWith('A') ? 'audio' : null;
     const toSide   = anchorToTrackId.startsWith('V')   ? 'video' : anchorToTrackId.startsWith('A')   ? 'audio' : null;
     if (!fromSide || !toSide || fromSide !== toSide) return false;
-    const side = fromSide;
+    const anchorSide = fromSide;
     const anchorFromNum = parseInt(anchorFromTrackId.slice(1), 10);
     const anchorToNum   = parseInt(anchorToTrackId.slice(1),   10);
     let ok = false;
     set((s) => {
-      const tracks = side === 'video' ? s.videoTracks : s.audioTracks;
-      // Locate the anchor and gather every selected clip's current
-      // (trackId, inFrame, outFrame).
+      const anchorTracks = anchorSide === 'video' ? s.videoTracks : s.audioTracks;
+      const otherTracks  = anchorSide === 'video' ? s.audioTracks : s.videoTracks;
+      // Locate the anchor + gather every selected clip's current
+      // (trackId, inFrame, outFrame). Separate by side so the
+      // anchor-side clips can shift tracks (dtTrack) while other-side
+      // clips ride horizontally only (NLE convention: a mixed V+A
+      // selection moves together in time; vertical shift stays
+      // within the side the user is dragging).
       type Loc = { id: number; trackNum: number; inFrame: number; outFrame: number };
-      const selectedLocs: Loc[] = [];
+      const anchorLocs: Loc[] = [];
+      const otherLocs: Loc[] = [];
       let anchorLoc: Loc | null = null;
-      for (const t of tracks) {
+      for (const t of anchorTracks) {
         for (const c of t.clips) {
           if (!clipIds.has(c.id)) continue;
           const loc: Loc = { id: c.id, trackNum: t.id, inFrame: c.inFrame, outFrame: c.outFrame };
-          selectedLocs.push(loc);
+          anchorLocs.push(loc);
           if (c.id === anchorClipId) anchorLoc = loc;
         }
       }
-      if (!anchorLoc || selectedLocs.length === 0) return s;
+      for (const t of otherTracks) {
+        for (const c of t.clips) {
+          if (!clipIds.has(c.id)) continue;
+          otherLocs.push({ id: c.id, trackNum: t.id, inFrame: c.inFrame, outFrame: c.outFrame });
+        }
+      }
+      if (!anchorLoc || anchorLocs.length + otherLocs.length === 0) return s;
       // Frame and track deltas inferred from the anchor's move.
       let dxFrames = anchorNewInFrame - anchorLoc.inFrame;
       const dtTrack = anchorToNum - anchorFromNum;
       // Block the whole group move if any selected clip sits on a
-      // locked track or would land on one.
-      const lockedIds = new Set(
-        tracks.filter((t) => t.locked).map((t) => t.id));
-      for (const loc of selectedLocs) {
-        if (lockedIds.has(loc.trackNum)) return s;
-        if (lockedIds.has(loc.trackNum + dtTrack)) return s;
+      // locked track or would land on one. Anchor-side clips track-
+      // shift by dtTrack; other-side clips stay on their current track
+      // (no vertical shift across sides), so only the current-track
+      // lock matters for them.
+      const anchorLockedIds = new Set(
+        anchorTracks.filter((t) => t.locked).map((t) => t.id));
+      const otherLockedIds = new Set(
+        otherTracks.filter((t) => t.locked).map((t) => t.id));
+      for (const loc of anchorLocs) {
+        if (anchorLockedIds.has(loc.trackNum)) return s;
+        if (anchorLockedIds.has(loc.trackNum + dtTrack)) return s;
       }
-      // Clamp so no selected clip goes below frame 0.
-      const minIn = Math.min(...selectedLocs.map((l) => l.inFrame));
+      for (const loc of otherLocs) {
+        if (otherLockedIds.has(loc.trackNum)) return s;
+      }
+      // Clamp so no selected clip — on either side — goes below
+      // frame 0.
+      const allLocs = [...anchorLocs, ...otherLocs];
+      const minIn = Math.min(...allLocs.map((l) => l.inFrame));
       if (minIn + dxFrames < 0) dxFrames = -minIn;
       if (dxFrames === 0 && dtTrack === 0) {
         ok = true;
         return s;
       }
-      // Spawn destination tracks if needed (each target track number
-      // must exist or be spawned — but only one step past current max,
-      // matching moveClip's rule). For group drag we relax this: any
-      // selected clip can land on an existing track OR a freshly
-      // spawned one — but we only spawn ONE new track per side per
-      // call, the highest needed.
-      const targetTrackNums = new Set(selectedLocs.map((l) => l.trackNum + dtTrack));
-      let working = tracks;
-      const existingIds = new Set(working.map((t) => t.id));
-      const maxId = working.reduce((m, t) => Math.max(m, t.id), 0);
+      // Spawn destination tracks on the ANCHOR side if needed.
+      // Other-side clips stay on existing tracks, so they don't
+      // contribute target track numbers here.
+      const targetTrackNums = new Set(anchorLocs.map((l) => l.trackNum + dtTrack));
+      let workingAnchor = anchorTracks;
+      const existingIds = new Set(workingAnchor.map((t) => t.id));
+      const maxId = workingAnchor.reduce((m, t) => Math.max(m, t.id), 0);
       for (const num of targetTrackNums) {
         if (num < 1) return s;                    // can't go below V1/A1
         if (existingIds.has(num)) continue;
         if (num !== maxId + 1) return s;          // only one-step spawn allowed
-        working = [...working, { id: num, name: (side === 'video' ? 'Video ' : 'Audio ') + num, clips: [], ...TRACK_FLAG_DEFAULTS }];
+        workingAnchor = [...workingAnchor, { id: num, name: (anchorSide === 'video' ? 'Video ' : 'Audio ') + num, clips: [], ...TRACK_FLAG_DEFAULTS }];
         existingIds.add(num);
       }
-      // Build moved-clip list keyed by id for fast lookup.
-      const movedById = new Map<number, { id: number; newTrackNum: number; inFrame: number; outFrame: number }>();
-      for (const loc of selectedLocs) {
+      // Build moved-clip lookup. Anchor-side gets dx + dt; other-side
+      // gets dx only (newTrackNum === current).
+      const movedById = new Map<number, { id: number; newTrackNum: number; inFrame: number; outFrame: number; side: 'anchor' | 'other' }>();
+      for (const loc of anchorLocs) {
         movedById.set(loc.id, {
           id: loc.id,
           newTrackNum: loc.trackNum + dtTrack,
           inFrame: loc.inFrame + dxFrames,
           outFrame: loc.outFrame + dxFrames,
+          side: 'anchor',
         });
       }
-      // Rebuild each track:
-      //  1. Remove selected clips that originated here.
+      for (const loc of otherLocs) {
+        movedById.set(loc.id, {
+          id: loc.id,
+          newTrackNum: loc.trackNum,
+          inFrame: loc.inFrame + dxFrames,
+          outFrame: loc.outFrame + dxFrames,
+          side: 'other',
+        });
+      }
+      // Rebuild a single side's tracks:
+      //  1. Remove every selected clip that originated here.
       //  2. Add selected clips whose destination is here.
       //  3. replaceOverlap with each new arrival against non-selected
       //     clips already on this track (selected clips don't collide
-      //     with each other — rigid shift preserves their original
-      //     non-overlapping layout).
-      const next = working.map((t) => {
+      //     with each other — rigid shift preserves their layout).
+      const rebuildSide = (
+        sideTracks: Track[],
+        sideKind: 'anchor' | 'other',
+        srcTracksForOrig: Track[],
+      ): Track[] => sideTracks.map((t) => {
         const survivors = t.clips.filter((c) => !clipIds.has(c.id));
         const arrivals: Clip[] = [];
         for (const moved of movedById.values()) {
+          if (moved.side !== sideKind) continue;
           if (moved.newTrackNum !== t.id) continue;
-          // Find original clip to clone (preserve sourceName etc.).
           let orig: Clip | undefined;
-          for (const tt of tracks) {
+          for (const tt of srcTracksForOrig) {
             const f = tt.clips.find((c) => c.id === moved.id);
             if (f) { orig = f; break; }
           }
@@ -365,11 +398,18 @@ export const createTimelineSlice: StateCreator<State, [], [], TimelineSlice> = (
         }
         return { ...t, clips: combined };
       });
+      const nextAnchor = rebuildSide(workingAnchor, 'anchor', anchorTracks);
+      const nextOther  = otherLocs.length > 0
+        ? rebuildSide(otherTracks, 'other', otherTracks)
+        : otherTracks;
       // Empty tracks retained — explicit delete will come via a track-
       // header button (TBD).
 
       ok = true;
-      return side === 'video' ? { videoTracks: next } : { audioTracks: next };
+      if (anchorSide === 'video') {
+        return { videoTracks: nextAnchor, audioTracks: nextOther };
+      }
+      return { videoTracks: nextOther, audioTracks: nextAnchor };
     });
     return ok;
   },
