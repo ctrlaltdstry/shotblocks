@@ -867,7 +867,8 @@ body.is-resizing-headers .body { transition: none; }
                  track is soloed) a non-soloed audio lane; inaudible
                  but still editable. */
 .lane__locked-overlay,
-.lane__silenced-overlay {
+.lane__silenced-overlay,
+.lane__invisible-overlay {
   position: absolute;
   inset: 0;
   pointer-events: none;
@@ -881,7 +882,8 @@ body.is-resizing-headers .body { transition: none; }
       rgba(255, 255, 255, 0)     1.5px, rgba(255, 255, 255, 0)     8px),
     rgba(0, 0, 0, 0.45);
 }
-.lane__silenced-overlay {
+.lane__silenced-overlay,
+.lane__invisible-overlay {
   background: rgba(0, 0, 0, 0.3);
 }
 /* (Lanes are now permanently overflow:visible — see `.lane` above —

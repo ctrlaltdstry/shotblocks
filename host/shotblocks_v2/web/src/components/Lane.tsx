@@ -43,6 +43,12 @@ export function Lane({ track, side }: { track: Track; side: 'video' | 'audio' })
     side === 'audio' && s.audioTracks.some((t) => t.solo));
   const inaudible = side === 'audio'
     && (track.muted || (anySolo && !track.solo));
+  // A video lane is "invisible" — and gets the same dimming wash —
+  // when the eye toggle is off. Mirrors the camera-routing gate in
+  // useActiveClipRouter (skips !visible tracks when picking the
+  // active scene camera). Clips stay editable; they just won't paint
+  // the camera through to the C4D viewport.
+  const invisible = side === 'video' && !track.visible;
 
   // Trim drag state. Ref-based (memory: react-drag-state-in-ref) — a
   // re-render would reset let-vars and break drag mid-stream. Captures
@@ -424,6 +430,7 @@ export function Lane({ track, side }: { track: Track; side: 'video' | 'audio' })
       })}
       {track.locked && <div className="lane__locked-overlay" />}
       {inaudible && <div className="lane__silenced-overlay" />}
+      {invisible && <div className="lane__invisible-overlay" />}
     </div>
   );
 }
