@@ -204,9 +204,18 @@ export function useClipDrag(
         // Solo ripple: commit live each pointermove so the user sees
         // neighbors shove in real time. Same pattern as group drag —
         // no CSS transform, the React re-render moves the clip's DOM.
-        // fromTrackId must be the clip's CURRENT track (where the
-        // last commit left it), not the closure's original trackId,
-        // because cross-track drag migrates the clip mid-drag.
+        //
+        // SAME-TRACK ONLY. Cross-track ripple was structurally racy:
+        // the live commit re-mounts useClipDrag (trackId is in the
+        // effect deps), tearing down the active pointer listeners
+        // before pointerup arrives. Patched over with useDragRecovery
+        // for a while; ultimately not worth fixing because the
+        // gesture has no clear NLE precedent — Premiere/Resolve don't
+        // ripple across tracks either. If the cursor crosses to a
+        // different track while ripple is held, hold position and
+        // wait for the user to either move back or release the
+        // modifier.
+        if (target.trackId !== d.currentTrackId) return;
         gsap.killTweensOf(d, 'animatedDy');
         if (el) el.style.transform = '';
         d.lastDx = 0;
