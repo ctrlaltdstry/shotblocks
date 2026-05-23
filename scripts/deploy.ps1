@@ -1,6 +1,9 @@
-# Mirrors src/ into the C4D plugins folder, and copies the C++ host
-# plugin DLL if a build exists. Run before each Cinema 4D restart
-# during the deploy-and-test loop.
+# Deploys the Shotblocks plugin to C4D's plugins folder. The plugin
+# is two parts that live in ONE deployed folder (plugins/shotblocks/):
+#   1. Python rig tag (src/shotblocks.pyp + sb_rig_*.py)
+#   2. C++ timeline (host/shotblocks/ builds shotblocks.xdl64 + web/)
+# C4D loads .pyp and .xdl64 from the same folder without issue.
+# Run before each Cinema 4D restart during the deploy-and-test loop.
 
 $ErrorActionPreference = "Stop"
 
@@ -24,39 +27,47 @@ if (-not (Test-Path $c4dPrefs)) {
 New-Item -ItemType Directory -Path $dest -Force | Out-Null
 
 # /MIR mirrors source to dest (deletes orphaned files in dest)
-# /XD build excludes the vendor build directory (rebuild sources kept
-#     under version control but not needed at runtime)
+# /XD build  excludes the vendor build directory (rebuild sources kept
+#            under version control but not needed at runtime)
+# /XD web    excludes the C++ plugin's web/ subfolder so /MIR doesn't
+#            delete the web bundle on the Python deploy. Both plugins
+#            now live in one shotblocks/ folder under C4D plugins/;
+#            the C++ side adds shotblocks.xdl64 + web/ via a second
+#            robocopy below.
+# /XF shotblocks.xdl64
+#            same reason: don't delete the C++ binary on Python deploy.
 # /NFL /NDL suppress per-file/dir output
 # /NJH /NJS suppress job header/summary
 # /NP no progress percentage
-robocopy $source $dest /MIR /XD build /NFL /NDL /NJH /NJS /NP | Out-Null
+robocopy $source $dest /MIR /XD build web /XF shotblocks.xdl64 /NFL /NDL /NJH /NJS /NP | Out-Null
 
 # robocopy exit codes 0-7 are success; 8+ are failures
 if ($LASTEXITCODE -ge 8) {
     throw "robocopy failed with exit code $LASTEXITCODE"
 }
 
-Write-Host "Deployed shotblocks -> $dest"
+Write-Host "Deployed shotblocks (Python tag) -> $dest"
 
-# --- Shotblocks v2 (C++ plugin) --------------------------------------------
-# Copy shotblocks_v2.xdl64 from the SDK build output into the C4D prefs
-# plugins folder. Optional: only deploys if the build artifact exists.
-$v2BuildDir = "C:\Dev\c4d_sdk_2026\build-win64\bin\Release\plugins\shotblocks_v2"
-$v2Dest = Join-Path $c4dPrefs "plugins\shotblocks_v2"
+# --- Shotblocks C++ plugin -------------------------------------------------
+# Copy shotblocks.xdl64 + web/ INTO the same plugins/shotblocks/ folder
+# the Python deploy already populated. C4D loads .pyp and .xdl64 from
+# the same folder happily; the unified layout means there's one
+# "Shotblocks" folder under plugins/, not two.
+$cppBuildDir = "C:\Dev\c4d_sdk_2026\build-win64\bin\Release\plugins\shotblocks"
 
-if (Test-Path $v2BuildDir) {
-    New-Item -ItemType Directory -Path $v2Dest -Force | Out-Null
-    robocopy $v2BuildDir $v2Dest shotblocks_v2.xdl64 /NFL /NDL /NJH /NJS /NP | Out-Null
+if (Test-Path $cppBuildDir) {
+    # The .xdl64 lands directly in $dest alongside the .pyp.
+    robocopy $cppBuildDir $dest shotblocks.xdl64 /NFL /NDL /NJH /NJS /NP | Out-Null
     if ($LASTEXITCODE -ge 8) {
-        throw "robocopy (v2) failed with exit code $LASTEXITCODE"
+        throw "robocopy (cpp) failed with exit code $LASTEXITCODE"
     }
     # Web app: React + TypeScript + Vite. We build via `npm run build`
     # (output in web/dist) and copy dist/ into the plugin's web/ folder.
     # The C++ side loads web/index.html.
-    $v2WebSrc = Join-Path $repoRoot "host\shotblocks_v2\web"
-    if (Test-Path (Join-Path $v2WebSrc "package.json")) {
-        Write-Host "Building shotblocks_v2 web (npm run build)..."
-        Push-Location $v2WebSrc
+    $webSrc = Join-Path $repoRoot "host\shotblocks\web"
+    if (Test-Path (Join-Path $webSrc "package.json")) {
+        Write-Host "Building shotblocks web (npm run build)..."
+        Push-Location $webSrc
         try {
             # Vite writes progress to stderr. PowerShell would flag that
             # as a failure; capture and re-emit so we only fail on real
@@ -69,20 +80,20 @@ if (Test-Path $v2BuildDir) {
         finally {
             Pop-Location
         }
-        $v2DistSrc = Join-Path $v2WebSrc "dist"
-        if (-not (Test-Path $v2DistSrc)) {
-            throw "Vite build produced no dist/ at $v2DistSrc"
+        $distSrc = Join-Path $webSrc "dist"
+        if (-not (Test-Path $distSrc)) {
+            throw "Vite build produced no dist/ at $distSrc"
         }
-        $v2WebDest = Join-Path $v2Dest "web"
-        New-Item -ItemType Directory -Path $v2WebDest -Force | Out-Null
-        robocopy $v2DistSrc $v2WebDest /MIR /NFL /NDL /NJH /NJS /NP | Out-Null
+        $webDest = Join-Path $dest "web"
+        New-Item -ItemType Directory -Path $webDest -Force | Out-Null
+        robocopy $distSrc $webDest /MIR /NFL /NDL /NJH /NJS /NP | Out-Null
         if ($LASTEXITCODE -ge 8) {
-            throw "robocopy (v2 web dist) failed with exit code $LASTEXITCODE"
+            throw "robocopy (web dist) failed with exit code $LASTEXITCODE"
         }
     }
-    Write-Host "Deployed shotblocks_v2 -> $v2Dest"
+    Write-Host "Deployed shotblocks (C++ timeline) -> $dest"
 } else {
-    Write-Host "Skipping shotblocks_v2 (no build at $v2BuildDir)"
+    Write-Host "Skipping shotblocks C++ (no build at $cppBuildDir)"
 }
 
 exit 0

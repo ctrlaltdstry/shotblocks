@@ -4,7 +4,7 @@ The system shape. Read this before adding any feature so it lands in the right p
 
 Shotblocks ships as **two plugins side-by-side**:
 - **Python plugin (`src/`)** — registers the camera rig tag. Per-frame TagData that runs spring-damper, look-at, noise, autofocus, framing, zoom on the camera's pose.
-- **C++ plugin (`host/shotblocks_v2/`)** — registers the timeline command and dialog. Hosts a WebView2 (via C4D 2026's `HtmlViewerCustomGui`) running a React + TypeScript UI for the timeline, preset library, inspector, play range, and audio.
+- **C++ plugin (`host/shotblocks/`)** — registers the timeline command and dialog. Hosts a WebView2 (via C4D 2026's `HtmlViewerCustomGui`) running a React + TypeScript UI for the timeline, preset library, inspector, play range, and audio.
 
 The v1 Python timeline UI has been retired; v2 (the C++ plugin) owns the timeline. The rig tag remains in Python until its math ports to C++.
 
@@ -78,13 +78,13 @@ Each behavior is math that operates on the camera's pose (and on per-behavior st
 
 In additive mode, behaviors that are inherently replacement operations (look-at, framing rule) are applied as gentle corrective offsets toward the target rather than full rotation replacement. The user can dial the strength of those offsets from 0% (no effect) to 100% (full look-at, equivalent to replace mode for that channel). Behaviors that are naturally additive (spring damping, noise, autofocus on its own focus channel) work the same in both modes.
 
-**Sequencer core** — implemented in the C++ plugin (`host/shotblocks_v2/source/main.cpp`). Holds the shot list as state shared with the React UI via the loopback HTTP bridge; persists to the document via a hidden helper `BaseObject` (see "Persistence" below). Resolves which shot is active at frame N (always exactly one — shots do not overlap; boundaries are hard cuts), and routes camera output: the active shot's source camera becomes the scene camera via `bd->SetSceneCamera(cam) + DrawViews(FORCEFULLREDRAW)`. If that camera has a Shotblocks tag, the tag's procedural pipeline runs and applies the shot's per-shot rig state. If not, the camera's own animation plays through. Will host the slate engine (not yet implemented).
+**Sequencer core** — implemented in the C++ plugin (`host/shotblocks/source/main.cpp`). Holds the shot list as state shared with the React UI via the loopback HTTP bridge; persists to the document via a hidden helper `BaseObject` (see "Persistence" below). Resolves which shot is active at frame N (always exactly one — shots do not overlap; boundaries are hard cuts), and routes camera output: the active shot's source camera becomes the scene camera via `bd->SetSceneCamera(cam) + DrawViews(FORCEFULLREDRAW)`. If that camera has a Shotblocks tag, the tag's procedural pipeline runs and applies the shot's per-shot rig state. If not, the camera's own animation plays through. Will host the slate engine (not yet implemented).
 
 **Slate engine** — the algorithm that aligns shots to the music using motion-energy peaks. Will live inside the sequencer core because it operates on shot positions and reads the audio's beat grid plus the camera's evaluated motion. See "The slate engine" section below. Not yet built — parked until v2 reaches feature parity with v1.
 
 **Motion-energy module** — given a shot, evaluates the shot's source camera over the shot's frame range and produces a per-frame motion-energy curve (combined translational velocity, rotational velocity, and acceleration). Works whether the camera has a Shotblocks tag or not — for tagged cameras, the rig's evaluated motion is the source; for untagged cameras, the camera's own animated transforms are the source. Identifies action frames (peaks). Cached per-shot, invalidated when the shot's parameters or the source camera's animation changes. Will run in C++ alongside the sequencer core. Not yet built.
 
-**Timeline dialog (v2)** — a C++ `GeDialog` whose only child is a `HtmlViewerCustomGui` rendering the React UI from `host/shotblocks_v2/web/dist/index.html`. The HTML is loaded via `file://` and bundled into a single inlined file by `vite-plugin-singlefile`. JS → C++ messages go over a loopback HTTP server inside the plugin DLL (announced to the WebView via `PostWebMessage` at hello); C++ → JS goes via `PostWebMessage`. Drag-and-drop from the Object Manager is caught by the dialog's `BFM_DRAGRECEIVE` handler (file drops are handled in JS because WebView2 intercepts them). Direct-manipulation behavior (drag-move, drag-resize, multi-select, ripple, roll, slip, pen) runs in React/TypeScript following Premiere / After Effects conventions.
+**Timeline dialog (v2)** — a C++ `GeDialog` whose only child is a `HtmlViewerCustomGui` rendering the React UI from `host/shotblocks/web/dist/index.html`. The HTML is loaded via `file://` and bundled into a single inlined file by `vite-plugin-singlefile`. JS → C++ messages go over a loopback HTTP server inside the plugin DLL (announced to the WebView via `PostWebMessage` at hello); C++ → JS goes via `PostWebMessage`. Drag-and-drop from the Object Manager is caught by the dialog's `BFM_DRAGRECEIVE` handler (file drops are handled in JS because WebView2 intercepts them). Direct-manipulation behavior (drag-move, drag-resize, multi-select, ripple, roll, slip, pen) runs in React/TypeScript following Premiere / After Effects conventions.
 
 **Play range** — a first-class element of the timeline, owned by the C++ plugin (`_v2RangeIn` / `_v2RangeOut` / `_v2LoopEnabled` — cached in C++, NOT written to C4D's `LoopMinTime`/`LoopMaxTime` since C4D 2026 doesn't expose the loop flag to plugins). A draggable in/out range, always defined and always visible, displayed at the top of the timeline area. The play button or spacebar plays from cursor position to the out-point; on reaching the out-point, playback either stops or wraps to the in-point depending on the v2 loop toggle. The range affects playback behavior only — shots outside the range remain fully selectable and editable. The user adjusts the range by dragging the range handles (chevron grips at the ruler edges) or via `I` / `O` / `/` hotkeys.
 
@@ -207,7 +207,7 @@ If a slate produces no visible change (the selection was already aligned, or no 
 
 ## Persistence
 
-**Per document:** the shot list, track list, level keyframes, range / loop state, camera links, and the raw bytes of each imported audio file live in the C4D document. The carrier is a hidden helper `BaseObject` (a null named `_shotblocks_v2` with `NBIT_OHIDE`) inserted into the document root by the C++ plugin. The clip-and-state JSON serializes into one `BaseContainer` entry; audio bytes go into per-clip keyed entries (`BCKEY_V2_AUDIO_BASE + clipId`) so a clip move/trim doesn't re-ship the bytes. The helper is found by its marker container value on first access and created if absent. Save mutations are wrapped in `StartUndo / AddUndo(CHANGE_SMALL, helper) / EndUndo` and bump a version counter on the helper so undo/redo round-trip through `EVMSG_CHANGE` → load-state.
+**Per document:** the shot list, track list, level keyframes, range / loop state, camera links, and the raw bytes of each imported audio file live in the C4D document. The carrier is a hidden helper `BaseObject` (a null named `_shotblocks` with `NBIT_OHIDE`) inserted into the document root by the C++ plugin. The clip-and-state JSON serializes into one `BaseContainer` entry; audio bytes go into per-clip keyed entries (`BCKEY_AUDIO_BASE + clipId`) so a clip move/trim doesn't re-ship the bytes. The helper is found by its marker container value on first access and created if absent. Save mutations are wrapped in `StartUndo / AddUndo(CHANGE_SMALL, helper) / EndUndo` and bump a version counter on the helper so undo/redo round-trip through `EVMSG_CHANGE` → load-state.
 
 Why the hidden null instead of `SceneHookData` or a `BaseList2D` attachment: `c4d.plugins.SceneHookData` is not exposed in the C4D 2026.2.0 Python SDK (verified empirically — `getattr(c4d.plugins, "SceneHookData", None)` returns None). A bare `BaseList2D` attachment to the document is invisible but its lifecycle is surprising on undo and copy/paste. A hidden null is a real document object: invisible to the Object Manager (`NBIT_OHIDE`), survives save/load, and integrates with the standard undo system.
 
@@ -312,10 +312,10 @@ src/
 
 Behaviors are *subsystems of one tag*, not separate tags. The user only sees one Shotblocks tag in the AM; spring/damper, look-at, noise, autofocus, framing, zoom all expose their parameters there.
 
-### C++ plugin (`host/shotblocks_v2/`) — timeline UI
+### C++ plugin (`host/shotblocks/`) — timeline UI
 
 ```
-host/shotblocks_v2/
+host/shotblocks/
   source/main.cpp           # single-file C++ plugin
                             # - registers the v2 command + dialog
                             # - hosts HtmlViewerCustomGui

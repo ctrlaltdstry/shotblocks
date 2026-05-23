@@ -6,7 +6,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 Shotblocks is a **Cinema 4D 2026.2.0 Windows-only plugin** for camera animation: a timeline-based shot sequencer with physically-grounded motion, beat-synced behavior, and a preset shot library. The signature verb is **slate** — non-destructively aligning shot positions to motion-energy peaks in the audio.
 
-Two plugins ship side by side: a small **Python plugin** at `src/` that registers the camera rig tag (spring/damper, quat look-at, fBm noise, autofocus, framing, zoom — the per-frame TagData), and a **C++ plugin** at `host/shotblocks_v2/` whose docked dialog hosts a WebView2 React UI for the timeline. The v1 Python timeline UI has been retired; v2 owns the timeline.
+Two plugins ship side by side: a small **Python plugin** at `src/` that registers the camera rig tag (spring/damper, quat look-at, fBm noise, autofocus, framing, zoom — the per-frame TagData), and a **C++ plugin** at `host/shotblocks/` whose docked dialog hosts a WebView2 React UI for the timeline. The v1 Python timeline UI has been retired; v2 owns the timeline.
 
 Authoritative project context lives under `.agent/`. **Start there before non-trivial work** — the router is the entry point:
 
@@ -51,7 +51,7 @@ This is a hard process rule, learned the expensive way. Bug-chasing sessions go 
 
 ## Code layout
 
-The Python plugin under `src/` is rig-only after the v2 timeline port. The C++ plugin and its React UI under `host/shotblocks_v2/` own the timeline.
+The Python plugin under `src/` is rig-only after the v2 timeline port. The C++ plugin and its React UI under `host/shotblocks/` own the timeline.
 
 **Python (`src/`) — the camera rig tag:**
 - `shotblocks.pyp` — plugin entry point. Registers only the Shotblocks tag. Inserts its own folder onto `sys.path` so the `sb_rig_*` siblings import cleanly.
@@ -60,13 +60,13 @@ The Python plugin under `src/` is rig-only after the v2 timeline port. The C++ p
 - `src/vendor/` — bundled binary deps with verbatim license files. `minimp3.dll` ships but is currently unused by the Python plugin (kept for an eventual audio-reactive rig parameter); `build/` keeps the rebuild source and is excluded from deploy via `robocopy /XD build`.
 - `src/res/` — required global stubs (`c4d_symbols.h`, `strings_en-US/c4d_strings.str`) plus the tag's `.res`/`.h`/`.str` and `tshotblocks.tif` icon.
 
-**C++ (`host/shotblocks_v2/`) — the timeline plugin:**
+**C++ (`host/shotblocks/`) — the timeline plugin:**
 - `source/main.cpp` — single-file plugin. Registers the v2 command + dialog, hosts the WebView2 (via C4D 2026's `HtmlViewerCustomGui`), runs the loopback HTTP server bridge, drives playback timer + camera routing + persistence.
 - `web/src/` — React + TypeScript + Vite UI. Zustand store, ~30 hooks, ~20 components, flat layout. `vite-plugin-singlefile` bundles into one `dist/index.html` loaded via `file://`.
 
 ## Plugin model essentials
 
-- **Single tag.** The Shotblocks tag is the only user-visible Python plugin element; rig behaviors (spring-damper, look-at, noise, autofocus, framing, zoom) are internal subsystems exposed in its Attribute Manager, not separate tags. The C++ v2 plugin provides its own command + docked dialog for the timeline UI; their ID rule (the v2 command and its async dialog share one plugin ID so C4D's layout-restore can match the saved slot — mismatched IDs produce "Plugin not found") lives in `host/shotblocks_v2/source/main.cpp`.
+- **Single tag.** The Shotblocks tag is the only user-visible Python plugin element; rig behaviors (spring-damper, look-at, noise, autofocus, framing, zoom) are internal subsystems exposed in its Attribute Manager, not separate tags. The C++ v2 plugin provides its own command + docked dialog for the timeline UI; their ID rule (the v2 command and its async dialog share one plugin ID so C4D's layout-restore can match the saved slot — mismatched IDs produce "Plugin not found") lives in `host/shotblocks/source/main.cpp`.
 - **No rig nulls.** The tag's `Execute` reads the camera's evaluated pose and writes the procedural result directly back to the camera. Every behavior is math on the pose, not a chain of null objects in the OM. This was a v10 decision and is documented in `.agent/skills/rig-hierarchy.md` and the architecture.
 - **Tag pose writes go through `SetRelRot`/`SetRelPos`** (local channels) rather than `SetMg`. World-matrix writes get clobbered by C4D's world-from-local recompose; local-channel writes survive.
 - **`id(tag)` and `GetUniqueIP()` churn on every Execute.** Per-tag state is keyed via a marker in the tag's `BaseContainer`, not by Python identity.
