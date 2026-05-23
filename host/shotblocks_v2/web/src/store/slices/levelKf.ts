@@ -142,12 +142,36 @@ export const createLevelKfSlice: StateCreator<State, [], [], LevelKfSlice> = (se
     const next = patchAudioClip(s.audioTracks, clipId, (c) => {
       const kfs = c.levelKeyframes;
       if (!kfs) return c;
+      // Applying an interp to a node reshapes BOTH adjacent segments
+      // — segment-in (prev→node) and segment-out (node→next) — by
+      // seeding all four involved tangents. The evaluator reads
+      // tangents directly (interp is just a UI hint), so updating
+      // only the outgoing pair left the segment ARRIVING at the
+      // selected node looking unchanged. Users expect "set ease-in-
+      // out on this node" to look like ease-in-out on the whole
+      // thing around it. 'hold' is a step (no preset tangents);
+      // 'custom' is per-handle and not reachable from this menu.
       const out = kfs.map((k, i) => {
+        // Selected node: stamp its own interp + both tangents (the
+        // segment leaving it uses outTan; the segment arriving uses
+        // inTan via this node's inTan).
         if (sel.has(i)) {
-          return { ...k, interp, outTan: preset ? { ...preset.out } : k.outTan };
+          return {
+            ...k,
+            interp,
+            outTan: preset ? { ...preset.out } : k.outTan,
+            inTan:  preset ? { ...preset.nextIn } : k.inTan,
+          };
         }
+        // Neighbor AFTER a selected node: stamp its inTan so the
+        // outgoing segment from the selected node arrives correctly.
         if (preset && sel.has(i - 1)) {
           return { ...k, inTan: { ...preset.nextIn } };
+        }
+        // Neighbor BEFORE a selected node: stamp its outTan so the
+        // incoming segment to the selected node leaves correctly.
+        if (preset && sel.has(i + 1)) {
+          return { ...k, outTan: { ...preset.out } };
         }
         return k;
       });
@@ -160,9 +184,10 @@ export const createLevelKfSlice: StateCreator<State, [], [], LevelKfSlice> = (se
     const next = patchAudioClip(s.audioTracks, clipId, (c) => {
       const kfs = c.levelKeyframes;
       if (!kfs || index < 0 || index >= kfs.length) return c;
-      // A named preset seeds this node's OUTGOING tangent + the next
-      // node's INCOMING tangent (the preset shapes the whole segment).
-      // 'hold' / 'custom' carry no preset tangents.
+      // See setLevelKeyframesInterp above: reshape BOTH adjacent
+      // segments by seeding all four involved tangents (this node's
+      // outTan + inTan; the next node's inTan; the previous node's
+      // outTan). 'hold' / 'custom' carry no preset tangents.
       const preset = LEVEL_PRESET_TANGENTS[interp];
       const out = kfs.map((k, i) => {
         if (i === index) {
@@ -170,10 +195,14 @@ export const createLevelKfSlice: StateCreator<State, [], [], LevelKfSlice> = (se
             ...k,
             interp,
             outTan: preset ? { ...preset.out } : k.outTan,
+            inTan:  preset ? { ...preset.nextIn } : k.inTan,
           };
         }
         if (i === index + 1 && preset) {
           return { ...k, inTan: { ...preset.nextIn } };
+        }
+        if (i === index - 1 && preset) {
+          return { ...k, outTan: { ...preset.out } };
         }
         return k;
       });
