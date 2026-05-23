@@ -2,49 +2,56 @@
 
 The system shape. Read this before adding any feature so it lands in the right place.
 
+Shotblocks ships as **two plugins side-by-side**:
+- **Python plugin (`src/`)** — registers the camera rig tag. Per-frame TagData that runs spring-damper, look-at, noise, autofocus, framing, zoom on the camera's pose.
+- **C++ plugin (`host/shotblocks_v2/`)** — registers the timeline command and dialog. Hosts a WebView2 (via C4D 2026's `HtmlViewerCustomGui`) running a React + TypeScript UI for the timeline, preset library, inspector, play range, and audio.
+
+The v1 Python timeline UI has been retired; v2 (the C++ plugin) owns the timeline. The rig tag remains in Python until its math ports to C++.
+
 ## High-level layers
 
 ```
 ┌─────────────────────────────────────────────────────────────┐
 │  User's scene (in Object Manager)                           │
 │  - cameras the user created                                 │
-│  - optional Shotblocks tag on a camera unlocks procedural rig   │
+│  - optional Shotblocks tag on a camera unlocks procedural   │
+│    rig (spring/damper, look-at, noise, autofocus, …)        │
 └─────────────────────────────────────────────────────────────┘
                             │
                 drag camera onto timeline
                             ▼
 ┌─────────────────────────────────────────────────────────────┐
-│  Timeline UI (custom dialog)                                │
+│  Timeline UI — C++ plugin + WebView2/React (host/v2)        │
 │  - shot blocks (hard cuts only), audio waveform, markers    │
 │  - play range (draggable handles, always visible)           │
 │  - direct manipulation: drag is primary, hotkeys optional   │
-│  - preset library panel                                     │
+│  - preset library panel (planned)                           │
 │  - inspector panel (per-shot properties)                    │
 └─────────────────────────────────────────────────────────────┘
                             │
                             ▼
 ┌─────────────────────────────────────────────────────────────┐
-│  Sequencer core                                             │
-│  - shot list, active-shot lookup at frame N                 │
-│  - routes camera output for the active shot                 │
-│  - bake-down to standard C4D camera                         │
-│  - slate engine: motion-energy + audio → alignment          │
+│  Sequencer core — C++                                       │
+│  - shot list (persisted in a hidden helper BaseObject)      │
+│  - active-shot lookup at frame N                            │
+│  - routes camera output: SetSceneCamera + DrawViews         │
+│  - playback clock (v2 owns it; honors range + loop)         │
 └─────────────────────────────────────────────────────────────┘
                             │
-        ┌──────────┬────────┼────────┬──────────┐
-        ▼          ▼        ▼        ▼          ▼
-┌─────────────┐ ┌──────┐ ┌──────┐ ┌────────┐ ┌────────┐
-│ Shotblocks tag  │ │Audio │ │Motion│ │Preset  │ │Bake    │
-│ (TagData on │ │subsys│ │energy│ │library │ │engine  │
-│ user camera)│ │      │ │      │ │        │ │        │
-│ generates   │ │decode│ │peak  │ │JSON +  │ │curve   │
-│ rig + runs  │ │wave  │ │detect│ │thumbs  │ │reduce  │
-│ behaviors:  │ │onset │ └──────┘ └────────┘ └────────┘
-│ springs,    │ │play  │
-│ look-at,    │ └──────┘
-│ autofocus,  │
-│ noise,      │
-│ framing     │
+        ┌──────────┬────────┴────────┬──────────────┐
+        ▼          ▼                 ▼              ▼
+┌─────────────┐ ┌──────────────┐ ┌──────────┐ ┌────────────┐
+│ Shotblocks  │ │ Audio        │ │ Preset   │ │ Bake / slate│
+│ rig tag —   │ │ (WebView2):  │ │ library  │ │ engines     │
+│ Python      │ │  - decode    │ │ (planned)│ │ (planned)   │
+│ TagData     │ │  - peaks     │ └──────────┘ └────────────┘
+│ runs per    │ │  - playback  │
+│ frame:      │ │  - meter     │
+│ springs,    │ │  - onsets/   │
+│ look-at,    │ │    beats     │
+│ noise, AF,  │ └──────────────┘
+│ framing,    │
+│ zoom        │
 └─────────────┘
 ```
 
@@ -71,19 +78,19 @@ Each behavior is math that operates on the camera's pose (and on per-behavior st
 
 In additive mode, behaviors that are inherently replacement operations (look-at, framing rule) are applied as gentle corrective offsets toward the target rather than full rotation replacement. The user can dial the strength of those offsets from 0% (no effect) to 100% (full look-at, equivalent to replace mode for that channel). Behaviors that are naturally additive (spring damping, noise, autofocus on its own focus channel) work the same in both modes.
 
-**Sequencer core** — pure Python module, not a C4D object. Holds the shot list as an in-memory model, persists to the document via a `BaseList2D` container or scene hook. Resolves which shot is active at frame N (always exactly one — shots do not overlap; boundaries are hard cuts), and routes camera output: the active shot's source camera is what renders to the viewport. If that camera has a Shotblocks tag, the tag's procedural pipeline runs and applies the shot's per-shot rig state. If not, the camera's own animation plays through. Hosts the slate engine.
+**Sequencer core** — implemented in the C++ plugin (`host/shotblocks_v2/source/main.cpp`). Holds the shot list as state shared with the React UI via the loopback HTTP bridge; persists to the document via a hidden helper `BaseObject` (see "Persistence" below). Resolves which shot is active at frame N (always exactly one — shots do not overlap; boundaries are hard cuts), and routes camera output: the active shot's source camera becomes the scene camera via `bd->SetSceneCamera(cam) + DrawViews(FORCEFULLREDRAW)`. If that camera has a Shotblocks tag, the tag's procedural pipeline runs and applies the shot's per-shot rig state. If not, the camera's own animation plays through. Will host the slate engine (not yet implemented).
 
-**Slate engine** — the algorithm that aligns shots to the music using motion-energy peaks. Lives inside the sequencer core because it operates on shot positions and reads the audio's beat grid plus the camera's evaluated motion. See "The slate engine" section below.
+**Slate engine** — the algorithm that aligns shots to the music using motion-energy peaks. Will live inside the sequencer core because it operates on shot positions and reads the audio's beat grid plus the camera's evaluated motion. See "The slate engine" section below. Not yet built — parked until v2 reaches feature parity with v1.
 
-**Motion-energy module** — given a shot, evaluates the shot's source camera over the shot's frame range and produces a per-frame motion-energy curve (combined translational velocity, rotational velocity, and acceleration). Works whether the camera has a Shotblocks tag or not — for tagged cameras, the rig's evaluated motion is the source; for untagged cameras, the camera's own animated transforms are the source. Identifies action frames (peaks). Cached per-shot, invalidated when the shot's parameters or the source camera's animation changes.
+**Motion-energy module** — given a shot, evaluates the shot's source camera over the shot's frame range and produces a per-frame motion-energy curve (combined translational velocity, rotational velocity, and acceleration). Works whether the camera has a Shotblocks tag or not — for tagged cameras, the rig's evaluated motion is the source; for untagged cameras, the camera's own animated transforms are the source. Identifies action frames (peaks). Cached per-shot, invalidated when the shot's parameters or the source camera's animation changes. Will run in C++ alongside the sequencer core. Not yet built.
 
-**Timeline dialog** — `GeDialog` subclass with a custom-drawn area (`GeUserArea`) for the timeline itself, plus standard widgets for the inspector and preset panels. Uses C4D's draw API for the waveform, shot blocks, markers, and play-range bar. Implements direct-manipulation behavior (drag-move, drag-resize, multi-select, ripple/roll edits) following After Effects conventions, since AE is where Shotblocks's target users live. Accepts drag-and-drop of cameras from the Object Manager onto the timeline area to create shots; accepts drag-and-drop of presets from the preset panel onto shots or onto empty timeline space.
+**Timeline dialog (v2)** — a C++ `GeDialog` whose only child is a `HtmlViewerCustomGui` rendering the React UI from `host/shotblocks_v2/web/dist/index.html`. The HTML is loaded via `file://` and bundled into a single inlined file by `vite-plugin-singlefile`. JS → C++ messages go over a loopback HTTP server inside the plugin DLL (announced to the WebView via `PostWebMessage` at hello); C++ → JS goes via `PostWebMessage`. Drag-and-drop from the Object Manager is caught by the dialog's `BFM_DRAGRECEIVE` handler (file drops are handled in JS because WebView2 intercepts them). Direct-manipulation behavior (drag-move, drag-resize, multi-select, ripple, roll, slip, pen) runs in React/TypeScript following Premiere / After Effects conventions.
 
-**Play range** — a first-class element of the timeline, owned by the timeline dialog. A draggable in/out range, always defined and always visible, displayed at the top of the timeline area. The play button (or spacebar) plays from cursor position to the out-point of the range; on reaching the out-point, playback either stops or wraps to the in-point depending on a visible loop toggle. The range affects playback behavior only — shots outside the range remain fully selectable and editable. The user adjusts the range by dragging the range handles directly, by right-clicking a selection ("set range to selection," "set range to this shot," "range to all"), or via the optional `I` and `O` hotkeys.
+**Play range** — a first-class element of the timeline, owned by the C++ plugin (`_v2RangeIn` / `_v2RangeOut` / `_v2LoopEnabled` — cached in C++, NOT written to C4D's `LoopMinTime`/`LoopMaxTime` since C4D 2026 doesn't expose the loop flag to plugins). A draggable in/out range, always defined and always visible, displayed at the top of the timeline area. The play button or spacebar plays from cursor position to the out-point; on reaching the out-point, playback either stops or wraps to the in-point depending on the v2 loop toggle. The range affects playback behavior only — shots outside the range remain fully selectable and editable. The user adjusts the range by dragging the range handles (chevron grips at the ruler edges) or via `I` / `O` / `/` hotkeys.
 
-**Audio subsystem** — Python module wrapping a bundled audio decoder (likely a small C extension or pure-Python decoder for WAV; MP3/AAC via a bundled lightweight library). Provides decoded samples for waveform display, sync playback during scrubbing, and onset detection. Cached per-document so reload is instant. Audio is added to the document by dragging an audio file onto the timeline area.
+**Audio subsystem** — runs in the WebView2 process via WebAudio. JS handles decode (`decodeAudioData` for WAV / MP3 / etc.), waveform peaks (multi-resolution pyramid, dB-scaled, smooth Bezier envelope), playback (per-clip `AudioBufferSourceNode` + per-clip `GainNode` driven by the level-curve), the live dB meter (RMS-envelope sampled at the playhead), and beat detection (Ellis DP beat tracker). Audio bytes are pushed once to C++ via the `audio-add` bridge command and persisted in the doc helper container so they survive save/reload. WebView2 hides absolute file paths so the binary bytes are the only persistence currency.
 
-**Preset library** — JSON files on disk under `presets/` for shipped presets and a user directory for saved ones. Each preset references a thumbnail (animated GIF or sprite-strip) generated on save against an abstracted scene. Presets are dragged from the panel onto shots (applies the preset to that shot) or onto empty timeline space (creates a new shot using a newly-spawned tagged camera).
+**Preset library** — JSON files on disk under the plugin's data directory for shipped presets and a user directory for saved ones. Each preset references a thumbnail (animated GIF or sprite-strip) generated on save against an abstracted scene. Presets are dragged from the panel onto shots (applies the preset to that shot) or onto empty timeline space (creates a new shot using a newly-spawned tagged camera). Not yet built.
 
 ## Data flow per frame
 
@@ -99,7 +106,7 @@ When the document advances to frame N:
 
 This flow runs every frame during playback. Performance discipline lives in the Shotblocks tag's behavior code, not the sequencer core — the sequencer just routes; the tag does the per-frame math (when active).
 
-**v10 status:** the Shotblocks tag is wired and runs additive-mode spring-damper smoothing on the camera's pose each frame. Replace mode parameter exists in AM but the Execute path short-circuits with a console warning (no presets, look-at, or framing rules yet to drive it). Steps 1, 2, 3, 4, and 6 are implemented; step 5 (replace mode) is a v11 deliverable. No rig nulls were ever generated — the no-nulls decision was made during v10 implementation when the OM-clutter and buried-tag costs became apparent.
+**Current status:** the Shotblocks tag runs spring-damper, look-at, noise, autofocus, framing, and zoom on the camera's pose each frame. Replace mode is selectable in AM but the Execute path short-circuits with a console warning (no presets yet to drive it). Steps 1, 2, 4, 6, and 7 of the flow are implemented in v2's C++ sequencer; step 3 (applying per-shot rig state) is not — the v2 timeline currently only routes the active camera; per-shot rig overrides are deferred until presets exist. Step 5 (replace mode) is deferred for the same reason. No rig nulls are ever generated.
 
 ### Slate in additive mode
 
@@ -117,9 +124,9 @@ When a camera referenced by one or more shots is deleted, Shotblocks **detects a
 
 1. On the next `EVMSG_CHANGE` after the deletion, the timeline recomputes which shots have dead camera references.
 2. Affected shots flip to the *orphan* visual state — dashed dark-red border, muted body fill, label prefixed `(missing) `.
-3. A console line names how many shots became orphaned and reminds the user that Cmd+Z restores the deleted camera. (A real status-line widget joins the post-v5 visual-polish pass.)
+3. A console line names how many shots became orphaned and reminds the user that Cmd+Z restores the deleted camera.
 
-Orphaned shots remain on the timeline as visible blocks but are rendered in a clearly distinct visual state. They cannot play back — when the cursor enters an orphaned shot, the viewport shows a placeholder frame and the status line names the missing camera. (Playback engine is v5+.)
+Orphaned shots remain on the timeline as visible blocks but are rendered in a clearly distinct visual state. They cannot play back — when the cursor enters an orphaned shot, the viewport keeps whatever camera was last active and the shot's visual state signals the missing source.
 
 The user has three resolution paths for an orphaned shot:
 - **Remove the shot** — right-click → `Remove` (the verb flips from `Delete` to `Remove` when the selection is all-orphan); cleanly deletes the orphaned block.
@@ -200,13 +207,13 @@ If a slate produces no visible change (the selection was already aligned, or no 
 
 ## Persistence
 
-**Per document:** the shot list, audio file reference, marker set, and rig generator instance live in the C4D document. The carrier is a hidden helper `BaseObject` (a null with `NBIT_OHIDE`) inserted into the document; shot data serializes as JSON in the helper's `BaseContainer`. The helper is found by a marker container key on first access and created if absent. Mutations are wrapped in `doc.StartUndo() / AddUndo(UNDOTYPE_CHANGE_SMALL, helper) / EndUndo()` so create / move / resize / delete are all undoable.
+**Per document:** the shot list, track list, level keyframes, range / loop state, camera links, and the raw bytes of each imported audio file live in the C4D document. The carrier is a hidden helper `BaseObject` (a null named `_shotblocks_v2` with `NBIT_OHIDE`) inserted into the document root by the C++ plugin. The clip-and-state JSON serializes into one `BaseContainer` entry; audio bytes go into per-clip keyed entries (`BCKEY_V2_AUDIO_BASE + clipId`) so a clip move/trim doesn't re-ship the bytes. The helper is found by its marker container value on first access and created if absent. Save mutations are wrapped in `StartUndo / AddUndo(CHANGE_SMALL, helper) / EndUndo` and bump a version counter on the helper so undo/redo round-trip through `EVMSG_CHANGE` → load-state.
 
-Why the hidden null instead of `SceneHookData` or a `BaseList2D` attachment: `c4d.plugins.SceneHookData` is not exposed in the C4D 2026.2.0 Python SDK (verified empirically — `getattr(c4d.plugins, "SceneHookData", None)` returns None). A bare `BaseList2D` attachment to the document is invisible but its lifecycle is surprising on undo and copy/paste. A hidden null is a real document object: invisible to the Object Manager (`NBIT_OHIDE`), survives save/load, and integrates with the standard undo system. The cost is one document-internal object the user never sees.
+Why the hidden null instead of `SceneHookData` or a `BaseList2D` attachment: `c4d.plugins.SceneHookData` is not exposed in the C4D 2026.2.0 Python SDK (verified empirically — `getattr(c4d.plugins, "SceneHookData", None)` returns None). A bare `BaseList2D` attachment to the document is invisible but its lifecycle is surprising on undo and copy/paste. A hidden null is a real document object: invisible to the Object Manager (`NBIT_OHIDE`), survives save/load, and integrates with the standard undo system.
 
-**Global:** preset library lives on disk under the plugin's data directory. User-saved presets go to a user directory (platform-specific). Thumbnails cached alongside.
+WebView2 hides absolute file paths from JS (Chromium security model), so audio is keyed by `mediaId` and stored as binary bytes — never as a file path. This means audio survives save/reload but a path-relative reference is impossible.
 
-**Project-relative:** the audio file path stored as project-relative when possible, absolute as fallback.
+**Global:** preset library will live on disk under the plugin's data directory. User-saved presets will go to a user directory (platform-specific). Not yet built.
 
 ## Bake-down
 
@@ -223,11 +230,12 @@ Curve reduction is critical. A naive bake produces unusable per-frame keys. Use 
 
 ## Threading and performance
 
-- Spring-damper math runs on the main thread inside the tag's `Execute` — this is unavoidable in C4D's tag model.
-- Audio decoding and onset detection run on a worker thread, posted back to the main thread when complete.
-- Thumbnail generation runs on a worker thread.
-- Waveform drawing is cached as a pre-rendered bitmap, redrawn only when zoom or audio changes.
+- All rig math (spring-damper, look-at, noise, autofocus, framing, zoom) runs on the C4D main thread inside the Python tag's `Execute` — unavoidable in C4D's tag model.
+- Audio decode, waveform peak pyramids, and beat detection run in the WebView2 process via WebAudio. The main C4D thread is never blocked by audio work.
+- The C++ plugin's loopback HTTP server runs on a worker thread; requests are marshalled to the main thread via `SpecialEventAdd` → `CoreMessage`.
+- Waveform drawing uses a multi-resolution peak pyramid + rAF-throttled canvas redraw on the JS side. The renderer picks the coarsest pyramid level whose bucket is still ≤1 CSS pixel wide.
 - Avoid scene traversal inside per-frame tag code. Cache references to target objects on tag init; only walk the scene when the user changes a target.
+- Don't subscribe a React component to the whole store via `useStore((s) => s)` — every store mutation re-renders every consumer at 60fps during a drag.
 
 ## Versioning strategy
 
@@ -248,7 +256,7 @@ The full plugin must be operable using only the mouse. Hotkeys exist as accelera
 - **Drag an audio file onto the timeline** → loads it as the document's audio, generates waveform and beat markers.
 - **Drag a shot block** to move its position. Horizontal drag changes frame range; vertical drag changes track. Same-track collision: replace by default, Shift = ripple; snap-to-edge selectable via toolbar toggle (see "Overlap policy" above).
 - **Drag the leading or trailing edge of a shot** to resize it. Same-track collision uses the overlap policy: trim neighbor by default, Shift = ripple neighbor; snap to neighbor's edge when snap toggle is on.
-- **Alt is the canvas navigation modifier.** Alt+LMB drag → pan. Alt+RMB drag → zoom around click. Alt+scroll → zoom around cursor. Plain scroll → horizontal pan. Middle-mouse drag is *not* bound — C4D's framework intercepts MMB before it reaches `GeUserArea`'s drag system regardless of qualifier (verified empirically: `MouseDrag` returns terminal immediately for both plain MMB and Alt+MMB). Native C4D panels pan on Alt+MMB because they use the lower-level C++ input layer; Python plugins don't get that access in 2026. We substitute Alt+LMB so Alt remains the unifying nav modifier across all gestures.
+- **Navigation gestures match C4D's viewport.** **Alt+RMB drag** → zoom around the cursor's frame + track-row (factor = exp(-d/200), per Python `_drag_zoom`). **MMB drag** → 1:1 pan, hand-tool style. Horizontal pans h-time; vertical pans the side (V/A) the cursor started in. This works in WebView2 (we receive MMB as `button === 1` pointer events) where it didn't in v1's Python `GeUserArea` (C4D intercepted MMB before the user area).
 - **Drag a cut point** (the boundary between two shots) to perform a roll edit.
 - **Drag the in-point or out-point handles** at the top of the timeline to change the play range.
 - **Drag the play-range bar itself** (between the handles) to slide both handles together preserving range length.
@@ -282,49 +290,56 @@ For users who want them — none of these are the only path:
 
 Slate is *additive* to all of this. Every slate produces a new arrangement that is then immediately editable by all the above operations. Slate never produces a "shotblocks" lock state. Slate never disables drag.
 
-## Module layout (src/)
+## Module layout
+
+Two plugins, two layouts. See CLAUDE.md "Code layout" for the canonical reference; this is the architectural view.
+
+### Python plugin (`src/`) — camera rig tag
 
 ```
 src/
-  __init__.py
-  plugin_main.py            # registration entry point
-  # c4d_compat.py             # API version shims — re-introduce only when targeting more than one version
-  rig/
-    shotblocks_tag.py       # the TagData class - applied by user to a camera
-    parameters.py           # parameter IDs and defaults exposed in Attribute Manager
-    behaviors/
-      spring_damper.py      # internal subsystem, not a separate tag
-      look_at.py
-      autofocus.py
-      noise_profile.py
-      framing_rule.py
-      # (No `hierarchy.py` — the rig is math on the camera's pose,
-      # not a chain of null objects in the OM. See `skills/rig-hierarchy.md`
-      # for the historical context.)
-  sequencer/
-    core.py                 # shot list, active-shot resolution
-    shot.py                 # Shot data class
-    motion_energy.py        # per-shot motion-energy curve and peak detection
-    slate.py                # the slate engine: edge / single / multi / all
-    play_range.py           # in-point, out-point, loop state, range queries
-    persistence.py          # document save/load
-  audio/
-    decoder.py              # audio file loading
-    waveform.py             # waveform generation and caching
-    onset.py                # beat / onset detection
-    playback.py             # scrubbing-synced playback
-  presets/
-    library.py              # load / save / browse
-    thumbnails.py           # generation
-    schema.py               # preset JSON schema
-  ui/
-    timeline_dialog.py      # main GeDialog; owns the status line
-    timeline_area.py        # GeUserArea for the timeline
-    direct_manipulation.py  # drag-move, drag-resize, ripple/roll, multi-select
-    inspector.py            # per-shot property panel
-    preset_panel.py         # preset library panel
-    drawing.py              # shared draw utilities
-  bake/
-    baker.py                # rig → standard camera bake
-    curve_reduction.py      # F-curve simplification
+  shotblocks.pyp            # plugin entry point — registers ShotblocksTag only
+  sb_rig_tag.py             # TagData. Per-frame Execute runs the rig pipeline.
+  sb_rig_spring.py          # spring-damper smoothing on pose
+  sb_rig_quat.py            # quaternion math + look-at
+  sb_rig_noise.py           # fBm noise (translation + rotation; pre/post-spring bands)
+  sb_rig_zoom.py            # zoom / autofocus / framing
+  res/
+    description/tshotblocks.{res,h,str}
+    icons/tshotblocks.tif
+  vendor/                   # bundled binary deps (minimp3.dll — currently unused, kept for future audio-reactive params)
 ```
+
+Behaviors are *subsystems of one tag*, not separate tags. The user only sees one Shotblocks tag in the AM; spring/damper, look-at, noise, autofocus, framing, zoom all expose their parameters there.
+
+### C++ plugin (`host/shotblocks_v2/`) — timeline UI
+
+```
+host/shotblocks_v2/
+  source/main.cpp           # single-file C++ plugin
+                            # - registers the v2 command + dialog
+                            # - hosts HtmlViewerCustomGui
+                            # - loopback HTTP server (JS → C++ bridge)
+                            # - playback timer, camera routing, persistence
+                            # - BFM_DRAGRECEIVE for OM drops
+  project/CMakeLists.txt    # build config (manual, shadows auto-generated)
+  web/
+    src/
+      App.tsx               # root + hook orchestration
+      store.ts              # Zustand store (clips, tracks, view, playback, audio, …)
+      useClipDrag.ts        # body/group/ripple/trim/roll/slip drag modes
+      usePersistence.ts     # save-state debounce + load on hello
+      useAudioPlayback.ts   # WebAudio scheduling + scrub blips
+      useKeyboard.ts        # keyboard shortcut wiring
+      useHost.ts            # bridge init + tick routing
+      …
+      components/           # Lane, ShotBlock, Ruler, Playhead, RangeBar, RangeDim,
+                            # Meter, WaveformCanvas, LevelCurve, Inspector,
+                            # TrackHeader, HeadersColumn, BeatGrid, BeatDots, …
+      lib/                  # audioStore, peaks, onsets, levelCurve,
+                            # beatDetection, beatGridLayout, host, slipPreview, …
+      icons/                # Figma SVGs (verbatim) + Inter woff2
+    vite.config.ts          # vite-plugin-singlefile inlines everything into one HTML
+```
+
+The web build outputs one `dist/index.html` (~900KB) loaded by C++ via `file://`. There is no separate JS / CSS — everything is inlined.
