@@ -30,18 +30,20 @@ export function useDragRecovery() {
       if (s.dragClip != null) s.setDragClip(null);
       if (s.spawnGhost != null) s.setSpawnGhost(null);
       if (s.snapIndicatorFrames.length > 0) s.setSnapIndicatorFrames([]);
-      // Wipe inline drag styles defensively in case useClipDrag's
-      // closure cleanup never ran.
+      // Wipe inline drag styles in case useClipDrag's closure cleanup
+      // never ran. useClipDrag only writes `transform` (the visual
+      // translation during a solo body drag), so that's the only
+      // inline property to clear here. An earlier version of this
+      // hook also blanked left/top/width/height/position — but those
+      // are React-managed style props on ShotBlock (the clip's
+      // pixel-percent placement comes from Lane.tsx as inline
+      // style={...}). Blanking them via the DOM bypasses React's
+      // style-diffing, so the next render doesn't re-apply them and
+      // the clip renders as a zero-width strip until something else
+      // triggers a fresh render (e.g. a click). The narrow `transform`
+      // wipe is what we actually need.
       const stuck = document.querySelector<HTMLElement>('.shot-block.is-dragging');
-      if (stuck) {
-        stuck.style.transform = '';
-        stuck.style.left = '';
-        stuck.style.top = '';
-        stuck.style.width = '';
-        stuck.style.height = '';
-        stuck.style.zIndex = '';
-        stuck.style.position = '';
-      }
+      if (stuck) stuck.style.transform = '';
     }
     function onVisibility() {
       if (document.hidden) clear();
