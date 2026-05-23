@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from 'react';
-import { useStore, magneticSnap, audioPeakDocFrames, SNAP_PIXEL_RADIUS } from '../store';
+import { useStore, magneticSnap, audioPeakDocFrames, SNAP_PIXEL_RADIUS, clipEdgeZonePx } from '../store';
 import type { Track } from '../store';
 import { ShotBlock } from './ShotBlock';
 import { useElementSize } from '../useElementSize';
@@ -23,11 +23,6 @@ type CursorMode = 'default' | 'trim' | 'roll';
  *  The lane sets a `cursor` value on itself so the cursor shape tells
  *  the user the mode (ew-resize for trim, col-resize for roll). */
 const THIN_THRESHOLD_PX = 32;
-/** Hit zone width for trim/roll detection at clip edges. Matches Python
- *  EDGE_HIT_PX = 24 (sb_canvas.py:217). At a seam between two clips this
- *  zone is shared (16px straddles both); see the seam-handling logic
- *  below. */
-const EDGE_PX = 24;
 
 export function Lane({ track, side }: { track: Track; side: 'video' | 'audio' }) {
   const laneRef = useRef<HTMLDivElement | null>(null);
@@ -137,12 +132,7 @@ export function Lane({ track, side }: { track: Track; side: 'video' | 'audio' })
       // at clip_width/3 with floor 1px — that minimum was unusable
       // in the React UI at v2's higher MIN_CLIP_FRAMES.
       const clipWidth = rightPx - leftPx;
-      const edgeZoneFloor = 6;
-      const edgeZone = Math.min(
-        EDGE_PX,
-        Math.max(edgeZoneFloor, Math.floor(clipWidth / 3)),
-        Math.floor(clipWidth / 2),   // never let two zones overlap each other
-      );
+      const edgeZone = clipEdgeZonePx(clipWidth);
 
       // SEAM CASE: if this clip's right edge meets the next clip's
       // left edge, treat the full overlap zone [rightPx - edgeZone,

@@ -13,6 +13,35 @@ export const SNAP_PIXEL_RADIUS = 8;
 export const HEADERS_MIN_W = 200;
 export const HEADERS_MAX_W = 600;
 
+/** Natural / floor lane heights (px). Video tracks render at the
+ *  natural height (fixed); audio tracks zoom between natural and the
+ *  floor. Below the floor the icon-above-label header layout stops
+ *  being readable. */
+export const NATURAL_TRACK_PX = 65;
+export const MIN_TRACK_PX = 48;
+
+/** Pixel hit zone at each clip edge that is reserved for trim / roll.
+ *  Mirrors Python's EDGE_HIT_PX = 24 (sb_canvas.py:217). Scales down
+ *  on narrow clips via the formula
+ *    min(EDGE_HIT_PX, max(EDGE_HIT_PX_FLOOR, clipWidthPx / 3), clipWidthPx / 2)
+ *  so trim zones never fully consume the clip and very narrow clips
+ *  still expose a grabbable handle. Lane's edge-hover detection and
+ *  useClipDrag's body-drag reserve must agree on this formula. */
+export const EDGE_HIT_PX = 24;
+export const EDGE_HIT_PX_FLOOR = 6;
+
+/** Per-clip trim/roll edge-zone width, scaled to clip width.
+ *  Lane's edge-hover detection and useClipDrag's body-drag reserve
+ *  call this so the two stay in sync — without it they drifted apart
+ *  during Round 13. */
+export function clipEdgeZonePx(clipWidthPx: number): number {
+  return Math.min(
+    EDGE_HIT_PX,
+    Math.max(EDGE_HIT_PX_FLOOR, Math.floor(clipWidthPx / 3)),
+    Math.floor(clipWidthPx / 2),
+  );
+}
+
 export type ToolId = 'select' | 'razor' | 'pen' | 'slip';
 export type ClipState = 'unselected' | 'selected' | 'orphaned' | 'orphaned-selected' | 'locked';
 

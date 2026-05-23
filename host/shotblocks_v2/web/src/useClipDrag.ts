@@ -1,30 +1,11 @@
 import { useEffect, useRef, type RefObject } from 'react';
 import { gsap } from 'gsap';
-import { useStore, magneticSnap, audioPeakDocFrames, isTrackLocked, SNAP_PIXEL_RADIUS, type Clip } from './store';
+import { useStore, magneticSnap, audioPeakDocFrames, isTrackLocked, SNAP_PIXEL_RADIUS, clipEdgeZonePx, type Clip } from './store';
 import { setSlipPreview, clearSlipPreview } from './lib/slipPreview';
 
 /** Pixel slop before a pointerdown becomes a real drag. Below this we
  *  treat it as a click (selection, later). */
 const DRAG_THRESHOLD_PX = 3;
-
-/** Pixel zone at each edge of the clip body that is reserved for trim
- *  / roll. Pointerdown inside this zone does not start a body-drag.
- *  24px nominal (matches Python EDGE_HIT_PX, sb_canvas.py:217), but
- *  scales down on narrow clips via clipWidthEdgeZone() below so trim
- *  zones never fully consume the clip. Must stay in sync with Lane's
- *  edge-hover detection — both use the same formula. */
-const EDGE_RESERVE_PX_MAX = 24;
-const EDGE_RESERVE_PX_FLOOR = 6;
-
-/** Match Lane.tsx's edgeZone formula exactly so the body-drag reserve
- *  and the lane's hover detection agree on where the trim zone ends. */
-function clipWidthEdgeZone(clipWidthPx: number): number {
-  return Math.min(
-    EDGE_RESERVE_PX_MAX,
-    Math.max(EDGE_RESERVE_PX_FLOOR, Math.floor(clipWidthPx / 3)),
-    Math.floor(clipWidthPx / 2),
-  );
-}
 
 interface DragRef {
   active: boolean;
@@ -563,7 +544,7 @@ export function useClipDrag(
 
       const rect = el!.getBoundingClientRect();
       const xInClip = ev.clientX - rect.left;
-      const edgeReserve = clipWidthEdgeZone(rect.width);
+      const edgeReserve = clipEdgeZonePx(rect.width);
       if (xInClip < edgeReserve || xInClip > rect.width - edgeReserve) return;
 
       // Slip gesture: when the Slip tool is active, a body drag on an

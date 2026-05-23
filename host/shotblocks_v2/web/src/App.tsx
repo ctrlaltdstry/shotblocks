@@ -15,7 +15,7 @@ import { useKeyboard } from './useKeyboard';
 import { useAltRightZoom } from './useAltRightZoom';
 import { useMmbPan } from './useMmbPan';
 import { useToolCursor } from './useToolCursor';
-import { useStore } from './store';
+import { useStore, NATURAL_TRACK_PX, MIN_TRACK_PX } from './store';
 import { Ruler } from './components/Ruler';
 import { Playhead } from './components/Playhead';
 import { Scrollbar } from './components/Scrollbar';
@@ -241,13 +241,6 @@ function VScroll({ which, overflows }: { which: 'video' | 'audio'; overflows: bo
  *  on the lane content. Lane stays anchored at the V/A divider via
  *  the flex layout; the translate moves what's visible inside the
  *  side region. */
-const NATURAL_TRACK_PX = 65;
-/** Hard minimum lane height. The vertical-zoom out is clamped at this
- *  value so the stacked track-header layout always has room to read
- *  without needing a separate compact variant. Picked by feel — at
- *  ~48px the icon-above-label layout still fits comfortably. */
-const MIN_TRACK_PX = 48;
-
 function useVerticalZoomVars(
   videosRegionRef: React.RefObject<HTMLDivElement | null>,
   audiosRegionRef: React.RefObject<HTMLDivElement | null>,
