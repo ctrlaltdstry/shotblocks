@@ -1541,7 +1541,6 @@ body.is-resizing-headers .body { transition: none; }
   padding: 10px 14px 10px 15px;
   cursor: pointer;
   user-select: none;
-  margin-bottom: 4px;
 }
 /* Collapse wrapper — grid trick: animate the row from 0fr (closed)
    to 1fr (open). The inner div uses min-height:0 + overflow:hidden
@@ -1583,7 +1582,7 @@ body.is-resizing-headers .body { transition: none; }
   display: flex;
   flex-direction: column;
   gap: 12px;
-  padding: 6px 0 16px 0;
+  padding: 10px 0 16px 0;
 }
 
 /* Row pattern — Figma nodes 376:1213, 376:1246, etc. Label on left,
@@ -1718,7 +1717,7 @@ body.is-resizing-headers .body { transition: none; }
   color: var(--color-grey-white);
   background: var(--color-grey-24);
   border-radius: 4px;
-  padding: 12px 14px;
+  padding: 10px 14px;
   cursor: pointer;
   user-select: none;
   width: 100%;
@@ -1756,6 +1755,19 @@ body.is-resizing-headers .body { transition: none; }
 .inspector-button.is-ghost {
   background: var(--color-grey-24);
   color: var(--color-grey-50);
+}
+
+/* Success pulse — brief flash of the primary-highlight color so the
+   user gets visual receipt of a successful click. Matches the
+   existing press-flash interaction so it reads as the same gesture
+   echoing back. Caller toggles .is-pulsing off after ~700ms; the
+   animation runs once per toggle thanks to a forwards fill. */
+@keyframes inspector-button-pulse {
+  0%   { background: var(--color-timeline-primary-highlight); }
+  100% { background: var(--color-grey-24); }
+}
+.inspector-button.is-pulsing {
+  animation: inspector-button-pulse 600ms cubic-bezier(0.4, 0, 0.2, 1) forwards;
 }
 
 /* Icon slot inside a button — 12x12 mask-driven shape. Color is

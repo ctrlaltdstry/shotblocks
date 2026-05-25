@@ -25,15 +25,40 @@ export function Inspector() {
   const renderMode = useStore((s) => s.renderMode);
   const setRenderMode = useStore((s) => s.setRenderMode);
   const renderSettingsStale = useStore((s) => s.renderSettingsStale);
+  // Subscribe to videoTracks so the Add-to-Queue button enable/disable
+  // reacts as clips come and go.
+  const videoTracks = useStore((s) => s.videoTracks);
   const currentLabel = RENDER_MODE_OPTIONS.find((o) => o.value === renderMode)?.label
     ?? 'Individual shots';
+
+  // Add-to-Queue is disabled when there's nothing to send. Whole-
+  // sequence still queues an empty doc as a single entry — that's a
+  // valid C4D-side workflow — so we only block when there are zero
+  // video clips at all. Individual-shots additionally needs at least
+  // one clip with a live camera link; otherwise C++ would return
+  // "All shots are orphan" and the click would be a no-op.
+  const totalClips = videoTracks.reduce((n, t) => n + t.clips.length, 0);
+  const linkedClips = videoTracks.reduce(
+    (n, t) => n + t.clips.filter((c) => !!c.objectId).length, 0);
+  const addDisabled = renderMode === 'individual-shots' ? linkedClips === 0 : totalClips === 0;
+  const addTooltip = addDisabled
+    ? (renderMode === 'individual-shots'
+        ? (totalClips === 0 ? 'No shots to render' : 'All shots are orphan')
+        : 'Nothing on the timeline to render')
+    : undefined;
 
   // Status line text shown below the Add-to-Queue button. Auto-clears
   // 5s after each click. Local state — not part of the store.
   const [status, setStatus] = useState<string | null>(null);
   const [statusKind, setStatusKind] = useState<'ok' | 'err'>('ok');
+  // Brief pulse on the Add-to-Queue button after a successful add —
+  // visual receipt that the click actually did something (the Render
+  // Queue window opens behind C4D's main window in some layouts, so a
+  // local-button cue is useful). Toggled by onAddToQueue.
+  const [pulsing, setPulsing] = useState(false);
 
   async function onAddToQueue() {
+    if (addDisabled) return;
     type Ack = { ok?: boolean; status?: string };
     let ack: Ack;
     if (renderMode === 'individual-shots') {
@@ -66,6 +91,15 @@ export function Inspector() {
     const text = (ack && ack.status) || (ack && ack.ok ? 'Added to Render Queue' : 'Add to Queue failed');
     setStatus(text);
     setStatusKind(ack && ack.ok ? 'ok' : 'err');
+    if (ack && ack.ok) {
+      // Retrigger the animation cleanly: clear then set on the next
+      // frame so React applies the class removal before re-adding it
+      // (otherwise repeated successful clicks would only animate
+      // once).
+      setPulsing(false);
+      requestAnimationFrame(() => setPulsing(true));
+      window.setTimeout(() => setPulsing(false), 700);
+    }
     // Auto-clear after 5s. A subsequent click resets the timer (the
     // setStatus on this run is the new "latest" message; the previous
     // setTimeout still fires but harmlessly clears an already-cleared
@@ -94,7 +128,12 @@ export function Inspector() {
           </InspectorRow>
           <div className="inspector-section__action">
             <div className="inspector-section__button-row">
-              <InspectorButton onClick={onAddToQueue}>
+              <InspectorButton
+                onClick={onAddToQueue}
+                disabled={addDisabled}
+                title={addTooltip}
+                pulsing={pulsing}
+              >
                 Add to Queue
               </InspectorButton>
               {renderMode === 'individual-shots' && (
@@ -329,6 +368,8 @@ export function InspectorButton({
   onClick,
   disabled = false,
   variant = 'default',
+  title,
+  pulsing = false,
 }: {
   children: ReactNode;
   onClick?: () => void;
@@ -340,6 +381,13 @@ export function InspectorButton({
    *    deactivated/idle state of a button that should still be
    *    visible (e.g. Sync Render Settings while in sync). */
   variant?: 'default' | 'primary' | 'ghost';
+  /** Native browser tooltip — set when the button is disabled to
+   *  explain why (e.g. "No shots to render"). */
+  title?: string;
+  /** Triggers a one-shot CSS pulse animation for visual receipt of
+   *  a successful click. Caller is responsible for toggling false
+   *  again after the animation runs. */
+  pulsing?: boolean;
 }) {
   return (
     <button
@@ -348,9 +396,11 @@ export function InspectorButton({
         'inspector-button'
         + (disabled ? ' is-disabled' : '')
         + (variant !== 'default' ? ' is-' + variant : '')
+        + (pulsing ? ' is-pulsing' : '')
       }
       onClick={disabled ? undefined : onClick}
       disabled={disabled}
+      title={title}
     >
       {children}
     </button>
