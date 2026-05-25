@@ -205,8 +205,17 @@ async function loadFromHost(skipNextSave: React.MutableRefObject<boolean>) {
   try {
     const raw = await send({ kind: 'load-state' });
     const ack = raw as { ok?: boolean; json?: string } | undefined;
-    if (!ack || !ack.ok || !ack.json) return;
-    const parsed: SavedState = JSON.parse(ack.json);
+    if (!ack || !ack.ok) return;
+    // Empty json means the helper has no BCKEY_CLIPS_JSON entry —
+    // either a brand-new scene OR Ctrl+Z just rolled the helper back
+    // past the first save. Reset to the default empty timeline (V1
+    // and A1 will be auto-respawned by the load below). Without
+    // this, an undo past creation would early-return and leave the
+    // last in-memory state stuck on screen.
+    const json = ack.json && ack.json.length > 0
+      ? ack.json
+      : '{"videoTracks":[],"audioTracks":[],"nextClipId":1}';
+    const parsed: SavedState = JSON.parse(json);
     if (!parsed || !Array.isArray(parsed.videoTracks) || !Array.isArray(parsed.audioTracks)) return;
     // Coerce types — JSON loses Set / specific string unions etc.
     const videoTracks: Track[] = parsed.videoTracks.map((t) => ({
