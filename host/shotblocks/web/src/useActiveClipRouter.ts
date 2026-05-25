@@ -31,9 +31,18 @@ function activeClipAt(
 
 /** When the playhead enters a clip's range, route that clip's source
  *  camera into C4D's pinned BaseDraw. When the playhead leaves all
- *  clips (gap or orphan), release the BaseDraw to its default editor
- *  camera. Audio-only clips never drive the viewport — only video
- *  tracks contribute to active-shot resolution.
+ *  clips (gap), release the BaseDraw to its default editor camera.
+ *  Audio-only clips never drive the viewport — only video tracks
+ *  contribute to active-shot resolution.
+ *
+ *  Orphan clips are treated identically to a gap: send objectId=0 so
+ *  C++ releases the BaseDraw to the default editor camera. We send 0
+ *  rather than the clip's stale objectId because C++'s dedupe (the
+ *  prevCam == cam check) would otherwise see "no change" — the
+ *  previous send for this clip already established `nullptr`, but
+ *  if the user JUST deleted the camera mid-clip, C++ may still be
+ *  pointing at the now-stale BaseObject*. Sending 0 makes the
+ *  release explicit.
  *
  *  Ports the v1 Python `_route_camera_for_frame`
  *  (sb_canvas_playback.py:268) into the v2 split-process world: JS
@@ -43,6 +52,10 @@ function activeClipAt(
 export function useActiveClipRouter(): void {
   const currentFrame = useStore((s) => s.scrubFrame ?? s.currentFrame);
   const videoTracks = useStore((s) => s.videoTracks);
+  // Subscribe so the effect re-fires when a camera is deleted /
+  // restored mid-clip — without this, the objectId we send doesn't
+  // change but the routing decision (orphan vs not) does.
+  const orphanObjectIds = useStore((s) => s.orphanObjectIds);
 
   // Last objectId pushed to C++. Without this, the effect fires
   // `set-active-camera` on EVERY playback tick (currentFrame changes
@@ -53,9 +66,13 @@ export function useActiveClipRouter(): void {
 
   useEffect(() => {
     const active = activeClipAt(currentFrame, videoTracks);
-    const objectId = active && active.clip.objectId > 0 ? active.clip.objectId : 0;
+    let objectId = 0;
+    if (active && active.clip.objectId > 0
+        && !orphanObjectIds.has(active.clip.objectId)) {
+      objectId = active.clip.objectId;
+    }
     if (objectId === lastObjectId.current) return;
     lastObjectId.current = objectId;
     void send({ kind: 'set-active-camera', objectId });
-  }, [currentFrame, videoTracks]);
+  }, [currentFrame, videoTracks, orphanObjectIds]);
 }
