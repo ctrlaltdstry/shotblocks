@@ -16,6 +16,7 @@ import { createViewSlice } from './store/slices/view';
 import { createLevelKfSlice } from './store/slices/levelKf';
 import { createSelectionSlice } from './store/slices/selection';
 import { createTimelineSlice } from './store/slices/timeline';
+import { createMarkersSlice } from './store/slices/markers';
 
 // Re-export every public symbol consumers used to import from this
 // module, so existing `import { Clip, magneticSnap, MIN_CLIP_FRAMES,
@@ -157,6 +158,13 @@ export interface State {
   // confident grid; user can toggle it off. Independent of the hit
   // markers, which always show once detected.
   beatGridVisible: boolean;
+
+  // User-dropped timing reference points on the ruler (M hotkey).
+  // Sorted ascending, unique. Persisted in the helper JSON. The
+  // visibility toggle is a separate UI flag — markers stay in state
+  // when hidden.
+  markers: number[];
+  markersVisible: boolean;
 
   // Tracks. Index 0 = closest to the V/A divider (V1 / A1). New tracks
   // are added at the outer ends. Auto-create / auto-remove on clip
@@ -582,6 +590,13 @@ export interface State {
 
   /** Toggle a mediaId's audio-orphan status. */
   setAudioMediaOrphan: (mediaId: number, orphan: boolean) => void;
+
+  /** Marker actions — see slices/markers.ts for the full contract. */
+  addMarker: (frame: number) => void;
+  removeMarker: (frame: number) => void;
+  clearAllMarkers: () => void;
+  setMarkersVisible: (visible: boolean) => void;
+  setMarkers: (markers: number[]) => void;
 }
 
 /** Monotonic clip id. Unique across all tracks for the session.
@@ -604,6 +619,7 @@ export const useStore = create<State>((set, get, store) => ({
   ...createLevelKfSlice(set, get, store),
   ...createSelectionSlice(set, get, store),
   ...createTimelineSlice(set, get, store),
+  ...createMarkersSlice(set, get, store),
 
 }));
 

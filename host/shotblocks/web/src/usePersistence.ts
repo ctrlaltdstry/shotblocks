@@ -75,6 +75,12 @@ interface SavedState {
   videoTracks: SavedTrack[];
   audioTracks: SavedTrack[];
   nextClipId: number;
+  /** Marker frames, sorted ascending. Optional so docs saved before
+   *  markers existed still parse. */
+  markers?: number[];
+  /** Markers visibility flag. Optional so older docs default to true
+   *  (default visible). */
+  markersVisible?: boolean;
 }
 
 /** Resolve a saved track's per-track flags, defaulting any the doc
@@ -161,10 +167,13 @@ export function usePersistence(): void {
   useEffect(() => {
     let timer: ReturnType<typeof setTimeout> | null = null;
     const unsub = useStore.subscribe((s, prev) => {
-      // Only save if tracks actually changed (Zustand fires for ANY
-      // state change). Reference equality is fine because every clip
-      // mutation creates new track / clip arrays.
-      if (s.videoTracks === prev.videoTracks && s.audioTracks === prev.audioTracks) return;
+      // Only save if persisted state actually changed (Zustand fires
+      // for ANY state change). Reference equality is fine because
+      // every mutation creates a new array / value.
+      if (s.videoTracks === prev.videoTracks
+          && s.audioTracks === prev.audioTracks
+          && s.markers === prev.markers
+          && s.markersVisible === prev.markersVisible) return;
 
       // Detect audio MEDIA that is no longer referenced by any clip,
       // and free the persisted bytes. Audio lives in C++'s helper
@@ -302,7 +311,18 @@ async function loadFromHost(skipNextSave: React.MutableRefObject<boolean>) {
 
     skipNextSave.current = true;
     setNextClipId(Math.max(1, parsed.nextClipId | 0));
-    useStore.setState({ videoTracks: safeVideoTracks, audioTracks: safeAudioTracks });
+    // Markers — sort ascending + dedupe defensively in case the
+    // saved blob was hand-edited or carries cruft.
+    const rawMarkers = Array.isArray(parsed.markers) ? parsed.markers : [];
+    const markers = Array.from(new Set(rawMarkers.map((f) => Math.max(0, f | 0))))
+      .sort((a, b) => a - b);
+    const markersVisible = parsed.markersVisible !== false;
+    useStore.setState({
+      videoTracks: safeVideoTracks,
+      audioTracks: safeAudioTracks,
+      markers,
+      markersVisible,
+    });
 
     // Fetch persisted audio binaries for any audio MEDIA we don't
     // already have in memory. Keyed by mediaId so split halves
@@ -391,6 +411,8 @@ function saveToHost() {
       })),
     })),
     nextClipId: getNextClipId(),
+    markers: s.markers,
+    markersVisible: s.markersVisible,
   };
   // Object ids list — every objectId currently referenced by a clip.
   // C++ uses this to prune stale BaseLinks from the helper.
