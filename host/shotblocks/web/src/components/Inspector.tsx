@@ -34,7 +34,34 @@ export function Inspector() {
 
   async function onAddToQueue() {
     type Ack = { ok?: boolean; status?: string };
-    const ack = await send({ kind: 'add-to-queue', mode: renderMode }) as Ack;
+    let ack: Ack;
+    if (renderMode === 'individual-shots') {
+      // Walk videoTracks in document order (V1 first, then V2, ...) and
+      // collect every clip with an objectId > 0. objectId === 0 means
+      // the clip has no source camera link (orphan / never-linked) — no
+      // point sending it; C++ would skip it anyway.
+      const tracks = useStore.getState().videoTracks;
+      const cameraNames = useStore.getState().cameraNames;
+      const shots: { clipId: number; name: string; inFrame: number; outFrame: number; objectId: number }[] = [];
+      for (const t of tracks) {
+        for (const c of t.clips) {
+          if (!c.objectId) continue;
+          shots.push({
+            clipId: c.id,
+            // Live OM name wins over the persisted sourceName so
+            // renames flow through; the persisted name is the fallback
+            // when the camera was deleted out from under us.
+            name: cameraNames.get(c.objectId) || c.sourceName || '',
+            inFrame: c.inFrame,
+            outFrame: c.outFrame,
+            objectId: c.objectId,
+          });
+        }
+      }
+      ack = await send({ kind: 'add-to-queue', mode: 'individual-shots', shots }) as Ack;
+    } else {
+      ack = await send({ kind: 'add-to-queue', mode: 'whole-sequence' }) as Ack;
+    }
     const text = (ack && ack.status) || (ack && ack.ok ? 'Added to Render Queue' : 'Add to Queue failed');
     setStatus(text);
     setStatusKind(ack && ack.ok ? 'ok' : 'err');

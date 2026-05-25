@@ -46,6 +46,8 @@
 #include "c4d_file.h"
 #include "c4d_customgui/customgui_htmlviewer.h"
 #include "c4d_libs/lib_batchrender.h"
+#include "c4d_libs/lib_takesystem.h"
+#include "description/drendersettings.h"
 
 #include <stdio.h>
 
@@ -254,6 +256,86 @@ static std::string ParseStringField(const std::string& body, const char* fieldNa
 		{
 			out += body[p++];
 		}
+	}
+	return out;
+}
+
+
+// One shot parsed out of the JSON body for the individual-shots
+// branch of add-to-queue. Mirrors the JS HostOutbound shape.
+struct ShotIn
+{
+	Int32 clipId;
+	Int32 objectId;
+	Int32 inFrame;
+	Int32 outFrame;
+	std::string name;
+};
+
+// Walk the "shots":[ ... ] array of an add-to-queue body and pull
+// each object's fields. The naive ParseIntField / ParseStringField
+// pair only finds the first occurrence of a key; for repeated keys
+// inside array elements we have to step through manually. Scoped to
+// this one command so we don't have to grow the parser everywhere.
+//
+// Format expected (whitespace within objects is allowed):
+//   "shots":[{"clipId":1,"name":"Cam A","inFrame":0,"outFrame":60,"objectId":42},...]
+static std::vector<ShotIn> ParseShotsArray(const std::string& body)
+{
+	std::vector<ShotIn> out;
+	auto p = body.find("\"shots\"");
+	if (p == std::string::npos) return out;
+	p = body.find('[', p);
+	if (p == std::string::npos) return out;
+	++p;
+	while (p < body.size())
+	{
+		while (p < body.size() && (body[p] == ' ' || body[p] == '\t' || body[p] == ',' || body[p] == '\n' || body[p] == '\r'))
+			++p;
+		if (p >= body.size() || body[p] == ']')
+			break;
+		if (body[p] != '{')
+		{
+			++p;
+			continue;
+		}
+		// Find the matching closing brace for this object. The clip
+		// name is the only string we expect and it has already had its
+		// JSON escapes serialized by JSON.stringify on the JS side, so
+		// walking braces with a single quoted-string toggle is enough.
+		Int32 depth = 0;
+		auto start = p;
+		Bool inStr = false;
+		while (p < body.size())
+		{
+			char c = body[p];
+			if (inStr)
+			{
+				if (c == '\\' && p + 1 < body.size()) p += 2;
+				else
+				{
+					if (c == '"') inStr = false;
+					++p;
+				}
+				continue;
+			}
+			if (c == '"') { inStr = true; ++p; continue; }
+			if (c == '{') ++depth;
+			else if (c == '}')
+			{
+				--depth;
+				if (depth == 0) { ++p; break; }
+			}
+			++p;
+		}
+		std::string obj = body.substr(start, p - start);
+		ShotIn s;
+		s.clipId   = ParseIntField(obj, "clipId");
+		s.objectId = ParseIntField(obj, "objectId");
+		s.inFrame  = ParseIntField(obj, "inFrame");
+		s.outFrame = ParseIntField(obj, "outFrame");
+		s.name     = ParseStringField(obj, "name");
+		out.push_back(std::move(s));
 	}
 	return out;
 }
@@ -1713,12 +1795,7 @@ private:
 
 		std::string mode = ParseStringField(body, "mode");
 		if (mode == "individual-shots")
-		{
-			// Commit 10 will create per-shot Takes + add the doc N
-			// times with SetActiveTakeIndex. For now this branch is
-			// a stub so the UI can wire through end-to-end.
-			return "{\"ok\":false,\"error\":\"not-implemented\",\"status\":\"Individual shots mode coming soon\"}";
-		}
+			return HandleAddToQueueIndividual(doc, docPath, body);
 
 		// Whole-sequence path.
 		BatchRender* br = GetBatchRender();
@@ -1730,6 +1807,238 @@ private:
 
 		br->Open();
 		return "{\"ok\":true,\"kind\":\"add-to-queue-ack\",\"status\":\"Added scene to Render Queue\"}";
+	}
+
+	// Individual-shots branch of add-to-queue.
+	//
+	// Strategy (locked in by the Commit 7 SDK audit, see
+	// .agent/plans/v1-plan-2-markers-and-render.md):
+	//   - One Take per shot, named Shotblocks_<cameraName>. Find-or-
+	//     create — second run of Add-to-Queue updates in place rather
+	//     than minting Shotblocks_X (2).
+	//   - Each Take overrides the active camera + the master
+	//     RenderData's RDATA_FRAMEFROM / RDATA_FRAMETO via
+	//     BaseTake::FindOrAddOverrideParam. We deliberately don't
+	//     SetRenderData — the user's existing AOVs / format / output
+	//     template stay shared across every Shotblocks Take.
+	//   - Add the saved doc to the queue N times, one entry per shot,
+	//     and SetActiveTakeIndex per entry. The take index is the
+	//     position in the flat tree-walk that GetAllTakeNames returns.
+	std::string HandleAddToQueueIndividual(BaseDocument* doc, const Filename& docPath, const std::string& body)
+	{
+		std::vector<ShotIn> shots = ParseShotsArray(body);
+		if (shots.empty())
+			return "{\"ok\":false,\"error\":\"no shots\",\"status\":\"No shots to render\"}";
+
+		TakeData* takeData = doc->GetTakeData();
+		if (!takeData)
+			return "{\"ok\":false,\"error\":\"no takedata\",\"status\":\"Take system unavailable\"}";
+
+		RenderData* masterRD = doc->GetActiveRenderData();
+		if (!masterRD)
+			return "{\"ok\":false,\"error\":\"no renderdata\",\"status\":\"No active Render Settings\"}";
+
+		BaseTake* mainTake = takeData->GetMainTake();
+		if (!mainTake)
+			return "{\"ok\":false,\"error\":\"no main take\",\"status\":\"Main Take missing\"}";
+
+		const Int32 fps = doc->GetFps();
+
+		// Resolve every shot's camera up-front. Drops orphans (objectId
+		// not registered, or the BaseLink resolves to nullptr) so the
+		// rest of the function only walks healthy shots. We still keep
+		// the count for the status line.
+		struct Resolved { ShotIn shot; BaseObject* cam; String takeName; };
+		std::vector<Resolved> healthy;
+		Int32 orphans = 0;
+		for (const ShotIn& s : shots)
+		{
+			BaseObject* cam = nullptr;
+			auto it = _cameraLinks.find(s.objectId);
+			if (it != _cameraLinks.end() && it->second)
+				cam = static_cast<BaseObject*>(it->second->GetLink(doc));
+			if (!cam) { ++orphans; continue; }
+
+			// Take name: Shotblocks_<cameraName>. If the JS name is
+			// empty (camera unnamed), fall back to the live OM name.
+			// The take name itself is purely a label; render output
+			// goes wherever the user's Render Settings path points.
+			cinema::String label;
+			if (!s.name.empty())
+				label = cinema::String(s.name.c_str());
+			else
+				label = cam->GetName();
+			if (label.GetLength() == 0)
+				label = cinema::String("shot");
+			Resolved r;
+			r.shot = s;
+			r.cam = cam;
+			r.takeName = cinema::String("Shotblocks_") + label;
+			healthy.push_back(std::move(r));
+		}
+
+		if (healthy.empty())
+		{
+			char buf[128];
+			_snprintf_s(buf, sizeof(buf), _TRUNCATE,
+				"{\"ok\":false,\"error\":\"all-orphan\",\"status\":\"All shots are orphan \xe2\x80\x94 nothing to queue\"}");
+			return buf;
+		}
+
+		// Wrap Take creation + camera + parameter overrides in a single
+		// undo block. FindOrAddOverrideParam / SetCamera / AddTake all
+		// AddUndo internally — we just need to bracket them so one
+		// Ctrl+Z reverts the whole Add-to-Queue.
+		doc->StartUndo();
+
+		for (Resolved& r : healthy)
+		{
+			BaseTake* take = FindShotblocksTake(takeData, r.takeName);
+			if (!take)
+				take = takeData->AddTake(r.takeName, nullptr, nullptr);
+			if (!take)
+				continue;
+
+			take->SetCamera(takeData, r.cam);
+
+			// RenderData per-parameter overrides via BaseTake::
+			// FindOrAddOverrideParam are silently rejected in C4D 2026
+			// even with every OVERRIDEENABLING bit on and the take set
+			// current. OverrideNode fails too — the take system refuses
+			// any override of RenderData via the public API. Workaround:
+			// clone the master RenderData per shot, set the range on
+			// the clone's container directly, and attach via
+			// BaseTake::SetRenderData. AOVs / format / output path /
+			// VideoPosts are deep-cloned by GetClone(COPYFLAGS::NONE),
+			// so a fresh-master Add-to-Queue picks them up. A future
+			// Sync Render Settings button will refresh the clones in
+			// place when the master drifts.
+			RenderData* clone = FindShotblocksRenderData(doc, r.takeName);
+			if (!clone)
+			{
+				clone = static_cast<RenderData*>(masterRD->GetClone(COPYFLAGS::NONE, nullptr));
+				if (!clone) continue;
+				clone->SetName(r.takeName);
+				doc->InsertRenderDataLast(clone);
+			}
+
+			// outFrame is exclusive (JS convention) — RDATA_FRAMETO is
+			// inclusive, so subtract one. Single-frame clips
+			// (outFrame == inFrame + 1) render the in-frame only.
+			BaseTime tFrom(r.shot.inFrame, fps);
+			BaseTime tTo(r.shot.outFrame - 1, fps);
+			BaseContainer& bc = clone->GetDataInstanceRef();
+			bc.SetInt32(RDATA_FRAMESEQUENCE, RDATA_FRAMESEQUENCE_MANUAL);
+			bc.SetTime(RDATA_FRAMEFROM, tFrom);
+			bc.SetTime(RDATA_FRAMETO,   tTo);
+
+			take->SetRenderData(takeData, clone);
+		}
+
+		doc->EndUndo();
+
+		// The Render Queue reads takes from the .c4d on DISK, not from
+		// the live document — so the Shotblocks_* takes we just added
+		// don't exist as far as the queue is concerned until we save.
+		// Calling SetActiveTakeIndex with an index past the saved
+		// file's take count crashes inside C4D (observed: hard crash
+		// on a fresh doc that only had Main when saved). Save before
+		// AddFile.
+		if (!SaveDocument(doc, docPath, SAVEDOCUMENTFLAGS::DONTADDTORECENTLIST, FORMAT_C4DEXPORT))
+			return "{\"ok\":false,\"error\":\"save failed\",\"status\":\"Could not save scene\"}";
+
+		BatchRender* br = GetBatchRender();
+		if (!br)
+			return "{\"ok\":false,\"error\":\"no batchrender\",\"status\":\"Render Queue unavailable\"}";
+
+		Int32 added = 0;
+		for (Resolved& r : healthy)
+		{
+			if (!br->AddFile(docPath, 1 << 30))
+				continue;
+			Int32 entryIdx = br->GetElementCount() - 1;
+
+			// Pick the Shotblocks_<name> Take for this entry.
+			// GetAllTakeNames gives the authoritative tree-walk order
+			// that SetActiveTakeIndex consumes. takeOnly=true: we set
+			// the render-settings explicitly below — letting the queue
+			// derive them from the Take doesn't actually pick up
+			// take->SetRenderData (verified empirically Round 12).
+			maxon::BaseArray<cinema::String> takeNames;
+			br->GetAllTakeNames(entryIdx, takeNames);
+			Int32 takeCount = br->GetTakeCount(entryIdx);
+			Int32 takeIdx = -1;
+			for (Int32 i = 0; i < takeNames.GetCount() && i < takeCount; ++i)
+			{
+				if (takeNames[i] == r.takeName) { takeIdx = i; break; }
+			}
+			if (takeIdx >= 0 && takeIdx < takeCount)
+				br->SetActiveTakeIndex(entryIdx, takeIdx, true);
+
+			// Same dance for render settings — the clone we just
+			// created lives in the doc's RenderData list, but the queue
+			// entry defaults to the doc's active RD. Look the clone up
+			// by name and set the entry's active render-settings index
+			// so the range/AOVs from the clone are what gets rendered.
+			maxon::BaseArray<cinema::String> rsNames;
+			br->GetAllRenderSettingsNames(entryIdx, rsNames);
+			Int32 rsCount = br->GetRenderSettingsCount(entryIdx);
+			Int32 rsIdx = -1;
+			for (Int32 i = 0; i < rsNames.GetCount() && i < rsCount; ++i)
+			{
+				if (rsNames[i] == r.takeName) { rsIdx = i; break; }
+			}
+			if (rsIdx >= 0 && rsIdx < rsCount)
+				br->SetActiveRenderSettingsIndex(entryIdx, rsIdx);
+			++added;
+		}
+
+		// EventAdd so the Take Manager redraws with the new takes.
+		EventAdd();
+		br->Open();
+
+		char buf[256];
+		if (orphans > 0)
+			_snprintf_s(buf, sizeof(buf), _TRUNCATE,
+				"{\"ok\":true,\"kind\":\"add-to-queue-ack\",\"status\":\"Added %d shot%s \xc2\xb7 skipped %d orphan%s\"}",
+				(int)added, added == 1 ? "" : "s",
+				(int)orphans, orphans == 1 ? "" : "s");
+		else
+			_snprintf_s(buf, sizeof(buf), _TRUNCATE,
+				"{\"ok\":true,\"kind\":\"add-to-queue-ack\",\"status\":\"Added %d shot%s to Render Queue\"}",
+				(int)added, added == 1 ? "" : "s");
+		return buf;
+	}
+
+	// Walk the doc's RenderData list looking for the per-shot clone
+	// we created on a prior Add-to-Queue run. Keeps repeated runs
+	// idempotent (update in place, never duplicate Shotblocks_X (1)).
+	RenderData* FindShotblocksRenderData(BaseDocument* doc, const String& name)
+	{
+		if (!doc) return nullptr;
+		for (RenderData* rd = doc->GetFirstRenderData(); rd; rd = rd->GetNext())
+		{
+			if (rd->GetName() == name)
+				return rd;
+		}
+		return nullptr;
+	}
+
+	// Walk the Main Take's direct children for a take named `name`.
+	// Used to keep Shotblocks_<X> takes unique across repeated Add-to-
+	// Queue runs (find-first, create-if-missing). Children-of-Main only
+	// is enough — that's where AddTake(parent=nullptr) puts new takes.
+	BaseTake* FindShotblocksTake(TakeData* takeData, const String& name)
+	{
+		if (!takeData) return nullptr;
+		BaseTake* main = takeData->GetMainTake();
+		if (!main) return nullptr;
+		for (BaseTake* t = main->GetDown(); t; t = t->GetNext())
+		{
+			if (t->GetName() == name)
+				return t;
+		}
+		return nullptr;
 	}
 
 	// Resolve every objectId in _cameraLinks and push {id, alive, name}

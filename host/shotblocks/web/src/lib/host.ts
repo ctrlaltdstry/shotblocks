@@ -65,7 +65,14 @@ export type HostOutbound =
   | { kind: 'set-play-range'; inFrame: number; outFrame: number }
   | { kind: 'set-loop'; enabled: boolean }
   | { kind: 'set-cursor-mode'; mode: 'slip' | 'razor' | 'pen' | 'select' | 'av-split' | 'roll' | 'play-range' | 'default' }
-  | { kind: 'add-to-queue'; mode: 'whole-sequence' | 'individual-shots' };
+  | { kind: 'add-to-queue'; mode: 'whole-sequence' }
+  | { kind: 'add-to-queue';
+      mode: 'individual-shots';
+      // Document-order list of non-orphan video clips to render. C++
+      // filters orphans (objectId not in _cameraLinks / link resolves
+      // null) defensively; JS pre-filters by skipping objectId === 0.
+      shots: { clipId: number; name: string; inFrame: number; outFrame: number; objectId: number }[];
+    };
 
 type Listener = (msg: HostInbound) => void;
 
