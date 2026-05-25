@@ -80,6 +80,22 @@ function BeatDetectionButton() {
   );
 }
 
+/** Markers visibility toggle — the utilities-strip Markers icon.
+ *  Show/hide the purple ruler pins. Markers stay in state when
+ *  hidden — this is purely a UI gate. Default ON. */
+function MarkersToggle() {
+  const on = useStore((s) => s.markersVisible);
+  return (
+    <div
+      className={'utilstrip__icon' + (on ? ' is-active' : '')}
+      title={on ? 'Markers: visible' : 'Markers: hidden'}
+      onClick={() => useStore.getState().setMarkersVisible(!useStore.getState().markersVisible)}
+    >
+      <span className="icon icon--markers" style={{ '--icon-w': '10px', '--icon-h': '13px' } as React.CSSProperties} />
+    </div>
+  );
+}
+
 /** Inspector toggle — the utilities-strip gear icon. Opens / closes
  *  the right-side Inspector panel. (Gear icon kept for now; a custom
  *  icon comes later.) */
@@ -106,9 +122,7 @@ export function UtilityStrip() {
       <LoopToggle />
       <SnapToggle />
       <BeatDetectionButton />
-      <div className="utilstrip__icon" title="Markers">
-        <span className="icon icon--markers" style={{ '--icon-w': '10px', '--icon-h': '13px' } as React.CSSProperties} />
-      </div>
+      <MarkersToggle />
       <InspectorToggle />
     </div>
   );
