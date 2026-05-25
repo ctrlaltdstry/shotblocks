@@ -1621,7 +1621,7 @@ body.is-resizing-headers .body { transition: none; }
 .inspector-dropdown {
   background: var(--color-grey-24);
   border-radius: 4px;
-  padding: 6px 5px;
+  padding: 7px 14px;
   display: flex;
   align-items: center;
   justify-content: space-between;
@@ -1641,7 +1641,7 @@ body.is-resizing-headers .body { transition: none; }
   box-shadow: 0 4px 12px rgba(0, 0, 0, 0.4);
 }
 .inspector-dropdown__menu-item {
-  padding: 6px 10px;
+  padding: 7px 14px;
   font-family: Inter, sans-serif;
   font-weight: 400;
   font-size: 10px;
@@ -1661,7 +1661,6 @@ body.is-resizing-headers .body { transition: none; }
 .inspector-dropdown__value {
   flex: 1 0 0;
   min-width: 0;
-  padding-left: 4px;
   /* Left-aligned matches DCC inspector convention (Premiere /
      Resolve / C4D AM). Figma showed center but that's less scannable
      when rows stack. */
@@ -1678,6 +1677,61 @@ body.is-resizing-headers .body { transition: none; }
   width: 8px;
   height: 5px;
   flex-shrink: 0;
+}
+
+/* Action wrapper — holds the section's primary button + status line
+   below the rows. Same horizontal padding as the rows so the button
+   aligns left with row labels. */
+.inspector-section__action {
+  padding: 8px 15px 0 15px;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+/* Button — Figma node 357:741. Grey-24 fill, 4px radius, padding
+   7px 14px, 10px Inter Regular white text. Hover lightens via a
+   tinted overlay; pressed flashes primary-highlight blue and snaps
+   back on release. */
+.inspector-button {
+  appearance: none;
+  border: 0;
+  font-family: Inter, sans-serif;
+  font-weight: 400;
+  font-size: 10px;
+  color: var(--color-grey-white);
+  background: var(--color-grey-24);
+  border-radius: 4px;
+  padding: 7px 14px;
+  cursor: pointer;
+  user-select: none;
+  align-self: flex-start;
+  transition: background-color 100ms ease;
+}
+.inspector-button:hover {
+  background: color-mix(in srgb, var(--color-grey-24) 85%, white);
+}
+.inspector-button:active {
+  background: var(--color-timeline-primary-highlight);
+}
+.inspector-button.is-disabled,
+.inspector-button:disabled {
+  opacity: 0.4;
+  cursor: not-allowed;
+  background: var(--color-grey-24);
+}
+
+/* Status line below the button — small grey text that fades the
+   result of the last action. `.is-ok` is muted (neutral success);
+   `.is-err` reads as a warning. */
+.inspector-section__status {
+  font-family: Inter, sans-serif;
+  font-weight: 400;
+  font-size: 10px;
+  color: var(--color-grey-50);
+}
+.inspector-section__status.is-err {
+  color: var(--color-timeline-orphan-block);
 }
 
 /* Toggle switch — Figma node 376:1249. 37x20 pill, padding 2px,

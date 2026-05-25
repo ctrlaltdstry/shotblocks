@@ -64,7 +64,8 @@ export type HostOutbound =
   | { kind: 'audio-remove'; clipId: number }
   | { kind: 'set-play-range'; inFrame: number; outFrame: number }
   | { kind: 'set-loop'; enabled: boolean }
-  | { kind: 'set-cursor-mode'; mode: 'slip' | 'razor' | 'pen' | 'select' | 'av-split' | 'roll' | 'play-range' | 'default' };
+  | { kind: 'set-cursor-mode'; mode: 'slip' | 'razor' | 'pen' | 'select' | 'av-split' | 'roll' | 'play-range' | 'default' }
+  | { kind: 'add-to-queue'; mode: 'whole-sequence' | 'individual-shots' };
 
 type Listener = (msg: HostInbound) => void;
 

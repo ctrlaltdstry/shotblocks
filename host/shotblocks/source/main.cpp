@@ -45,6 +45,7 @@
 #include "c4d_resource.h"
 #include "c4d_file.h"
 #include "c4d_customgui/customgui_htmlviewer.h"
+#include "c4d_libs/lib_batchrender.h"
 
 #include <stdio.h>
 
@@ -1549,6 +1550,7 @@ private:
 			EventAdd();
 			return "{\"ok\":true,\"kind\":\"audio-remove-ack\"}";
 		}
+		if (body.find("\"kind\":\"add-to-queue\"") != std::string::npos) return HandleAddToQueue(body);
 		if (body.find("\"kind\":\"undo\"") != std::string::npos)
 		{
 			// WebView2 swallows Ctrl+Z before C4D's menu sees it, so JS
@@ -1682,6 +1684,52 @@ private:
 			"{\"kind\":\"doc-info\",\"fps\":%d,\"docFrames\":%d,\"playRangeIn\":%d,\"playRangeOut\":%d}",
 			(int)fps, (int)docFrames, (int)_v2RangeIn, (int)_v2RangeOut);
 		_htmlView->PostWebMessage(maxon::String(buf));
+	}
+
+	// Handle JS's `add-to-queue` command. Body shape:
+	//   {"kind":"add-to-queue","mode":"whole-sequence"|"individual-shots"}
+	// For whole-sequence we append the saved .c4d to C4D's Render
+	// Queue once — the user's existing render settings is the source
+	// of truth. individual-shots will land in Commit 10. Factored
+	// into its own method to keep Dispatch under the sourceprocessor's
+	// 600-line function cap.
+	std::string HandleAddToQueue(const std::string& body)
+	{
+		BaseDocument* doc = GetActiveDocument();
+		if (!doc)
+			return "{\"ok\":false,\"error\":\"no doc\",\"status\":\"No active document\"}";
+
+		// Doc must be saved to disk before AddFile — the queue
+		// references a file path, not the live in-memory doc. C4D
+		// distinguishes "never saved" from "saved" by GetDocumentPath
+		// being empty (the folder hasn't been set). The document name
+		// alone isn't reliable — C4D fills it with placeholders like
+		// "Untitled 2" for new docs.
+		const String docFolder = doc->GetDocumentPath().GetString();
+		const String docName = doc->GetDocumentName().GetString();
+		if (docFolder.GetLength() == 0 || docName.GetLength() == 0)
+			return "{\"ok\":false,\"error\":\"unsaved\",\"status\":\"Save scene first\"}";
+		Filename docPath = doc->GetDocumentPath() + doc->GetDocumentName();
+
+		std::string mode = ParseStringField(body, "mode");
+		if (mode == "individual-shots")
+		{
+			// Commit 10 will create per-shot Takes + add the doc N
+			// times with SetActiveTakeIndex. For now this branch is
+			// a stub so the UI can wire through end-to-end.
+			return "{\"ok\":false,\"error\":\"not-implemented\",\"status\":\"Individual shots mode coming soon\"}";
+		}
+
+		// Whole-sequence path.
+		BatchRender* br = GetBatchRender();
+		if (!br)
+			return "{\"ok\":false,\"error\":\"no batchrender\",\"status\":\"Render Queue unavailable\"}";
+
+		if (!br->AddFile(docPath, 1 << 30))
+			return "{\"ok\":false,\"error\":\"add failed\",\"status\":\"Queue add failed\"}";
+
+		br->Open();
+		return "{\"ok\":true,\"kind\":\"add-to-queue-ack\",\"status\":\"Added scene to Render Queue\"}";
 	}
 
 	// Resolve every objectId in _cameraLinks and push {id, alive, name}

@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState, type ReactNode } from 'react';
 import { createPortal } from 'react-dom';
 import { useStore } from '../store';
+import { send } from '../lib/host';
 import sectionChevronUrl from '../icons/inspector-section-chevron.svg';
 import dropdownChevronUrl from '../icons/inspector-dropdown-chevron.svg';
 import folderUrl from '../icons/inspector-folder.svg';
@@ -25,6 +26,25 @@ export function Inspector() {
   const setRenderMode = useStore((s) => s.setRenderMode);
   const currentLabel = RENDER_MODE_OPTIONS.find((o) => o.value === renderMode)?.label
     ?? 'Individual shots';
+
+  // Status line text shown below the Add-to-Queue button. Auto-clears
+  // 5s after each click. Local state — not part of the store.
+  const [status, setStatus] = useState<string | null>(null);
+  const [statusKind, setStatusKind] = useState<'ok' | 'err'>('ok');
+
+  async function onAddToQueue() {
+    type Ack = { ok?: boolean; status?: string };
+    const ack = await send({ kind: 'add-to-queue', mode: renderMode }) as Ack;
+    const text = (ack && ack.status) || (ack && ack.ok ? 'Added to Render Queue' : 'Add to Queue failed');
+    setStatus(text);
+    setStatusKind(ack && ack.ok ? 'ok' : 'err');
+    // Auto-clear after 5s. A subsequent click resets the timer (the
+    // setStatus on this run is the new "latest" message; the previous
+    // setTimeout still fires but harmlessly clears an already-cleared
+    // status).
+    window.setTimeout(() => setStatus(null), 5000);
+  }
+
   return (
     <div className="inspector">
       <div className="inspector__body">
@@ -36,6 +56,16 @@ export function Inspector() {
               onSelect={(v) => setRenderMode(v as 'whole-sequence' | 'individual-shots')}
             />
           </InspectorRow>
+          <div className="inspector-section__action">
+            <InspectorButton onClick={onAddToQueue}>
+              Add to Queue
+            </InspectorButton>
+            {status && (
+              <div className={'inspector-section__status is-' + statusKind}>
+                {status}
+              </div>
+            )}
+          </div>
         </InspectorSection>
       </div>
     </div>
@@ -240,6 +270,30 @@ export function InspectorToggle({
     >
       <div className="inspector-toggle__handle" />
     </div>
+  );
+}
+
+/** Button — Figma node 357:741. Grey-24 fill, 4px radius, white text.
+ *  Hovers slightly lighter; pressed flashes primary-highlight blue.
+ *  Disabled state is grey-24 at reduced opacity, no hover/press. */
+export function InspectorButton({
+  children,
+  onClick,
+  disabled = false,
+}: {
+  children: ReactNode;
+  onClick?: () => void;
+  disabled?: boolean;
+}) {
+  return (
+    <button
+      type="button"
+      className={'inspector-button' + (disabled ? ' is-disabled' : '')}
+      onClick={disabled ? undefined : onClick}
+      disabled={disabled}
+    >
+      {children}
+    </button>
   );
 }
 
