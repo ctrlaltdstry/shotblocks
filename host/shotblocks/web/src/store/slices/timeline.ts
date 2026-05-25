@@ -20,6 +20,19 @@ export interface TimelineSlice {
   videoTracks: Track[];
   audioTracks: Track[];
 
+  /** ObjectIds whose C++-side BaseLink resolves to null — i.e. the
+   *  source BaseObject was deleted from the OM. A clip whose
+   *  objectId lives in this set is an orphan (its `clip.objectId > 0`
+   *  but no live camera backs it). Pushed by C++ via the inbound
+   *  `cameras` message on every EVMSG_CHANGE; derived in JS, never
+   *  persisted to the helper. */
+  orphanObjectIds: Set<number>;
+  /** Update the orphan set from a C++ `cameras` push. `statuses` is
+   *  the full snapshot for every objectId in C++'s _cameraLinks;
+   *  ids absent from the snapshot are treated as not-orphan (the
+   *  link no longer exists on the C++ side). */
+  setCameraStatuses: (statuses: { id: number; alive: boolean }[]) => void;
+
   addClip: (trackId: string, clip: Omit<Clip, 'id'>) => number | null;
   moveClip: (
     clipId: number,
@@ -82,6 +95,23 @@ export interface TimelineSlice {
 export const createTimelineSlice: StateCreator<State, [], [], TimelineSlice> = (set) => ({
   videoTracks: [{ id: 1, name: 'Video 1', clips: [], ...TRACK_FLAG_DEFAULTS }],
   audioTracks: [{ id: 1, name: 'Audio 1', clips: [], ...TRACK_FLAG_DEFAULTS }],
+
+  orphanObjectIds: new Set<number>(),
+  setCameraStatuses: (statuses) => set((s) => {
+    const next = new Set<number>();
+    for (const st of statuses) {
+      if (!st.alive) next.add(st.id);
+    }
+    // Reference-equality skip when the set hasn't changed (avoids
+    // waking every ShotBlock subscriber on each EVMSG_CHANGE tick
+    // when nothing flipped — most ticks are camera-stable).
+    if (next.size === s.orphanObjectIds.size) {
+      let same = true;
+      for (const id of next) if (!s.orphanObjectIds.has(id)) { same = false; break; }
+      if (same) return s;
+    }
+    return { orphanObjectIds: next };
+  }),
 
   moveClip: (clipId, fromTrackId, toTrackId, newInFrame, snapFrames, mode = 'replace') => {
     const fromSide = fromTrackId.startsWith('V') ? 'video' : fromTrackId.startsWith('A') ? 'audio' : null;

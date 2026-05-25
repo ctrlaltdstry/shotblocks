@@ -14,6 +14,9 @@ export function useHost(): void {
         case 'doc-info':
           useStore.getState().setDocInfo(msg.fps, msg.docFrames, msg.playRangeIn, msg.playRangeOut);
           break;
+        case 'cameras':
+          useStore.getState().setCameraStatuses(msg.items);
+          break;
         // om-drop handled in round 5
       }
     });

@@ -24,9 +24,19 @@ export interface OmItem {
   objectId?: number;
 }
 
+/** One row in the inbound `cameras` payload. C++ posts this after
+ *  every EVMSG_CHANGE so JS can flag orphan clips (alive === false)
+ *  and pick up live camera renames (`name`). One entry per objectId
+ *  in C++'s _cameraLinks. */
+export interface CameraStatus {
+  id: number;
+  alive: boolean;
+  name: string;
+}
+
 export type HostInbound =
   | { kind: 'hello'; port: number }
-  | { kind: 'tick'; frame: number; fps: number; playing: boolean; v2Playing: boolean }
+  | { kind: 'tick'; frame: number; fps: number; playing: boolean; pluginPlaying: boolean }
   | { kind: 'doc-info'; fps: number; docFrames: number; playRangeIn: number; playRangeOut: number }
   | { kind: 'om-hover';  viewportX: number; viewportY: number; items: OmItem[] }
   | { kind: 'om-drop';   viewportX: number; viewportY: number; items: OmItem[] }
@@ -34,7 +44,8 @@ export type HostInbound =
   | { kind: 'file-hover'; viewportX: number; viewportY: number; path: string }
   | { kind: 'file-drop';  viewportX: number; viewportY: number; path: string }
   | { kind: 'file-cancel' }
-  | { kind: 'state-changed' };
+  | { kind: 'state-changed' }
+  | { kind: 'cameras'; items: CameraStatus[] };
 
 export type HostOutbound =
   | { kind: 'ping'; t: number }

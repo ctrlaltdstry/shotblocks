@@ -165,6 +165,12 @@ export interface State {
   videoTracks: Track[];
   audioTracks: Track[];
 
+  // ObjectIds whose C++-side BaseLink resolves to null — the source
+  // camera was deleted from the OM. Derived per-render in C++ and
+  // pushed on every EVMSG_CHANGE; never persisted. A clip whose
+  // objectId lives in this set is an orphan.
+  orphanObjectIds: Set<number>;
+
   // Drop ghost shown while the user is dragging from the OM. Null when
   // no drag is in progress or the drag is outside our drop targets.
   dragPreview: DragPreview | null;
@@ -544,6 +550,11 @@ export interface State {
    *  reverts to the default `Video N` / `Audio N` and clears the
    *  custom flag. No-op if the track doesn't exist. */
   setTrackName: (trackId: string, name: string) => void;
+
+  /** Apply a C++ `cameras` snapshot to `orphanObjectIds`. C++ sends
+   *  the full set of objectIds it knows about with each push; ids
+   *  whose `alive` is false land in the orphan set. */
+  setCameraStatuses: (statuses: { id: number; alive: boolean }[]) => void;
 }
 
 /** Monotonic clip id. Unique across all tracks for the session.

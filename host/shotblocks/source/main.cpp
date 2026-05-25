@@ -832,6 +832,12 @@ public:
 			// out-of-band edits to the loop range (e.g. user dragged
 			// C4D's native in/out markers in the timeline header).
 			PostDocInfo();
+			// Re-resolve every camera BaseLink. The OM may have changed
+			// (camera deleted -> clip is now orphan; camera renamed ->
+			// clip label needs to update). PostCameras ships the current
+			// {alive, name} for every objectId we know about; JS derives
+			// orphan status + live label from this.
+			PostCameras();
 		}
 		else if (id == g_sb_msg_http_request)
 		{
@@ -984,6 +990,7 @@ private:
 			GePrint("[Shotblocks/v2] ping received, replying with doc-info"_s);
 			PostDocInfo();
 			PostTick();
+			PostCameras();
 			return "{\"ok\":true,\"kind\":\"pong\"}";
 		}
 		if (body.find("\"kind\":\"set-cursor-mode\"") != std::string::npos)
@@ -1359,6 +1366,9 @@ private:
 			// the immediate post-load EVMSG_CHANGE (if any) doesn't
 			// trigger a spurious state-changed notification.
 			_lastSeenVersion = bc->GetInt32(BCKEY_VERSION);
+			// Push a fresh cameras snapshot now that _cameraLinks is
+			// rebuilt for the loaded doc.
+			PostCameras();
 
 			// Escape the JSON string for embedding in our response.
 			std::string esc;
@@ -1672,6 +1682,62 @@ private:
 			"{\"kind\":\"doc-info\",\"fps\":%d,\"docFrames\":%d,\"playRangeIn\":%d,\"playRangeOut\":%d}",
 			(int)fps, (int)docFrames, (int)_v2RangeIn, (int)_v2RangeOut);
 		_htmlView->PostWebMessage(maxon::String(buf));
+	}
+
+	// Resolve every objectId in _cameraLinks and push {id, alive, name}
+	// to JS. JS uses this to flag orphan clips (alive=false) and to
+	// keep clip labels in sync with OM renames. Called from
+	// EVMSG_CHANGE so any OM mutation triggers a refresh, and from the
+	// ping handshake so JS gets the initial snapshot on connect.
+	void PostCameras()
+	{
+		if (!_htmlView || !_navigated)
+			return;
+		BaseDocument* doc = GetActiveDocument();
+		if (!doc)
+			return;
+		maxon::String items("["_s);
+		Bool first = true;
+		for (auto& kv : _cameraLinks)
+		{
+			Int32 id = kv.first;
+			BaseObject* op = kv.second
+				? static_cast<BaseObject*>(kv.second->GetLink(doc))
+				: nullptr;
+			if (!first)
+				items += ","_s;
+			first = false;
+			char hdr[64];
+			_snprintf_s(hdr, sizeof(hdr), _TRUNCATE,
+				"{\"id\":%d,\"alive\":%s,\"name\":\"",
+				(int)id, op ? "true" : "false");
+			items += maxon::String(hdr);
+			if (op)
+			{
+				// Escape the name for JSON-string embedding. Names with
+				// quotes / backslashes / control chars are rare but legal.
+				String n = op->GetName();
+				Char* nc = n.GetCStringCopy();
+				std::string nameUtf8 = nc ? nc : "";
+				if (nc) DeleteMem(nc);
+				std::string esc;
+				esc.reserve(nameUtf8.size() + 8);
+				for (char c : nameUtf8)
+				{
+					if      (c == '\\') esc += "\\\\";
+					else if (c == '"')  esc += "\\\"";
+					else if (c == '\n') esc += "\\n";
+					else if (c == '\r') esc += "\\r";
+					else if (c == '\t') esc += "\\t";
+					else                esc += c;
+				}
+				items += maxon::String(esc.c_str());
+			}
+			items += "\"}"_s;
+		}
+		items += "]"_s;
+		maxon::String payload = "{\"kind\":\"cameras\",\"items\":"_s + items + "}"_s;
+		_htmlView->PostWebMessage(payload);
 	}
 
 	// Static thunk referenced only so GetModuleHandleExW has a stable
