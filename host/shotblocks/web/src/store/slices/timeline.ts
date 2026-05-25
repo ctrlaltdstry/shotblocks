@@ -27,11 +27,18 @@ export interface TimelineSlice {
    *  `cameras` message on every EVMSG_CHANGE; derived in JS, never
    *  persisted to the helper. */
   orphanObjectIds: Set<number>;
-  /** Update the orphan set from a C++ `cameras` push. `statuses` is
-   *  the full snapshot for every objectId in C++'s _cameraLinks;
-   *  ids absent from the snapshot are treated as not-orphan (the
-   *  link no longer exists on the C++ side). */
-  setCameraStatuses: (statuses: { id: number; alive: boolean }[]) => void;
+  /** Live OM camera names keyed by objectId. Updated from the same
+   *  C++ `cameras` push as orphanObjectIds, so renaming a camera
+   *  in the OM propagates to the clip label without any per-clip
+   *  state mutation. Cleared when the camera is deleted (the id
+   *  drops from C++'s _cameraLinks); ShotBlock falls back to the
+   *  clip's persisted sourceName in that case. */
+  cameraNames: Map<number, string>;
+  /** Update both the orphan set AND the name map from a C++
+   *  `cameras` push. `statuses` is the full snapshot for every
+   *  objectId in C++'s _cameraLinks; ids absent from the snapshot
+   *  drop out of both maps. */
+  setCameraStatuses: (statuses: { id: number; alive: boolean; name: string }[]) => void;
 
   /** Audio media that couldn't be resolved — bytes missing from the
    *  C++ helper or the stored bytes failed to decode. An audio clip
@@ -120,6 +127,7 @@ export const createTimelineSlice: StateCreator<State, [], [], TimelineSlice> = (
   audioTracks: [{ id: 1, name: 'Audio 1', clips: [], ...TRACK_FLAG_DEFAULTS }],
 
   orphanObjectIds: new Set<number>(),
+  cameraNames: new Map<number, string>(),
   orphanMediaIds: new Set<number>(),
   setAudioMediaOrphan: (mediaId, orphan) => set((s) => {
     const has = s.orphanMediaIds.has(mediaId);
@@ -129,19 +137,56 @@ export const createTimelineSlice: StateCreator<State, [], [], TimelineSlice> = (
     return { orphanMediaIds: next };
   }),
   setCameraStatuses: (statuses) => set((s) => {
-    const next = new Set<number>();
+    const nextOrphans = new Set<number>();
+    const nextNames = new Map<number, string>();
     for (const st of statuses) {
-      if (!st.alive) next.add(st.id);
+      if (!st.alive) nextOrphans.add(st.id);
+      // Only carry names for live cameras — deleted cameras' names
+      // are stale, but we've already persisted them to clip.sourceName
+      // below so the fallback still shows the most recent name.
+      else nextNames.set(st.id, st.name);
     }
-    // Reference-equality skip when the set hasn't changed (avoids
-    // waking every ShotBlock subscriber on each EVMSG_CHANGE tick
-    // when nothing flipped — most ticks are camera-stable).
-    if (next.size === s.orphanObjectIds.size) {
-      let same = true;
-      for (const id of next) if (!s.orphanObjectIds.has(id)) { same = false; break; }
-      if (same) return s;
+    // Reference-equality skip on BOTH dimensions. EVMSG_CHANGE
+    // ticks during scrub / drag can fire dozens per second — most
+    // are camera-stable, and waking every ShotBlock for nothing
+    // would tax the render loop.
+    let orphansSame = nextOrphans.size === s.orphanObjectIds.size;
+    if (orphansSame) {
+      for (const id of nextOrphans) if (!s.orphanObjectIds.has(id)) { orphansSame = false; break; }
     }
-    return { orphanObjectIds: next };
+    let namesSame = nextNames.size === s.cameraNames.size;
+    if (namesSame) {
+      for (const [id, name] of nextNames) if (s.cameraNames.get(id) !== name) { namesSame = false; break; }
+    }
+
+    // Mirror live names into clip.sourceName so a later camera
+    // delete falls back to the most recent name, not the original
+    // drop-time name. Persists through save/load via auto-save.
+    let videoTracks = s.videoTracks;
+    if (!namesSame) {
+      let mutated = false;
+      const next = s.videoTracks.map((t) => {
+        let clipsChanged = false;
+        const newClips = t.clips.map((c) => {
+          if (c.objectId <= 0) return c;
+          const live = nextNames.get(c.objectId);
+          if (live === undefined || live === c.sourceName) return c;
+          clipsChanged = true;
+          return { ...c, sourceName: live };
+        });
+        if (!clipsChanged) return t;
+        mutated = true;
+        return { ...t, clips: newClips };
+      });
+      if (mutated) videoTracks = next;
+    }
+
+    if (orphansSame && namesSame && videoTracks === s.videoTracks) return s;
+    return {
+      orphanObjectIds: orphansSame ? s.orphanObjectIds : nextOrphans,
+      cameraNames: namesSame ? s.cameraNames : nextNames,
+      videoTracks,
+    };
   }),
 
   moveClip: (clipId, fromTrackId, toTrackId, newInFrame, snapFrames, mode = 'replace') => {

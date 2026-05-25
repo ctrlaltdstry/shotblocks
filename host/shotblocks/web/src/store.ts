@@ -171,6 +171,13 @@ export interface State {
   // objectId lives in this set is an orphan.
   orphanObjectIds: Set<number>;
 
+  // Live OM camera names keyed by objectId. Shipped alongside the
+  // orphan set on every EVMSG_CHANGE; ShotBlock prefers this over
+  // the clip's persisted sourceName so OM renames propagate to the
+  // label immediately. Falls back to sourceName when the id isn't
+  // in the map (camera deleted -> we keep the last persisted name).
+  cameraNames: Map<number, string>;
+
   // Audio mediaIds whose embedded bytes couldn't be loaded on doc
   // open — either C++ helper has no bytes, or decoding the bytes
   // failed. Derived from the audio-load pipeline; never persisted.
@@ -558,10 +565,10 @@ export interface State {
    *  custom flag. No-op if the track doesn't exist. */
   setTrackName: (trackId: string, name: string) => void;
 
-  /** Apply a C++ `cameras` snapshot to `orphanObjectIds`. C++ sends
-   *  the full set of objectIds it knows about with each push; ids
-   *  whose `alive` is false land in the orphan set. */
-  setCameraStatuses: (statuses: { id: number; alive: boolean }[]) => void;
+  /** Apply a C++ `cameras` snapshot to `orphanObjectIds` and
+   *  `cameraNames`. C++ sends the full snapshot of every objectId
+   *  in its _cameraLinks; missing ids drop out of both maps. */
+  setCameraStatuses: (statuses: { id: number; alive: boolean; name: string }[]) => void;
 
   /** Rebind an orphan clip's source camera. Called when the user
    *  drags a fresh camera from the OM onto an orphan clip — the

@@ -53,6 +53,14 @@ export function ShotBlock({
     const mediaId = clip.mediaId ?? clip.id;
     return s.orphanMediaIds.has(mediaId);
   });
+  // Live OM name for video clips; falls back to the persisted
+  // sourceName when the camera isn't currently in C++'s
+  // _cameraLinks (orphan / not yet announced). Audio clips don't
+  // participate in the OM rename flow — sourceName is authoritative.
+  const liveName = useStore((s) =>
+    side === 'video' && clip.objectId > 0 ? s.cameraNames.get(clip.objectId) : undefined
+  );
+  const displayName = liveName ?? clip.sourceName;
   const ref = useRef<HTMLDivElement | null>(null);
   useClipDrag(clip, trackId, side, ref);
 
@@ -139,7 +147,7 @@ export function ShotBlock({
       ref={ref}
       className={cls}
       style={style}
-      title={clip.sourceName}
+      title={displayName}
       data-clip={clip.id}
       onPointerMove={onRazorPointerMove}
       onPointerLeave={onRazorPointerLeave}
@@ -154,7 +162,7 @@ export function ShotBlock({
         {side === 'audio' && !isOrphan && clip.peakLevels && clip.peakLevels.length > 0 && (
           <WaveformCanvas clip={clip} />
         )}
-        <div className="shot-block__label">{clip.sourceName}</div>
+        <div className="shot-block__label">{displayName}</div>
         <div className="shot-block__icon-wrap">
           <span className={iconClass} />
         </div>
