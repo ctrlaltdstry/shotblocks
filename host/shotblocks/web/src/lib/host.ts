@@ -45,7 +45,11 @@ export type HostInbound =
   | { kind: 'file-drop';  viewportX: number; viewportY: number; path: string }
   | { kind: 'file-cancel' }
   | { kind: 'state-changed' }
-  | { kind: 'cameras'; items: CameraStatus[] };
+  | { kind: 'cameras'; items: CameraStatus[] }
+  // Master Render Settings has drifted (stale=true) or come back into
+  // sync (stale=false) with the snapshot taken at the last
+  // Add-to-Queue / Sync. Inspector lights the Sync button on stale.
+  | { kind: 'render-settings-drift'; stale: boolean };
 
 export type HostOutbound =
   | { kind: 'ping'; t: number }
@@ -65,6 +69,7 @@ export type HostOutbound =
   | { kind: 'set-play-range'; inFrame: number; outFrame: number }
   | { kind: 'set-loop'; enabled: boolean }
   | { kind: 'set-cursor-mode'; mode: 'slip' | 'razor' | 'pen' | 'select' | 'av-split' | 'roll' | 'play-range' | 'default' }
+  | { kind: 'sync-render-settings' }
   | { kind: 'add-to-queue'; mode: 'whole-sequence' }
   | { kind: 'add-to-queue';
       mode: 'individual-shots';

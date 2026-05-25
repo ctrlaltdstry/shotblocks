@@ -24,6 +24,7 @@ const RENDER_MODE_OPTIONS = [
 export function Inspector() {
   const renderMode = useStore((s) => s.renderMode);
   const setRenderMode = useStore((s) => s.setRenderMode);
+  const renderSettingsStale = useStore((s) => s.renderSettingsStale);
   const currentLabel = RENDER_MODE_OPTIONS.find((o) => o.value === renderMode)?.label
     ?? 'Individual shots';
 
@@ -72,6 +73,14 @@ export function Inspector() {
     window.setTimeout(() => setStatus(null), 5000);
   }
 
+  async function onSyncRenderSettings() {
+    if (!renderSettingsStale) return;
+    await send({ kind: 'sync-render-settings' });
+    // C++ pushes render-settings-drift{stale:false} after the sync;
+    // the button greys back out on its own through the store. No
+    // status line — sync is silent on success.
+  }
+
   return (
     <div className="inspector">
       <div className="inspector__body">
@@ -84,9 +93,21 @@ export function Inspector() {
             />
           </InspectorRow>
           <div className="inspector-section__action">
-            <InspectorButton onClick={onAddToQueue}>
-              Add to Queue
-            </InspectorButton>
+            <div className="inspector-section__button-row">
+              <InspectorButton onClick={onAddToQueue}>
+                Add to Queue
+              </InspectorButton>
+              {renderMode === 'individual-shots' && (
+                <InspectorButton
+                  onClick={onSyncRenderSettings}
+                  disabled={!renderSettingsStale}
+                  variant={renderSettingsStale ? 'primary' : 'ghost'}
+                >
+                  <span className="inspector-button__icon inspector-button__icon--sync" />
+                  Settings
+                </InspectorButton>
+              )}
+            </div>
             {status && (
               <div className={'inspector-section__status is-' + statusKind}>
                 {status}
@@ -307,15 +328,27 @@ export function InspectorButton({
   children,
   onClick,
   disabled = false,
+  variant = 'default',
 }: {
   children: ReactNode;
   onClick?: () => void;
   disabled?: boolean;
+  /** 'default' = grey-24 fill (the Add-to-Queue style).
+   *  'primary' = Maxon-blue fill, used when a button is the active
+   *    next step (e.g. Sync Render Settings while drift is detected).
+   *  'ghost'   = transparent fill with dim text, used for the
+   *    deactivated/idle state of a button that should still be
+   *    visible (e.g. Sync Render Settings while in sync). */
+  variant?: 'default' | 'primary' | 'ghost';
 }) {
   return (
     <button
       type="button"
-      className={'inspector-button' + (disabled ? ' is-disabled' : '')}
+      className={
+        'inspector-button'
+        + (disabled ? ' is-disabled' : '')
+        + (variant !== 'default' ? ' is-' + variant : '')
+      }
       onClick={disabled ? undefined : onClick}
       disabled={disabled}
     >

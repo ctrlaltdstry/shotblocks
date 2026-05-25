@@ -17,6 +17,9 @@ export function useHost(): void {
         case 'cameras':
           useStore.getState().setCameraStatuses(msg.items);
           break;
+        case 'render-settings-drift':
+          useStore.getState().setRenderSettingsStale(msg.stale);
+          break;
         // om-drop handled in round 5
       }
     });

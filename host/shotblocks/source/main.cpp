@@ -45,6 +45,7 @@
 #include "c4d_resource.h"
 #include "c4d_file.h"
 #include "c4d_customgui/customgui_htmlviewer.h"
+#include "c4d_videopost.h"
 #include "c4d_libs/lib_batchrender.h"
 #include "c4d_libs/lib_takesystem.h"
 #include "description/drendersettings.h"
@@ -630,6 +631,13 @@ public:
 		EnsureNavigated();
 		AnnouncePortIfReady();
 		EnsureCursorSubclass();
+		// Poll for render-settings drift on every tick. C4D doesn't
+		// fire EVMSG_CHANGE for in-Render-Settings edits (AOV delete,
+		// per-tab parameter changes); without polling the Sync button
+		// only lights when the user switches the active RD or makes
+		// some other doc edit. 250ms is the dialog Timer cadence —
+		// fast enough for the user to never notice the lag.
+		PushRenderSettingsDrift(GetActiveDocument());
 		// Advance v2-owned playback. Computes the target frame from
 		// wall-clock elapsed time since play started, so timer jitter
 		// doesn't accumulate (Python's _playback_anchor_t /
@@ -921,6 +929,10 @@ public:
 			// {alive, name} for every objectId we know about; JS derives
 			// orphan status + live label from this.
 			PostCameras();
+			// Check the master Render Settings against the last
+			// snapshot taken at Add-to-Queue / Sync. Drift → light the
+			// Sync button in the Inspector.
+			PushRenderSettingsDrift(GetActiveDocument());
 		}
 		else if (id == g_sb_msg_http_request)
 		{
@@ -1633,6 +1645,7 @@ private:
 			return "{\"ok\":true,\"kind\":\"audio-remove-ack\"}";
 		}
 		if (body.find("\"kind\":\"add-to-queue\"") != std::string::npos) return HandleAddToQueue(body);
+		if (body.find("\"kind\":\"sync-render-settings\"") != std::string::npos) return HandleSyncRenderSettings(body);
 		if (body.find("\"kind\":\"undo\"") != std::string::npos)
 		{
 			// WebView2 swallows Ctrl+Z before C4D's menu sees it, so JS
@@ -1997,6 +2010,11 @@ private:
 		EventAdd();
 		br->Open();
 
+		// Snapshot the master RD container so we can detect drift on
+		// subsequent EVMSG_CHANGE and light the Sync button.
+		SnapshotMasterRenderSettings(doc);
+		PushRenderSettingsDrift(doc);
+
 		char buf[256];
 		if (orphans > 0)
 			_snprintf_s(buf, sizeof(buf), _TRUNCATE,
@@ -2007,6 +2025,110 @@ private:
 			_snprintf_s(buf, sizeof(buf), _TRUNCATE,
 				"{\"ok\":true,\"kind\":\"add-to-queue-ack\",\"status\":\"Added %d shot%s to Render Queue\"}",
 				(int)added, added == 1 ? "" : "s");
+		return buf;
+	}
+
+	// JS-driven "Sync Render Settings" command. For every Shotblocks_*
+	// RenderData in the doc, preserve its per-shot frame range, then
+	// rebuild the entire clone from the current master so AOVs /
+	// multipass / VideoPosts / output template all refresh together.
+	// Container-only replacement isn't enough — AOVs live in CHILDREN
+	// of the RD, not in its container.
+	//
+	// Strategy: for each Shotblocks_* RD, capture its name + the takes
+	// pointing at it, free it, re-clone master with the same name,
+	// re-insert, re-attach to the same takes, restore range. Net effect
+	// is identical to deleting + re-running the Individual-shots half
+	// of Add-to-Queue, but doesn't touch the Render Queue.
+	std::string HandleSyncRenderSettings(const std::string& /*body*/)
+	{
+		BaseDocument* doc = GetActiveDocument();
+		if (!doc)
+			return "{\"ok\":false,\"error\":\"no doc\",\"status\":\"No active document\"}";
+		// Use the SNAPSHOTTED master, not GetActiveRenderData(). The
+		// user may have switched the active RD to one of our clones
+		// before hitting Sync; we want to refresh against the original
+		// master either way. Falls back to active if we have no
+		// snapshot yet (shouldn't happen in normal flow since the
+		// button only lights after Add-to-Queue).
+		RenderData* masterRD = GetSnapshottedMasterRD(doc);
+		if (!masterRD)
+			masterRD = doc->GetActiveRenderData();
+		if (!masterRD)
+			return "{\"ok\":false,\"error\":\"no renderdata\",\"status\":\"No active Render Settings\"}";
+		TakeData* takeData = doc->GetTakeData();
+
+		// Collect work first — mutating the RD list while walking it
+		// is unsafe. Each entry captures everything needed to replace
+		// the old RD: name, preserved range, and any takes that point
+		// at it.
+		struct SyncJob {
+			cinema::String name;
+			RenderData* oldRD;
+			BaseTime savedFrom;
+			BaseTime savedTo;
+			Int32 savedSeq;
+			std::vector<BaseTake*> takes;
+		};
+		std::vector<SyncJob> jobs;
+		for (RenderData* rd = doc->GetFirstRenderData(); rd; rd = rd->GetNext())
+		{
+			cinema::String n = rd->GetName();
+			if (!(n.GetLength() >= 11 && n.SubStr(0, 11) == cinema::String("Shotblocks_")))
+				continue;
+			SyncJob j;
+			j.name = n;
+			j.oldRD = rd;
+			BaseContainer& bc = rd->GetDataInstanceRef();
+			j.savedFrom = bc.GetTime(RDATA_FRAMEFROM);
+			j.savedTo   = bc.GetTime(RDATA_FRAMETO);
+			j.savedSeq  = bc.GetInt32(RDATA_FRAMESEQUENCE);
+			// Find takes pointing at this RD.
+			if (takeData)
+			{
+				BaseTake* main = takeData->GetMainTake();
+				for (BaseTake* t = main ? main->GetDown() : nullptr; t; t = t->GetNext())
+				{
+					if (t->GetRenderData(takeData) == rd)
+						j.takes.push_back(t);
+				}
+			}
+			jobs.push_back(std::move(j));
+		}
+
+		doc->StartUndo();
+		for (SyncJob& j : jobs)
+		{
+			// Build the replacement first so AddUndo's snapshot of the
+			// OLD node is valid at undo time.
+			RenderData* fresh = static_cast<RenderData*>(masterRD->GetClone(COPYFLAGS::NONE, nullptr));
+			if (!fresh) continue;
+			fresh->SetName(j.name);
+			BaseContainer& fbc = fresh->GetDataInstanceRef();
+			fbc.SetInt32(RDATA_FRAMESEQUENCE, j.savedSeq);
+			fbc.SetTime(RDATA_FRAMEFROM, j.savedFrom);
+			fbc.SetTime(RDATA_FRAMETO,   j.savedTo);
+
+			// Insert fresh before the old, then drop the old. This keeps
+			// list ordering predictable across syncs.
+			doc->InsertRenderData(fresh, nullptr, j.oldRD->GetPred());
+			for (BaseTake* t : j.takes)
+				t->SetRenderData(takeData, fresh);
+			doc->AddUndo(UNDOTYPE::DELETEOBJ, j.oldRD);
+			j.oldRD->Remove();
+			RenderData::Free(j.oldRD);
+		}
+		doc->EndUndo();
+
+		// New baseline + tell JS we're in sync.
+		SnapshotMasterRenderSettings(doc);
+		PushRenderSettingsDrift(doc);
+		EventAdd();
+
+		char buf[128];
+		_snprintf_s(buf, sizeof(buf), _TRUNCATE,
+			"{\"ok\":true,\"kind\":\"sync-render-settings-ack\",\"synced\":%d}",
+			(int)jobs.size());
 		return buf;
 	}
 
@@ -2039,6 +2161,202 @@ private:
 				return t;
 		}
 		return nullptr;
+	}
+
+	// True if any RenderData in the doc is one of ours (named
+	// Shotblocks_*). Drift detection only matters when there's at
+	// least one clone to keep in sync.
+	Bool HasShotblocksRenderData(BaseDocument* doc)
+	{
+		if (!doc) return false;
+		for (RenderData* rd = doc->GetFirstRenderData(); rd; rd = rd->GetNext())
+		{
+			cinema::String n = rd->GetName();
+			// "Shotblocks_" is 11 chars
+			if (n.GetLength() >= 11 && n.SubStr(0, 11) == cinema::String("Shotblocks_"))
+				return true;
+		}
+		return false;
+	}
+
+	// Compute a fingerprint that changes whenever anything materially
+	// changes about the master RenderData. BaseContainer::operator==
+	// catches the RD's top-level fields (format, output path, frame
+	// rate, multipass flags) but NOT child-tree edits — and AOVs are
+	// stored as CHILDREN of the RD, not container fields. The
+	// fingerprint walks:
+	//   - the RD itself: BaseContainer's GetDirty() seed + name
+	//   - children recursively (multipass nodes / AOV layers / etc):
+	//     name + type + dirty count
+	// GetDirty() is C4D's monotonic version counter for a node, so
+	// any edit anywhere in the node bumps it. Recurse to catch
+	// AOV-internal edits too. Cheap; runs on EVMSG_CHANGE only.
+	// Append a GeData's value to `out` in a stable text form. Only
+	// scalars contribute hashable bytes; vectors / strings / basetimes
+	// have their scalar parts pulled out. Custom-data types we don't
+	// know about contribute their type id only — better than nothing
+	// and safe across SDK versions.
+	static void AppendGeDataValue(std::string& out, const GeData* g)
+	{
+		if (!g) { out += "_"; return; }
+		Int32 t = g->GetType();
+		out += "t"; out += std::to_string((unsigned long long)t); out += "=";
+		switch (t)
+		{
+			case DA_LONG:
+				out += std::to_string((long long)g->GetInt32());
+				break;
+			case DA_LLONG:
+				out += std::to_string((long long)g->GetInt64());
+				break;
+			case DA_REAL:
+				out += std::to_string((double)g->GetFloat());
+				break;
+			case DA_TIME:
+			{
+				BaseTime bt = g->GetTime();
+				out += std::to_string((double)bt.Get());
+				break;
+			}
+			case DA_VECTOR:
+			{
+				Vector v = g->GetVector();
+				out += std::to_string((double)v.x); out += ",";
+				out += std::to_string((double)v.y); out += ",";
+				out += std::to_string((double)v.z);
+				break;
+			}
+			case DA_STRING:
+			{
+				Char* nc = g->GetString().GetCStringCopy();
+				out += nc ? nc : "";
+				if (nc) DeleteMem(nc);
+				break;
+			}
+			case DA_FILENAME:
+			{
+				Char* nc = g->GetFilename().GetString().GetCStringCopy();
+				out += nc ? nc : "";
+				if (nc) DeleteMem(nc);
+				break;
+			}
+			default:
+				// Custom data types — opaque to us. Skip the value;
+				// the type id is already part of the fingerprint above.
+				break;
+		}
+	}
+
+	// Serialize a BaseContainer into a stable string. Walks every
+	// (id, GeData) pair so any container mutation moves the string,
+	// without depending on GetDirty (which lies during UI navigation).
+	static void AppendContainer(std::string& out, const BaseContainer& bc)
+	{
+		Int32 i = 0;
+		while (true)
+		{
+			Int32 id = bc.GetIndexId(i);
+			if (id == NOTOK) break;
+			const GeData* g = bc.GetIndexData(i);
+			out += "[";
+			out += std::to_string((long long)id);
+			out += ":";
+			AppendGeDataValue(out, g);
+			out += "]";
+			++i;
+		}
+	}
+
+	std::string ComputeRenderSettingsFingerprint(RenderData* rd)
+	{
+		std::string out;
+		if (!rd) return out;
+		out.reserve(2048);
+		// Walk the RD and every descendant. For each node, fingerprint
+		// type + name + full container serialization. GetDirty isn't
+		// reliable — C4D pokes it on tab navigation in the Render
+		// Settings panel even when nothing's been edited. Walking the
+		// container directly is the only ground truth.
+		std::function<void(BaseList2D*)> walk = [&](BaseList2D* node) {
+			if (!node) return;
+			out += "{";
+			out += std::to_string((unsigned long long)node->GetType());
+			out += ":";
+			Char* nc = node->GetName().GetCStringCopy();
+			out += nc ? nc : "";
+			if (nc) DeleteMem(nc);
+			out += "|";
+			AppendContainer(out, node->GetDataInstanceRef());
+			out += "}";
+			for (GeListNode* c = node->GetDown(); c; c = c->GetNext())
+				walk(static_cast<BaseList2D*>(c));
+		};
+		walk(rd);
+		// VideoPosts (Redshift, Octane, Standard Renderer, etc.) hang
+		// off RenderData via a separate list — they are NOT children
+		// reached by GetDown(). Each VideoPost holds its own settings
+		// container, so we have to walk this list explicitly or
+		// Redshift edits go undetected.
+		for (BaseVideoPost* vp = rd->GetFirstVideoPost(); vp; vp = static_cast<BaseVideoPost*>(vp->GetNext()))
+			walk(vp);
+		return out;
+	}
+
+	// Cache a fingerprint of the master RD at this moment, plus a
+	// BaseLink to it, so subsequent drift checks always fingerprint
+	// the SAME node — not whatever happens to be active now. Without
+	// the link, clicking a different preset in the render-settings
+	// list would change GetActiveRenderData() and falsely register
+	// as drift.
+	void SnapshotMasterRenderSettings(BaseDocument* doc)
+	{
+		RenderData* masterRD = doc ? doc->GetActiveRenderData() : nullptr;
+		if (!masterRD || !_renderSettingsSourceLink)
+		{
+			_renderSettingsSnapshotValid = false;
+			return;
+		}
+		_renderSettingsSourceLink->SetLink(masterRD);
+		_renderSettingsFingerprint = ComputeRenderSettingsFingerprint(masterRD);
+		_renderSettingsSnapshotValid = true;
+	}
+
+	// Resolve the snapshotted-master RD back from its BaseLink. Null
+	// if we never snapshotted, the doc changed, or the user deleted
+	// that preset entirely.
+	RenderData* GetSnapshottedMasterRD(BaseDocument* doc)
+	{
+		if (!_renderSettingsSnapshotValid || !_renderSettingsSourceLink || !doc)
+			return nullptr;
+		return static_cast<RenderData*>(_renderSettingsSourceLink->GetLink(doc));
+	}
+
+	// Push the current stale/in-sync state to JS if it changed since
+	// the last push. JS uses this to grey/light the Sync button. Idle
+	// docs (no Shotblocks_* clones in the OM) report stale=false so
+	// the button stays inactive even if the user is making render
+	// edits unrelated to Shotblocks.
+	void PushRenderSettingsDrift(BaseDocument* doc)
+	{
+		if (!_htmlView || !_navigated) return;
+		Bool hasClones = HasShotblocksRenderData(doc);
+		Bool stale = false;
+		if (hasClones)
+		{
+			RenderData* sourceRD = GetSnapshottedMasterRD(doc);
+			if (sourceRD)
+			{
+				std::string cur = ComputeRenderSettingsFingerprint(sourceRD);
+				stale = (cur != _renderSettingsFingerprint);
+			}
+		}
+		if (stale == _lastPushedStale) return;
+		_lastPushedStale = stale;
+		char buf[96];
+		_snprintf_s(buf, sizeof(buf), _TRUNCATE,
+			"{\"kind\":\"render-settings-drift\",\"stale\":%s}",
+			stale ? "true" : "false");
+		_htmlView->PostWebMessage(maxon::String(buf));
 	}
 
 	// Resolve every objectId in _cameraLinks and push {id, alive, name}
@@ -2333,6 +2651,23 @@ private:
 	Int32                _v2RangeIn{0};
 	Int32                _v2RangeOut{1 << 30};
 	Bool                 _v2LoopEnabled{false};
+
+	// Render-settings drift detection. Snapshot of the master
+	// RenderData's container, taken at the end of every Add-to-Queue
+	// (Individual shots) and every Sync. EVMSG_CHANGE re-reads master
+	// and compares; mismatch → push render-settings-drift{stale:true}
+	// so the Inspector can light the Sync button. Cleared (and stale
+	// pushed as false) when there are no Shotblocks_* clones.
+	std::string          _renderSettingsFingerprint;
+	Bool                 _renderSettingsSnapshotValid{false};
+	// BaseLink to the master RenderData that was active when we
+	// snapshotted. Drift checks fingerprint THIS specific RD, not
+	// whatever GetActiveRenderData() currently returns — otherwise
+	// the Sync button lights whenever the user clicks a different
+	// preset in the render-settings list, even though nothing
+	// changed. Cleared on doc close / load.
+	AutoAlloc<BaseLink>  _renderSettingsSourceLink;
+	Bool                 _lastPushedStale{false};
 };
 
 

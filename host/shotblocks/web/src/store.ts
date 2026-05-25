@@ -171,6 +171,11 @@ export interface State {
   // Render workflow settings — persisted alongside markers in the
   // helper JSON. v1 has just renderMode; future fields land here.
   renderMode: RenderMode;
+  // Master Render Settings has drifted from the Shotblocks_* clones
+  // since the last Add-to-Queue / Sync. C++ owns the truth (it holds
+  // the snapshot); JS just mirrors what C++ pushes. NOT persisted —
+  // recomputed every session on next EVMSG_CHANGE after add-to-queue.
+  renderSettingsStale: boolean;
 
   // Tracks. Index 0 = closest to the V/A divider (V1 / A1). New tracks
   // are added at the outer ends. Auto-create / auto-remove on clip
@@ -611,6 +616,7 @@ export interface State {
 
   /** Render workflow actions — see slices/renderSettings.ts. */
   setRenderMode: (mode: RenderMode) => void;
+  setRenderSettingsStale: (stale: boolean) => void;
 }
 
 /** Monotonic clip id. Unique across all tracks for the session.

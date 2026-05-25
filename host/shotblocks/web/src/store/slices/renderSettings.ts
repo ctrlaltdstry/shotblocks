@@ -19,11 +19,20 @@ export type RenderMode = 'whole-sequence' | 'individual-shots';
 export interface RenderSettingsSlice {
   renderMode: RenderMode;
   setRenderMode: (mode: RenderMode) => void;
+  /** Mirror of C++ state: master Render Settings has drifted from the
+   *  Shotblocks_* clones since the last Add-to-Queue / Sync. C++ pushes
+   *  on EVMSG_CHANGE; not persisted. */
+  renderSettingsStale: boolean;
+  setRenderSettingsStale: (stale: boolean) => void;
 }
 
 export const createRenderSettingsSlice: StateCreator<State, [], [], RenderSettingsSlice> = (set) => ({
   renderMode: 'individual-shots',
   setRenderMode: (mode) => set((s) => (
     s.renderMode === mode ? s : { renderMode: mode }
+  )),
+  renderSettingsStale: false,
+  setRenderSettingsStale: (stale) => set((s) => (
+    s.renderSettingsStale === stale ? s : { renderSettingsStale: stale }
   )),
 });

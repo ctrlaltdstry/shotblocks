@@ -1518,8 +1518,8 @@ body.is-resizing-headers .body { transition: none; }
   overflow-y: auto;
   display: flex;
   flex-direction: column;
-  gap: 4px;
-  padding: 5px 10px 10px;
+  gap: 10px;
+  padding: 10px;
 }
 
 /* Section card — Figma node 375:1176 / 376:1254. Grey-16 fill,
@@ -1538,9 +1538,10 @@ body.is-resizing-headers .body { transition: none; }
   display: flex;
   align-items: center;
   justify-content: space-between;
-  padding: 6px 10px 6px 15px;
+  padding: 10px 14px 10px 15px;
   cursor: pointer;
   user-select: none;
+  margin-bottom: 4px;
 }
 /* Collapse wrapper — grid trick: animate the row from 0fr (closed)
    to 1fr (open). The inner div uses min-height:0 + overflow:hidden
@@ -1581,19 +1582,20 @@ body.is-resizing-headers .body { transition: none; }
 .inspector-section__body {
   display: flex;
   flex-direction: column;
-  gap: 4px;
-  padding-bottom: 10px;
+  gap: 12px;
+  padding: 6px 0 16px 0;
 }
 
 /* Row pattern — Figma nodes 376:1213, 376:1246, etc. Label on left,
-   control on right (flex-1). 10px Inter Regular white text, padded
-   top 6px and left/right 15px per Figma. */
+   control on right (flex-1). 10px Inter Regular white text. Per-row
+   vertical padding is 0 — vertical rhythm comes from the parent
+   .inspector-section__body's flex `gap`. */
 .inspector-row {
   display: flex;
   align-items: center;
   justify-content: space-between;
   gap: 14px;
-  padding: 6px 15px 0 15px;
+  padding: 0 15px;
   overflow: hidden;
 }
 .inspector-row__label {
@@ -1621,7 +1623,7 @@ body.is-resizing-headers .body { transition: none; }
 .inspector-dropdown {
   background: var(--color-grey-24);
   border-radius: 4px;
-  padding: 7px 14px;
+  padding: 10px 14px;
   display: flex;
   align-items: center;
   justify-content: space-between;
@@ -1641,7 +1643,7 @@ body.is-resizing-headers .body { transition: none; }
   box-shadow: 0 4px 12px rgba(0, 0, 0, 0.4);
 }
 .inspector-dropdown__menu-item {
-  padding: 7px 14px;
+  padding: 10px 14px;
   font-family: Inter, sans-serif;
   font-weight: 400;
   font-size: 10px;
@@ -1679,20 +1681,34 @@ body.is-resizing-headers .body { transition: none; }
   flex-shrink: 0;
 }
 
-/* Action wrapper — holds the section's primary button + status line
-   below the rows. Same horizontal padding as the rows so the button
-   aligns left with row labels. */
+/* Action wrapper — holds the section's button row + status line.
+   Same horizontal padding as the rows so the buttons align with the
+   row labels. */
 .inspector-section__action {
-  padding: 8px 15px 0 15px;
+  padding: 4px 15px 0 15px;
   display: flex;
   flex-direction: column;
-  gap: 6px;
+  gap: 10px;
 }
 
-/* Button — Figma node 357:741. Grey-24 fill, 4px radius, padding
-   7px 14px, 10px Inter Regular white text. Hover lightens via a
+/* Two-up button row. The two children split the width 50/50 via
+   grid so adding/removing the second button doesn't reflow the
+   first. Single-button case (e.g. whole-sequence mode) shows only
+   the first column populated and leaves the right cell empty,
+   keeping Add-to-Queue at consistent width across modes. */
+.inspector-section__button-row {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 10px;
+}
+
+/* Button — Figma node 398:1312 / 398:1324. Grey-24 fill (disabled
+   reads against the section-grey-16 background), 4px radius,
+   padding 7px 14px, 8px Inter Regular text. Hover lightens via a
    tinted overlay; pressed flashes primary-highlight blue and snaps
-   back on release. */
+   back. Buttons stretch to fill their grid cell when inside a
+   button-row. Icon + label layout uses a 10px gap matching Figma's
+   spec for the Sync button. */
 .inspector-button {
   appearance: none;
   border: 0;
@@ -1702,10 +1718,14 @@ body.is-resizing-headers .body { transition: none; }
   color: var(--color-grey-white);
   background: var(--color-grey-24);
   border-radius: 4px;
-  padding: 7px 14px;
+  padding: 12px 14px;
   cursor: pointer;
   user-select: none;
-  align-self: flex-start;
+  width: 100%;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 10px;
   transition: background-color 100ms ease;
 }
 .inspector-button:hover {
@@ -1716,9 +1736,48 @@ body.is-resizing-headers .body { transition: none; }
 }
 .inspector-button.is-disabled,
 .inspector-button:disabled {
-  opacity: 0.4;
   cursor: not-allowed;
   background: var(--color-grey-24);
+  color: var(--color-grey-50);
+}
+.inspector-button.is-primary {
+  background: var(--color-timeline-primary-highlight);
+  color: var(--color-grey-white);
+}
+.inspector-button.is-primary:hover {
+  background: color-mix(in srgb, var(--color-timeline-primary-highlight) 85%, white);
+}
+.inspector-button.is-primary:active {
+  background: color-mix(in srgb, var(--color-timeline-primary-highlight) 70%, black);
+}
+/* Ghost variant — used for the in-sync (disabled) Sync button.
+   Matches the disabled appearance: grey-24 fill so the shape reads
+   against the section background, grey-50 label/icon. */
+.inspector-button.is-ghost {
+  background: var(--color-grey-24);
+  color: var(--color-grey-50);
+}
+
+/* Icon slot inside a button — 12x12 mask-driven shape. Color is
+   inherited via background-color: currentColor so the icon tracks
+   the button's text color (white on primary, grey-50 on ghost /
+   disabled). The source SVG is set per-variant via a modifier
+   class (see .inspector-button__icon--sync). */
+.inspector-button__icon {
+  width: 12px;
+  height: 12px;
+  background-color: currentColor;
+  -webkit-mask-repeat: no-repeat;
+  mask-repeat: no-repeat;
+  -webkit-mask-size: contain;
+  mask-size: contain;
+  -webkit-mask-position: center;
+  mask-position: center;
+  flex-shrink: 0;
+}
+.inspector-button__icon--sync {
+  -webkit-mask-image: url('./icons/inspector-sync.svg');
+          mask-image: url('./icons/inspector-sync.svg');
 }
 
 /* Status line below the button — small grey text that fades the
