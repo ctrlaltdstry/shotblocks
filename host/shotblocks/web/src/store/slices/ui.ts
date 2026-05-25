@@ -9,7 +9,7 @@ import type { DragPreview, ToolId } from '../types';
 export interface UiSlice {
   activeTool: ToolId;
   audioScrub: boolean;
-  inspectorOpen: boolean;
+  settingsOpen: boolean;
   snapEnabled: boolean;
   snapIndicatorFrames: number[];
   detectingBeats: boolean;
@@ -40,8 +40,8 @@ export interface UiSlice {
   } | null;
 
   setActiveTool: (tool: ToolId) => void;
-  setInspectorOpen: (open: boolean) => void;
   setAudioScrub: (on: boolean) => void;
+  setSettingsOpen: (open: boolean) => void;
   setSnapEnabled: (on: boolean) => void;
   setSnapIndicatorFrames: (frames: number[]) => void;
   setDetectingBeats: (on: boolean) => void;
@@ -68,7 +68,7 @@ export interface UiSlice {
 export const createUiSlice: StateCreator<State, [], [], UiSlice> = (set) => ({
   activeTool: 'select',
   audioScrub: true,
-  inspectorOpen: false,
+  settingsOpen: false,
   snapEnabled: false,
   snapIndicatorFrames: [],
   detectingBeats: false,
@@ -87,8 +87,8 @@ export const createUiSlice: StateCreator<State, [], [], UiSlice> = (set) => ({
   contextMenu: null,
 
   setActiveTool: (tool) => set({ activeTool: tool }),
-  setInspectorOpen: (open) => set({ inspectorOpen: open }),
   setAudioScrub: (on) => set({ audioScrub: on }),
+  setSettingsOpen: (open) => set({ settingsOpen: open }),
   setSnapEnabled: (on) => set({ snapEnabled: on }),
   setSnapIndicatorFrames: (frames) => set((s) => {
     // Reference-equality skip — pointermove fires every frame at a

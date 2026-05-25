@@ -120,10 +120,10 @@ export interface State {
   // rail. Default on.
   audioScrub: boolean;
 
-  // Inspector panel (right-side slide-in) open/closed. Toggled from
-  // the utilities-strip gear icon. Hosts global settings now; grows
-  // into selected-shot properties + preset layers later.
-  inspectorOpen: boolean;
+  // Settings modal open/closed. Toggled by the utility-strip gear
+  // icon. A centered modal hosts global preferences (currently just
+  // the C4D-audio-follows toggle). Will grow as more settings land.
+  settingsOpen: boolean;
 
   // When ON (default), v2 audio plays/scrubs in response to the C4D
   // NATIVE timeline (its play button AND scrubbing its playhead).
@@ -306,9 +306,9 @@ export interface State {
    *  [HEADERS_MIN_W, HEADERS_MAX_W]. */
   setHeadersWidth: (w: number) => void;
   setActiveTool: (tool: ToolId) => void;
-  setInspectorOpen: (open: boolean) => void;
   setC4dAudioFollows: (on: boolean) => void;
   setAudioScrub: (on: boolean) => void;
+  setSettingsOpen: (open: boolean) => void;
   setSnapEnabled: (on: boolean) => void;
   setSnapIndicatorFrames: (frames: number[]) => void;
   setScrubFrame: (frame: number | null) => void;

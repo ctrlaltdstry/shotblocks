@@ -27,6 +27,7 @@ import { ContextMenu } from './components/ContextMenu';
 import { RangeDim } from './components/RangeDim';
 import { SpawnGhostLane } from './components/SpawnGhostLane';
 import { Inspector } from './components/Inspector';
+import { SettingsPanel } from './components/SettingsPanel';
 import { Meter } from './components/Meter';
 import { UtilityStrip } from './components/UtilityStrip';
 import { Timecode } from './components/Timecode';
@@ -117,7 +118,6 @@ function App() {
   }, []);
 
   const activeTool = useStore((s) => s.activeTool);
-  const inspectorOpen = useStore((s) => s.inspectorOpen);
   const headersWidth = useStore((s) => s.headersWidth);
 
   useVerticalZoomVars(lanesVideosRef, lanesAudiosRef);
@@ -142,8 +142,7 @@ function App() {
 
       <div
         className={'body'
-          + (activeTool === 'select' ? ' is-tool-select' : '')
-          + (inspectorOpen ? ' inspector-open' : '')}
+          + (activeTool === 'select' ? ' is-tool-select' : '')}
         style={{ '--headers-w': headersWidth + 'px' } as React.CSSProperties}
       >
         {/* row 1, col 1 — logo */}
@@ -258,10 +257,14 @@ function App() {
             dragging a clip into a not-yet-existing track. */}
         <SpawnGhostLane />
 
-        {/* Inspector — grid column 4, all 3 rows. Width collapses to 0
-            when closed so the timeline reclaims the space. */}
+        {/* Inspector — grid column 4. Always visible at a fixed width
+            per Figma node 365:668. Holds render settings (and, in v2,
+            motion-layer settings via a hidden-in-v1 tab strip). */}
         <Inspector />
       </div>
+      {/* Settings modal — opened by the utility-strip gear icon.
+          Centered overlay; backdrop click / Escape dismiss. */}
+      <SettingsPanel />
       <DebugOverlay />
     </div>
   );

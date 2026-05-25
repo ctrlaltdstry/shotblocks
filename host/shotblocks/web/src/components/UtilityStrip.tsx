@@ -96,16 +96,16 @@ function MarkersToggle() {
   );
 }
 
-/** Inspector toggle — the utilities-strip gear icon. Opens / closes
- *  the right-side Inspector panel. (Gear icon kept for now; a custom
- *  icon comes later.) */
-function InspectorToggle() {
-  const open = useStore((s) => s.inspectorOpen);
+/** Settings gear — opens a centered modal hosting global preferences
+ *  (audio behavior, etc.). The inspector is decoupled from this icon
+ *  and is always-open in its own column. */
+function SettingsButton() {
+  const open = useStore((s) => s.settingsOpen);
   return (
     <div
       className={'utilstrip__icon' + (open ? ' is-active' : '')}
-      title="Inspector"
-      onClick={() => useStore.getState().setInspectorOpen(!useStore.getState().inspectorOpen)}
+      title="Settings"
+      onClick={() => useStore.getState().setSettingsOpen(!useStore.getState().settingsOpen)}
     >
       <span className="icon icon--settings" style={{ '--icon-w': '15px', '--icon-h': '15px' } as React.CSSProperties} />
     </div>
@@ -123,7 +123,7 @@ export function UtilityStrip() {
       <SnapToggle />
       <BeatDetectionButton />
       <MarkersToggle />
-      <InspectorToggle />
+      <SettingsButton />
     </div>
   );
 }

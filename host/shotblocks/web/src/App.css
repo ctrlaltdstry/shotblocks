@@ -26,24 +26,20 @@
 .body {
   flex: 1 1 auto;
   display: grid;
-  /* Column 4 is the Inspector. Its width is --inspector-w, which is 0
-     when the panel is closed and a fixed width when open — the `1fr`
-     timeline column shrinks/grows to absorb the difference, so the
-     Inspector PUSHES the timeline rather than overlapping it.
-     Transitioning grid-template-columns animates the push.
+  /* Column 4 is the Inspector — always visible at a fixed 250px (per
+     Figma node 365:668). The `1fr` timeline column absorbs whatever
+     width is left. No animation: the inspector doesn't open or close.
      No scrollbar column/row — scrollbars are 4px overlays on the
      stage edge (see .h-scroll / .v-scroll). */
-  grid-template-columns: var(--rail-w) var(--headers-w) 1fr var(--inspector-w, 0px);
+  --inspector-w: 250px;
+  grid-template-columns: var(--rail-w) var(--headers-w) 1fr var(--inspector-w);
   grid-template-rows: var(--utilstrip-h) 1fr;
   min-height: 0;
-  transition: grid-template-columns 160ms ease;
 }
-/* While dragging the headers-column resize handle, the transition
-   must be off or the column lags 160ms behind the cursor. */
+/* While dragging the headers-column resize handle, no transitions
+   should fight the cursor. (No grid-template-columns transition
+   any more — kept the marker class in case other selectors hook it.) */
 body.is-resizing-headers .body { transition: none; }
-.body.inspector-open {
-  --inspector-w: 264px;
-}
 
 /* row 1, col 1 */
 .logo {
@@ -1494,12 +1490,10 @@ body.is-resizing-headers .body { transition: none; }
   user-select: none;
 }
 
-/* Inspector panel — grid column 4, spanning both rows. It PUSHES
-   the timeline: the body grid's column 4 width (--inspector-w)
-   animates 0 → 264px, the `1fr` timeline column absorbs it. The
-   panel never overlaps the timeline. Hosts global settings now;
-   grows into selected-shot properties + the layered-preset
-   sub-timeline later. */
+/* Inspector panel — grid column 4, spanning both rows. Always
+   visible at 250px (per Figma node 365:668). Hosts render settings
+   and (in v2) motion-layer settings via a Render / Motion tab strip
+   that's currently hidden until v2 lands. */
 .inspector {
   grid-column: 4;
   grid-row: 1 / span 2;
@@ -1507,41 +1501,9 @@ body.is-resizing-headers .body { transition: none; }
   border-left: 1px solid var(--color-grey-16);
   display: flex;
   flex-direction: column;
-  overflow: hidden;          /* clip content while the column collapses */
+  overflow: hidden;
   min-width: 0;
   font-family: Inter, sans-serif;
-}
-/* When closed the grid column is 0-wide; hide the panel entirely so
-   its border/content don't show as a sliver. */
-.body:not(.inspector-open) .inspector { display: none; }
-
-.inspector__header {
-  flex: 0 0 auto;
-  height: var(--utilstrip-h);
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  padding: 0 12px;
-  border-bottom: 1px solid var(--color-grey-16);
-}
-.inspector__title {
-  font-size: 12px;
-  font-weight: 500;
-  color: var(--color-grey-white);
-  letter-spacing: 0.02em;
-}
-.inspector__close {
-  width: 20px; height: 20px;
-  display: flex; align-items: center; justify-content: center;
-  font-size: 16px; line-height: 1;
-  color: var(--color-grey-50);
-  cursor: pointer;
-  border-radius: 3px;
-  user-select: none;
-}
-.inspector__close:hover {
-  color: var(--color-grey-white);
-  background: var(--color-grey-16);
 }
 
 .inspector__body {
@@ -1580,6 +1542,102 @@ body.is-resizing-headers .body { transition: none; }
   cursor: pointer;
 }
 .inspector__hint {
+  margin-top: 6px;
+  font-size: 10px;
+  line-height: 1.4;
+  color: var(--color-grey-50);
+}
+
+/* Settings modal — centered overlay opened from the utility-strip
+   gear icon. Hosts global preferences that don't belong on the
+   timeline surface. Backdrop click / Escape / close-X all dismiss.
+   z-index sits above the inspector + every other panel so it
+   floats on top. */
+.settings-backdrop {
+  position: fixed;
+  inset: 0;
+  background: rgba(0, 0, 0, 0.5);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 100;
+  font-family: Inter, sans-serif;
+}
+.settings-panel {
+  width: 320px;
+  max-height: 80vh;
+  background: var(--color-grey-12);
+  border: 1px solid var(--color-grey-16);
+  border-radius: 6px;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  box-shadow: 0 10px 30px rgba(0, 0, 0, 0.4);
+}
+.settings-panel__header {
+  flex: 0 0 auto;
+  height: 32px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 0 12px;
+  border-bottom: 1px solid var(--color-grey-16);
+}
+.settings-panel__title {
+  font-size: 12px;
+  font-weight: 500;
+  color: var(--color-grey-white);
+  letter-spacing: 0.02em;
+}
+.settings-panel__close {
+  width: 20px; height: 20px;
+  display: flex; align-items: center; justify-content: center;
+  font-size: 16px; line-height: 1;
+  color: var(--color-grey-50);
+  cursor: pointer;
+  border-radius: 3px;
+  user-select: none;
+}
+.settings-panel__close:hover {
+  color: var(--color-grey-white);
+  background: var(--color-grey-16);
+}
+.settings-panel__body {
+  flex: 1 1 auto;
+  overflow-y: auto;
+  padding: 12px;
+}
+.settings-panel__section + .settings-panel__section {
+  margin-top: 18px;
+  padding-top: 18px;
+  border-top: 1px solid var(--color-grey-16);
+}
+.settings-panel__section-title {
+  font-size: 10px;
+  font-weight: 600;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--color-grey-50);
+  margin-bottom: 10px;
+}
+.settings-panel__row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  cursor: pointer;
+}
+.settings-panel__row-label {
+  font-size: 11px;
+  color: var(--color-grey-white);
+}
+.settings-panel__checkbox {
+  flex: 0 0 auto;
+  width: 14px; height: 14px;
+  accent-color: var(--color-timeline-primary-highlight);
+  cursor: pointer;
+}
+.settings-panel__hint {
   margin-top: 6px;
   font-size: 10px;
   line-height: 1.4;
