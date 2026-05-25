@@ -136,6 +136,22 @@ body.is-resizing-headers .body { transition: none; }
   transform: translateX(-50%);
   z-index: 6;
 }
+/* Markers — purple pin shape (8x12) hanging from the ruler top,
+   point-down. Each instance is a child of .ruler-row__inner with
+   `left` set per-marker. pointer-events:none so left-click scrub
+   still works through the marker; the next commit's right-click
+   delete uses the ruler-row's onContextMenu + hit-tests the marker
+   frames in JS. */
+.ruler__marker {
+  position: absolute;
+  bottom: 0;
+  width: 8px;
+  height: 12px;
+  display: block;
+  transform: translateX(-50%);
+  z-index: 5;
+  pointer-events: none;
+}
 .playhead-line {
   position: absolute;
   top: 0; bottom: 0;

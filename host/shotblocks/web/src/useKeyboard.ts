@@ -139,6 +139,17 @@ export function useKeyboard(): void {
         return;
       }
 
+      // M → drop a marker at the current playhead frame. NLE-standard
+      // shortcut (Premiere, Resolve, Final Cut). Frame is the scrubbed
+      // frame if a scrub is in flight, otherwise the C++ tick frame.
+      if (!mod && !ev.altKey && !ev.shiftKey && (ev.key === 'm' || ev.key === 'M')) {
+        ev.preventDefault();
+        const st = useStore.getState();
+        const frame = st.scrubFrame ?? st.currentFrame;
+        st.addMarker(frame);
+        return;
+      }
+
       // Shift+L → toggle Loop (mirrors the utilities-strip Loop button).
       if (!mod && !ev.altKey && ev.shiftKey && (ev.key === 'l' || ev.key === 'L')) {
         ev.preventDefault();

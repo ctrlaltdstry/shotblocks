@@ -4,6 +4,7 @@ import { useElementSize } from '../useElementSize';
 import { computeRulerLayout } from '../lib/ruler';
 import { send } from '../lib/host';
 import playheadHandleUrl from '../icons/playhead-handle.svg';
+import markerUrl from '../icons/marker.svg';
 import { RangeBar } from './RangeBar';
 import { RangeDim } from './RangeDim';
 
@@ -17,6 +18,8 @@ export function Ruler() {
   const scrubFrame = useStore((s) => s.scrubFrame);
   const setScrubFrame = useStore((s) => s.setScrubFrame);
   const docFrames = useStore((s) => s.docFrames);
+  const markers = useStore((s) => s.markers);
+  const markersVisible = useStore((s) => s.markersVisible);
 
   // Render the scrub-preview frame if active, otherwise the C++ tick frame.
   // Decouples visible playhead from C++'s tick echo rate (which is slower
@@ -148,6 +151,20 @@ export function Ruler() {
           />
         ))}
       </div>
+      {markersVisible && markers.map((m) => {
+        if (m < h.vMin || m > h.vMax) return null;
+        const x = (m - h.vMin) * pxPerFrame;
+        return (
+          <img
+            key={m}
+            className="ruler__marker"
+            src={markerUrl}
+            alt=""
+            data-marker-frame={m}
+            style={{ left: x + 'px' }}
+          />
+        );
+      })}
       {handleVisible && (
         <img
           className="ruler__handle"
