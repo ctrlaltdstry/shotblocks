@@ -1,5 +1,6 @@
 import { useEffect, useRef } from 'react';
 import { useStore, getNextClipId, setNextClipId, LEVEL_DEFAULT_TANGENT, type Track, type LevelKeyframe, type LevelInterp, type LevelTangent } from './store';
+import { TRACK_FLAG_DEFAULTS } from './store/types';
 import { onMessage, send } from './lib/host';
 import { fetchAudio, removeAudio, hasAudio } from './lib/audioStore';
 
@@ -266,9 +267,22 @@ async function loadFromHost(skipNextSave: React.MutableRefObject<boolean>) {
         };
       }),
     }));
+    // Auto-respawn V1 / A1 if the persisted scene has zero tracks on
+    // a side. Mirrors the "delete last track" behavior (timeline
+    // slice's deleteTrack) — every side must always have at least
+    // one drop target. Scenes saved on a different machine, scenes
+    // edited out-of-band, or scenes where the user deleted the only
+    // track and then saved would otherwise load with no lanes.
+    const safeVideoTracks = videoTracks.length > 0
+      ? videoTracks
+      : [{ id: 1, name: 'Video 1', clips: [], ...TRACK_FLAG_DEFAULTS }];
+    const safeAudioTracks = audioTracks.length > 0
+      ? audioTracks
+      : [{ id: 1, name: 'Audio 1', clips: [], ...TRACK_FLAG_DEFAULTS }];
+
     skipNextSave.current = true;
     setNextClipId(Math.max(1, parsed.nextClipId | 0));
-    useStore.setState({ videoTracks, audioTracks });
+    useStore.setState({ videoTracks: safeVideoTracks, audioTracks: safeAudioTracks });
 
     // Fetch persisted audio binaries for any audio MEDIA we don't
     // already have in memory. Keyed by mediaId so split halves
@@ -279,7 +293,7 @@ async function loadFromHost(skipNextSave: React.MutableRefObject<boolean>) {
     // bytes for that mediaId, e.g. corruption or out-of-band edit).
     const seenMedia = new Set<number>();
     const setOrphan = useStore.getState().setAudioMediaOrphan;
-    for (const t of audioTracks) {
+    for (const t of safeAudioTracks) {
       for (const c of t.clips) {
         const mediaId = c.mediaId ?? c.id;
         if (seenMedia.has(mediaId)) continue;
