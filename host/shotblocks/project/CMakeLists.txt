@@ -1,4 +1,4 @@
-# Manual CMakeLists for shotblocks_v2. This shadows the auto-generated
+# Manual CMakeLists for shotblocks. This shadows the auto-generated
 # one in the build dir (per the note Maxon's tooling prints in its own
 # template).
 
@@ -8,7 +8,7 @@ include(${MAXON_TOOLING_DIR}/sdk_targets.cmake)
 include(${MAXON_TOOLING_DIR}/sdk_compiler_helper.cmake)
 
 # --- general ---
-set(maxon_targetName shotblocks_v2)
+set(maxon_targetName shotblocks)
 set(maxon_targetType DLL)
 set(maxon_targetFrameworkDependencies
   asset.framework
@@ -19,7 +19,7 @@ set(maxon_targetFrameworkDependencies
 set(maxon_targetPublicCompileDefinitions USE_API_MAXON)
 set(maxon_targetPrivateCompileDefinitions
   MAXON_CMAKE_BUILD
-  MAXON_MODULE_ID="com.shotblocks.v2"
+  MAXON_MODULE_ID="com.shotblocks"
 )
 set(maxon_targetPlatforms Win64)
 set(maxon_targetSourceDirectories

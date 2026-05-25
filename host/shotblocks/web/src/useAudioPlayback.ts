@@ -105,14 +105,14 @@ export function useAudioPlayback(): void {
       const frame = msg.frame;
       // Effective audio-playing signal. `msg.playing` is true for v2
       // playback OR any C4D-native timeline activity (play/scrub).
-      // `msg.v2Playing` is true only for v2-owned playback. When the
+      // `msg.pluginPlaying` is true only for v2-owned playback. When the
       // "audio follows C4D timeline" setting is OFF, audio responds to
-      // v2Playing only — so scrubbing/playing C4D's native timeline
+      // pluginPlaying only — so scrubbing/playing C4D's native timeline
       // makes no sound. The visual playhead still follows `msg.frame`
       // regardless; this gates AUDIO only.
       const playing = useStore.getState().c4dAudioFollows
         ? msg.playing
-        : msg.v2Playing;
+        : msg.pluginPlaying;
 
       if (playing && !playingRef.current) {
         // Transport started.

@@ -1,4 +1,4 @@
-// Shotblocks v2 — C++ plugin hosting the web UI.
+// Shotblocks — C++ plugin hosting the web UI.
 //
 // Uses Cinema 4D 2026's built-in HtmlViewerCustomGui (CUSTOMGUI_HTMLVIEWER)
 // to render the web UI inside a dockable GeDialog. Because the HTML
@@ -69,11 +69,11 @@
 
 using namespace cinema;
 
-static const Int32 g_shotblocks_v2_cmd_id = 1000007;
+static const Int32 g_shotblocks_cmd_id = 1000007;
 
 // Custom CoreMessage id the HTTP worker uses to wake the main thread.
 // We piggyback the plugin id so dialog instances filter their own work.
-static const Int32 g_sb_msg_http_request = g_shotblocks_v2_cmd_id;
+static const Int32 g_sb_msg_http_request = g_shotblocks_cmd_id;
 
 static const Int32 ID_HOST_GROUP    = 2000;
 static const Int32 ID_HOST_HTMLVIEW = 2001;
@@ -156,18 +156,18 @@ static Bool GetAnimatedFrameRange(BaseObject* op, Int32 fps,
 // helper, keyed by BASE+objectId — survives object renames in the OM and
 // follows the doc through save/load.
 // -----------------------------------------------------------------------------
-static const Int32 BCKEY_V2_HELPER_MARKER = 1100;   // String: identifies the helper
-static const Int32 BCKEY_V2_CLIPS_JSON    = 1101;   // String: JSON tracks + nextClipId
-static const Int32 BCKEY_V2_VERSION       = 1102;   // Int32: monotonic save version
-static const Int32 BCKEY_V2_CAM_LINK_BASE = 2100;   // BaseLink at BASE + objectId
+static const Int32 BCKEY_HELPER_MARKER = 1100;   // String: identifies the helper
+static const Int32 BCKEY_CLIPS_JSON    = 1101;   // String: JSON tracks + nextClipId
+static const Int32 BCKEY_VERSION       = 1102;   // Int32: monotonic save version
+static const Int32 BCKEY_CAM_LINK_BASE = 2100;   // BaseLink at BASE + objectId
 // Audio bytes per clip — base64-encoded original-format bytes (WAV /
-// MP3) keyed by BCKEY_V2_AUDIO_BASE + clipId. Written once on drop
+// MP3) keyed by BCKEY_AUDIO_BASE + clipId. Written once on drop
 // (audio-add), read on demand from JS (audio-fetch), removed on clip
-// delete (audio-remove). Separate from BCKEY_V2_CLIPS_JSON so the
+// delete (audio-remove). Separate from BCKEY_CLIPS_JSON so the
 // normal save-state path doesn't re-ship audio on every clip move.
-static const Int32 BCKEY_V2_AUDIO_BASE    = 3100;
-static const char  V2_HELPER_MARKER_VALUE[]  = "shotblocks_v2_helper";
-static const char  V2_HELPER_NULL_NAME[]     = "_shotblocks_v2";
+static const Int32 BCKEY_AUDIO_BASE    = 3100;
+static const char  HELPER_MARKER_VALUE[]  = "shotblocks_helper";
+static const char  HELPER_NULL_NAME[]     = "_shotblocks";
 
 // Find the existing v2 helper in `doc`, or nullptr.
 static BaseObject* FindV2Helper(BaseDocument* doc)
@@ -177,7 +177,7 @@ static BaseObject* FindV2Helper(BaseDocument* doc)
 	{
 		BaseContainer* bc = op->GetDataInstance();
 		if (!bc) continue;
-		if (bc->GetString(BCKEY_V2_HELPER_MARKER) == maxon::String(V2_HELPER_MARKER_VALUE))
+		if (bc->GetString(BCKEY_HELPER_MARKER) == maxon::String(HELPER_MARKER_VALUE))
 			return op;
 	}
 	return nullptr;
@@ -192,10 +192,10 @@ static BaseObject* GetOrCreateV2Helper(BaseDocument* doc)
 	if (helper) return helper;
 	helper = BaseObject::Alloc(Onull);
 	if (!helper) return nullptr;
-	helper->SetName(maxon::String(V2_HELPER_NULL_NAME));
+	helper->SetName(maxon::String(HELPER_NULL_NAME));
 	BaseContainer* bc = helper->GetDataInstance();
 	if (bc)
-		bc->SetString(BCKEY_V2_HELPER_MARKER, maxon::String(V2_HELPER_MARKER_VALUE));
+		bc->SetString(BCKEY_HELPER_MARKER, maxon::String(HELPER_MARKER_VALUE));
 	helper->ChangeNBit(NBIT::OHIDE, NBITCONTROL::SET);
 	doc->InsertObject(helper, nullptr, nullptr);
 	GePrint("[Shotblocks/v2] created persistence helper"_s);
@@ -382,7 +382,7 @@ private:
 	// is still tiny (~100KB with peaks for a few clips). The cap
 	// here is the per-request body limit, not the per-doc audio
 	// limit. Audio bytes live in the helper's BaseContainer keyed by
-	// BCKEY_V2_AUDIO_BASE + clipId, separate from the clip JSON.
+	// BCKEY_AUDIO_BASE + clipId, separate from the clip JSON.
 	static std::string Read(SOCKET s, size_t cap = 256 * 1024 * 1024)
 	{
 		std::string buf;
@@ -496,10 +496,10 @@ private:
 // -----------------------------------------------------------------------------
 // Dialog
 // -----------------------------------------------------------------------------
-class ShotblocksV2Dialog : public GeDialog
+class ShotblocksDialog : public GeDialog
 {
 public:
-	ShotblocksV2Dialog()
+	ShotblocksDialog()
 		: _htmlView(nullptr)
 		, _navigated(false)
 		, _serverStarted(false)
@@ -509,7 +509,7 @@ public:
 		, _httpPort(0)
 	{}
 
-	~ShotblocksV2Dialog() override
+	~ShotblocksDialog() override
 	{
 		// Stop the listener before the dialog evaporates. If we don't,
 		// the accept thread can hand the main thread a request it can't
@@ -519,7 +519,7 @@ public:
 
 	Bool CreateLayout() override
 	{
-		SetTitle("Shotblocks v2"_s);
+		SetTitle("Shotblocks"_s);
 		GroupBegin(ID_HOST_GROUP, BFH_SCALEFIT | BFV_SCALEFIT, 1, 0, ""_s, 0);
 			_htmlView = AddCustomGui<HtmlViewerCustomGui>(
 				ID_HOST_HTMLVIEW, ""_s, BFH_SCALEFIT | BFV_SCALEFIT,
@@ -853,7 +853,7 @@ public:
 		if (!helper) return;
 		BaseContainer* bc = helper->GetDataInstance();
 		if (!bc) return;
-		const Int32 curVersion = bc->GetInt32(BCKEY_V2_VERSION);
+		const Int32 curVersion = bc->GetInt32(BCKEY_VERSION);
 		if (curVersion == _lastSeenVersion) return;
 		_lastSeenVersion = curVersion;
 		if (_htmlView && _navigated)
@@ -883,7 +883,7 @@ private:
 		GetModuleHandleExW(
 			GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS |
 			GET_MODULE_HANDLE_EX_FLAG_UNCHANGED_REFCOUNT,
-			(LPCWSTR)&ShotblocksV2Dialog::DispatchHttpStatic,
+			(LPCWSTR)&ShotblocksDialog::DispatchHttpStatic,
 			&hMod);
 		wchar_t dll[MAX_PATH] = {0};
 		GetModuleFileNameW(hMod, dll, MAX_PATH);
@@ -1250,13 +1250,13 @@ private:
 
 			doc->StartUndo();
 			doc->AddUndo(UNDOTYPE::CHANGE_SMALL, helper);
-			bc->SetString(BCKEY_V2_CLIPS_JSON, maxon::String(json.c_str()));
+			bc->SetString(BCKEY_CLIPS_JSON, maxon::String(json.c_str()));
 			// Bump a monotonic version counter so EVMSG_CHANGE
 			// handlers (including ours) can distinguish "the helper
 			// changed because of something the user did via Ctrl+Z"
 			// from "we just wrote it ourselves".
-			const Int32 newVersion = bc->GetInt32(BCKEY_V2_VERSION) + 1;
-			bc->SetInt32(BCKEY_V2_VERSION, newVersion);
+			const Int32 newVersion = bc->GetInt32(BCKEY_VERSION) + 1;
+			bc->SetInt32(BCKEY_VERSION, newVersion);
 			_lastSeenVersion = newVersion;
 
 			// Persist BaseLinks for every currently-live objectId.
@@ -1302,7 +1302,7 @@ private:
 				if (it == _cameraLinks.end() || !it->second) continue;
 				BaseObject* op = static_cast<BaseObject*>(it->second->GetLink(doc));
 				if (!op) continue;
-				bc->SetLink(BCKEY_V2_CAM_LINK_BASE + id, op);
+				bc->SetLink(BCKEY_CAM_LINK_BASE + id, op);
 			}
 			doc->EndUndo();
 			EventAdd();
@@ -1322,7 +1322,7 @@ private:
 			BaseContainer* bc = helper->GetDataInstance();
 			if (!bc) return "{\"ok\":true,\"kind\":\"load-state-ack\",\"json\":\"\"}";
 
-			String raw = bc->GetString(BCKEY_V2_CLIPS_JSON);
+			String raw = bc->GetString(BCKEY_CLIPS_JSON);
 			std::string rawUtf8;
 			{
 				// cinema::String adds GetCStringCopy on top of
@@ -1344,7 +1344,7 @@ private:
 			const Int32 SCAN_MAX = 4096;
 			for (Int32 id = 1; id <= SCAN_MAX; ++id)
 			{
-				BaseList2D* linked = bc->GetLink(BCKEY_V2_CAM_LINK_BASE + id, doc);
+				BaseList2D* linked = bc->GetLink(BCKEY_CAM_LINK_BASE + id, doc);
 				if (!linked) continue;
 				if (!linked->IsInstanceOf(Obase)) continue;
 				AutoAlloc<BaseLink> newLink;
@@ -1358,7 +1358,7 @@ private:
 			// Seed _lastSeenVersion to the helper's current version so
 			// the immediate post-load EVMSG_CHANGE (if any) doesn't
 			// trigger a spurious state-changed notification.
-			_lastSeenVersion = bc->GetInt32(BCKEY_V2_VERSION);
+			_lastSeenVersion = bc->GetInt32(BCKEY_VERSION);
 
 			// Escape the JSON string for embedding in our response.
 			std::string esc;
@@ -1452,7 +1452,7 @@ private:
 		{
 			// JS pushes the original audio bytes (base64) once at drop
 			// time. Stored in the helper's BaseContainer keyed by
-			// BCKEY_V2_AUDIO_BASE + clipId. The clip-list JSON references
+			// BCKEY_AUDIO_BASE + clipId. The clip-list JSON references
 			// audio by clipId — bytes never re-ship on subsequent clip
 			// moves / trims / saves.
 			Int32 clipId = ParseIntField(body, "clipId");
@@ -1468,11 +1468,11 @@ private:
 
 			doc->StartUndo();
 			doc->AddUndo(UNDOTYPE::CHANGE_SMALL, helper);
-			bc->SetString(BCKEY_V2_AUDIO_BASE + clipId, maxon::String(bytes.c_str()));
+			bc->SetString(BCKEY_AUDIO_BASE + clipId, maxon::String(bytes.c_str()));
 			// Bump version so EVMSG_CHANGE handlers (Ctrl+Z / Ctrl+Y
 			// detection) stay in sync.
-			const Int32 newVersion = bc->GetInt32(BCKEY_V2_VERSION) + 1;
-			bc->SetInt32(BCKEY_V2_VERSION, newVersion);
+			const Int32 newVersion = bc->GetInt32(BCKEY_VERSION) + 1;
+			bc->SetInt32(BCKEY_VERSION, newVersion);
 			_lastSeenVersion = newVersion;
 			doc->EndUndo();
 			EventAdd();
@@ -1496,7 +1496,7 @@ private:
 			if (!bc)
 				return "{\"ok\":true,\"kind\":\"audio-fetch-ack\",\"bytes\":\"\"}";
 
-			String raw = bc->GetString(BCKEY_V2_AUDIO_BASE + clipId);
+			String raw = bc->GetString(BCKEY_AUDIO_BASE + clipId);
 			std::string rawUtf8;
 			Char* cstr = raw.GetCStringCopy();
 			if (cstr)
@@ -1531,9 +1531,9 @@ private:
 
 			doc->StartUndo();
 			doc->AddUndo(UNDOTYPE::CHANGE_SMALL, helper);
-			bc->RemoveData(BCKEY_V2_AUDIO_BASE + clipId);
-			const Int32 newVersion = bc->GetInt32(BCKEY_V2_VERSION) + 1;
-			bc->SetInt32(BCKEY_V2_VERSION, newVersion);
+			bc->RemoveData(BCKEY_AUDIO_BASE + clipId);
+			const Int32 newVersion = bc->GetInt32(BCKEY_VERSION) + 1;
+			bc->SetInt32(BCKEY_VERSION, newVersion);
 			_lastSeenVersion = newVersion;
 			doc->EndUndo();
 			EventAdd();
@@ -1624,13 +1624,13 @@ private:
 		// C4D-native timeline activity (play button OR scrubbing — both
 		// fire EVMSG_TIMECHANGED, indistinguishable from here). The
 		// visual playhead syncs to `playing` either way.
-		// `v2Playing` is the NARROW signal: true only for v2-owned
+		// `pluginPlaying` is the NARROW signal: true only for v2-owned
 		// playback. The audio layer uses it to honor the "audio follows
 		// C4D timeline" setting — when that's off, audio responds to
-		// v2Playing only, so C4D-native scrub/play makes no sound.
+		// pluginPlaying only, so C4D-native scrub/play makes no sound.
 		bool externalPlaying = (nowMs - _lastTimeChangedTickMs) < 200.0;
 		bool playing = _v2Playing || externalPlaying;
-		bool v2Playing = _v2Playing;
+		bool pluginPlaying = _v2Playing;
 		// A scrub-hold during playback freezes transport — report
 		// not-playing so the timeline + audio stop at the held frame.
 		// (externalPlaying would otherwise stay true: each scrub seek
@@ -1638,14 +1638,14 @@ private:
 		if (_v2ScrubPaused)
 		{
 			playing = false;
-			v2Playing = false;
+			pluginPlaying = false;
 		}
 
 		char buf[256];
 		_snprintf_s(buf, sizeof(buf), _TRUNCATE,
-			"{\"kind\":\"tick\",\"frame\":%d,\"fps\":%d,\"playing\":%s,\"v2Playing\":%s}",
+			"{\"kind\":\"tick\",\"frame\":%d,\"fps\":%d,\"playing\":%s,\"pluginPlaying\":%s}",
 			(int)frame, (int)fps, playing ? "true" : "false",
-			v2Playing ? "true" : "false");
+			pluginPlaying ? "true" : "false");
 		_htmlView->PostWebMessage(maxon::String(buf));
 	}
 
@@ -1730,7 +1730,7 @@ private:
 		GetModuleHandleExW(
 			GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS |
 			GET_MODULE_HANDLE_EX_FLAG_UNCHANGED_REFCOUNT,
-			(LPCWSTR)&ShotblocksV2Dialog::DispatchHttpStatic, &hMod);
+			(LPCWSTR)&ShotblocksDialog::DispatchHttpStatic, &hMod);
 		wchar_t path[MAX_PATH] = {0};
 		GetModuleFileNameW(hMod, path, MAX_PATH);
 		wchar_t* lastSlash = wcsrchr(path, L'\\');
@@ -1777,7 +1777,7 @@ private:
 		HWND hwnd, UINT msg, WPARAM wp, LPARAM lp,
 		UINT_PTR /*id*/, DWORD_PTR refData)
 	{
-		auto* self = reinterpret_cast<ShotblocksV2Dialog*>(refData);
+		auto* self = reinterpret_cast<ShotblocksDialog*>(refData);
 		if (self)
 		{
 			HCURSOR forced = self->CurrentForcedCursor();
@@ -1917,48 +1917,48 @@ private:
 // Command + registration
 // ---------------------------------------------------------------------------
 
-class OpenShotblocksV2DialogCommand : public CommandData
+class OpenShotblocksDialogCommand : public CommandData
 {
 public:
-	OpenShotblocksV2DialogCommand() : _dlg(nullptr) {}
+	OpenShotblocksDialogCommand() : _dlg(nullptr) {}
 
 	Bool Execute(BaseDocument* /*doc*/, GeDialog* /*parentManager*/) override
 	{
 		if (!_dlg)
-			_dlg = NewObjClear(ShotblocksV2Dialog);
+			_dlg = NewObjClear(ShotblocksDialog);
 		if (!_dlg)
 			return false;
-		return _dlg->Open(DLG_TYPE::ASYNC, g_shotblocks_v2_cmd_id, -1, -1, 700, 400);
+		return _dlg->Open(DLG_TYPE::ASYNC, g_shotblocks_cmd_id, -1, -1, 700, 400);
 	}
 
 	Bool RestoreLayout(void* secret) override
 	{
 		if (!_dlg)
-			_dlg = NewObjClear(ShotblocksV2Dialog);
+			_dlg = NewObjClear(ShotblocksDialog);
 		if (!_dlg)
 			return false;
-		return _dlg->RestoreLayout(g_shotblocks_v2_cmd_id, 0, secret);
+		return _dlg->RestoreLayout(g_shotblocks_cmd_id, 0, secret);
 	}
 
 private:
-	ShotblocksV2Dialog* _dlg;
+	ShotblocksDialog* _dlg;
 };
 
 
-static Bool RegisterShotblocksV2Commands()
+static Bool RegisterShotblocksCommands()
 {
 	return RegisterCommandPlugin(
-		g_shotblocks_v2_cmd_id,
-		"Open Shotblocks v2"_s,
+		g_shotblocks_cmd_id,
+		"Shotblocks"_s,
 		0, nullptr,
-		"Dockable web-based Shotblocks UI (v2)"_s,
-		NewObjClear(OpenShotblocksV2DialogCommand));
+		"Dockable web-based Shotblocks UI"_s,
+		NewObjClear(OpenShotblocksDialogCommand));
 }
 
 
 Bool cinema::PluginStart()
 {
-	if (!RegisterShotblocksV2Commands())
+	if (!RegisterShotblocksCommands())
 		return false;
 	GePrint("[Shotblocks/v2] PluginStart OK"_s);
 	return true;

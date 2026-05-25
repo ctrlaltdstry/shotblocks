@@ -1,4 +1,4 @@
-# Handoff — Shotblocks v2 audit & cleanup pass
+# Handoff — Shotblocks audit & cleanup pass
 
 The v1 Python port is complete. Before any new feature work (motion
 layers, slate engine, shot library, rig math), the v2 codebase gets a
@@ -164,7 +164,7 @@ order:
 A new `Cursors/Pen tool.png` is committed but unused — both writers
 (CSS data-URI in App.css + the C++ `pen.cur`) still show the older
 art that they had in sync. To swap atomically:
-1. Re-run `scripts/make-cursor.mjs "Cursors/Pen tool.png" host/shotblocks_v2/web/public/cursors/pen.cur 0,0`.
+1. Re-run `scripts/make-cursor.mjs "Cursors/Pen tool.png" host/shotblocks/web/public/cursors/pen.cur 0,0`.
 2. Paste the new sidecar data-URI value into `App.css`'s
    `.level-curve.is-pen` rule.
 3. Run `scripts/dev-loop.ps1` (kills C4D so the new `.cur` is

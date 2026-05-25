@@ -1,8 +1,8 @@
-# Shotblocks v2 — handoff
+# Shotblocks — handoff
 
-C++ host plugin (`shotblocks_v2.xdl64`) plus its React + TypeScript web
-UI under `web/`. Co-exists with the legacy Python timeline; only v2 is
-the eventual target.
+C++ host plugin (`shotblocks.xdl64`) plus its React + TypeScript web
+UI under `web/`. The legacy Python timeline has been retired; this is
+now the timeline.
 
 ## What's working today
 
@@ -282,7 +282,7 @@ See memory `v2-c4d-nav-gestures`.
   spawns at the cursor frame at the file's full duration.
 - WebView2 hides the file path, so the binary bytes are pushed once
   to C++ via `audio-add` and persisted in the doc helper container
-  keyed by `BCKEY_V2_AUDIO_BASE + clipId`. Save-state JSON references
+  keyed by `BCKEY_AUDIO_BASE + clipId`. Save-state JSON references
   by clipId so bytes never re-ship on clip moves/trims.
 - `audio-fetch` pulls bytes back on doc reload; `audio-remove` frees
   helper storage when an audio clip is deleted.
@@ -511,8 +511,8 @@ as a changelog from `b979b68` onward.
 
 ## Stack
 
-- **C++ plugin:** `host/shotblocks_v2/source/main.cpp` — single file.
-- **Web UI:** `host/shotblocks_v2/web/` — Vite + React 19 + TypeScript.
+- **C++ plugin:** `host/shotblocks/source/main.cpp` — single file.
+- **Web UI:** `host/shotblocks/web/` — Vite + React 19 + TypeScript.
 - **State:** Zustand (`src/store.ts`).
 - **Animations:** GSAP + `@gsap/react` (installed, not yet wired).
 - **Bundling:** `vite-plugin-singlefile` inlines all JS / CSS /
@@ -569,7 +569,7 @@ Build + deploy; just close + reopen the dialog.
 
 For **C++ changes**, build first:
 ```powershell
-cmake --build "C:\Dev\c4d_sdk_2026\build-win64" --config Release --target shotblocks_v2
+cmake --build "C:\Dev\c4d_sdk_2026\build-win64" --config Release --target shotblocks
 ```
 
 ## DevTools
