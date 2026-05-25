@@ -1,4 +1,6 @@
-import { useState, type ReactNode } from 'react';
+import { useEffect, useRef, useState, type ReactNode } from 'react';
+import { createPortal } from 'react-dom';
+import { useStore } from '../store';
 import sectionChevronUrl from '../icons/inspector-section-chevron.svg';
 import dropdownChevronUrl from '../icons/inspector-dropdown-chevron.svg';
 import folderUrl from '../icons/inspector-folder.svg';
@@ -13,15 +15,28 @@ import folderUrl from '../icons/inspector-folder.svg';
  *  and a body of rows. Collapse state lives in-component (not
  *  persisted between sessions in v1).
  */
+const RENDER_MODE_OPTIONS = [
+  { value: 'individual-shots' as const, label: 'Individual shots' },
+  { value: 'whole-sequence'   as const, label: 'Whole sequence' },
+];
+
 export function Inspector() {
+  const renderMode = useStore((s) => s.renderMode);
+  const setRenderMode = useStore((s) => s.setRenderMode);
+  const currentLabel = RENDER_MODE_OPTIONS.find((o) => o.value === renderMode)?.label
+    ?? 'Individual shots';
   return (
     <div className="inspector">
       <div className="inspector__body">
-        {/* Render sections fill in starting Commit 8. Two placeholder
-            sections present here just to demonstrate the pattern; they
-            get replaced with real content as we go. */}
-        <InspectorSection title="Render Scope" />
-        <InspectorSection title="Output" />
+        <InspectorSection title="Render">
+          <InspectorRow label="Render mode">
+            <InspectorDropdown
+              value={currentLabel}
+              options={RENDER_MODE_OPTIONS}
+              onSelect={(v) => setRenderMode(v as 'whole-sequence' | 'individual-shots')}
+            />
+          </InspectorRow>
+        </InspectorSection>
       </div>
     </div>
   );
@@ -53,11 +68,17 @@ export function InspectorSection({
           alt=""
         />
       </div>
-      {expanded && (
-        <div className="inspector-section__body">
-          {children}
+      {/* Collapse wrapper — animates via grid-template-rows 0fr → 1fr.
+          Body is ALWAYS in the DOM so the transition has something
+          to animate against; the wrapper clips it via overflow-hidden
+          when collapsed. */}
+      <div className="inspector-section__collapse">
+        <div className="inspector-section__collapse-inner">
+          <div className="inspector-section__body">
+            {children}
+          </div>
         </div>
-      )}
+      </div>
     </div>
   );
 }
@@ -82,24 +103,121 @@ export function InspectorRow({
 
 /** Dropdown control — Figma node 376:1216. A grey-24 pill with the
  *  current value centered and a small chevron-down on the right.
- *  Click handler is the caller's responsibility (v1 just shows the
- *  static value; opening the actual menu lands per-field). */
-export function InspectorDropdown({
+ *
+ *  Two usage shapes:
+ *  - With `options` + `onSelect` → a real picker. Clicking the pill
+ *    opens a small floating menu directly below it; clicking an
+ *    option fires onSelect with that option's `value`. The menu
+ *    dismisses on outside-click or Escape.
+ *  - With only `onClick` → caller wires the click manually. Used for
+ *    static "display value" rows where the menu lives elsewhere. */
+export function InspectorDropdown<T extends string>({
   value,
+  options,
+  onSelect,
   onClick,
 }: {
   value: string;
+  options?: { value: T; label: string }[];
+  onSelect?: (value: T) => void;
   onClick?: () => void;
 }) {
+  const [open, setOpen] = useState(false);
+  const [rect, setRect] = useState<{ left: number; top: number; width: number } | null>(null);
+  const pillRef = useRef<HTMLDivElement | null>(null);
+  const menuRef = useRef<HTMLDivElement | null>(null);
+
+  // Recompute the menu's position whenever it opens — relative to the
+  // pill's current viewport rect. We re-measure on resize too so a
+  // dialog resize while open doesn't strand the menu.
+  useEffect(() => {
+    if (!open) return;
+    function place() {
+      const el = pillRef.current;
+      if (!el) return;
+      const r = el.getBoundingClientRect();
+      setRect({ left: r.left, top: r.bottom + 2, width: r.width });
+    }
+    place();
+    window.addEventListener('resize', place);
+    return () => window.removeEventListener('resize', place);
+  }, [open]);
+
+  // Close on outside-click + Escape. Outside includes anywhere that
+  // isn't the pill or the menu itself.
+  useEffect(() => {
+    if (!open) return;
+    function onDown(ev: PointerEvent) {
+      const t = ev.target as Node;
+      if (pillRef.current && pillRef.current.contains(t)) return;
+      if (menuRef.current && menuRef.current.contains(t)) return;
+      setOpen(false);
+    }
+    function onKey(ev: KeyboardEvent) {
+      if (ev.key === 'Escape') setOpen(false);
+    }
+    window.addEventListener('pointerdown', onDown, true);
+    window.addEventListener('keydown', onKey);
+    return () => {
+      window.removeEventListener('pointerdown', onDown, true);
+      window.removeEventListener('keydown', onKey);
+    };
+  }, [open]);
+
+  function onPillClick() {
+    if (options && options.length > 0) {
+      setOpen((v) => !v);
+    } else if (onClick) {
+      onClick();
+    }
+  }
+
   return (
-    <div className="inspector-dropdown" onClick={onClick}>
-      <span className="inspector-dropdown__value">{value}</span>
-      <img
-        className="inspector-dropdown__chevron"
-        src={dropdownChevronUrl}
-        alt=""
-      />
-    </div>
+    <>
+      <div className="inspector-dropdown" onClick={onPillClick} ref={pillRef}>
+        <span className="inspector-dropdown__value">{value}</span>
+        <img
+          className="inspector-dropdown__chevron"
+          src={dropdownChevronUrl}
+          alt=""
+        />
+      </div>
+      {/* Menu lives in a portal at document.body so it escapes the
+          inspector / section card's `overflow: hidden` clipping. */}
+      {open && options && rect && createPortal(
+        <div
+          ref={menuRef}
+          className="inspector-dropdown__menu"
+          style={{
+            left: rect.left + 'px',
+            top: rect.top + 'px',
+            width: rect.width + 'px',
+          }}
+        >
+          {options.map((opt) => (
+            <div
+              key={opt.value}
+              className={
+                'inspector-dropdown__menu-item'
+                + (opt.label === value ? ' is-selected' : '')
+              }
+              onPointerDown={(e) => {
+                // Use pointerdown so the outside-pointerdown listener
+                // doesn't fire first and close the menu before our
+                // click reaches us.
+                e.preventDefault();
+                e.stopPropagation();
+                onSelect?.(opt.value);
+                setOpen(false);
+              }}
+            >
+              {opt.label}
+            </div>
+          ))}
+        </div>,
+        document.body,
+      )}
+    </>
   );
 }
 

@@ -17,6 +17,8 @@ import { createLevelKfSlice } from './store/slices/levelKf';
 import { createSelectionSlice } from './store/slices/selection';
 import { createTimelineSlice } from './store/slices/timeline';
 import { createMarkersSlice } from './store/slices/markers';
+import { createRenderSettingsSlice, type RenderMode } from './store/slices/renderSettings';
+export type { RenderMode } from './store/slices/renderSettings';
 
 // Re-export every public symbol consumers used to import from this
 // module, so existing `import { Clip, magneticSnap, MIN_CLIP_FRAMES,
@@ -165,6 +167,10 @@ export interface State {
   // when hidden.
   markers: number[];
   markersVisible: boolean;
+
+  // Render workflow settings — persisted alongside markers in the
+  // helper JSON. v1 has just renderMode; future fields land here.
+  renderMode: RenderMode;
 
   // Tracks. Index 0 = closest to the V/A divider (V1 / A1). New tracks
   // are added at the outer ends. Auto-create / auto-remove on clip
@@ -602,6 +608,9 @@ export interface State {
   clearAllMarkers: () => void;
   setMarkersVisible: (visible: boolean) => void;
   setMarkers: (markers: number[]) => void;
+
+  /** Render workflow actions — see slices/renderSettings.ts. */
+  setRenderMode: (mode: RenderMode) => void;
 }
 
 /** Monotonic clip id. Unique across all tracks for the session.
@@ -625,6 +634,7 @@ export const useStore = create<State>((set, get, store) => ({
   ...createSelectionSlice(set, get, store),
   ...createTimelineSlice(set, get, store),
   ...createMarkersSlice(set, get, store),
+  ...createRenderSettingsSlice(set, get, store),
 
 }));
 

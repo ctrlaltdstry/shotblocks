@@ -26,12 +26,16 @@
 .body {
   flex: 1 1 auto;
   display: grid;
-  /* Column 4 is the Inspector — always visible at a fixed 250px (per
-     Figma node 365:668). The `1fr` timeline column absorbs whatever
-     width is left. No animation: the inspector doesn't open or close.
-     No scrollbar column/row — scrollbars are 4px overlays on the
-     stage edge (see .h-scroll / .v-scroll). */
-  --inspector-w: 250px;
+  /* Column 4 is the Inspector — always visible at a fixed width. The
+     `1fr` timeline column absorbs whatever width is left. No
+     animation: the inspector doesn't open or close. No scrollbar
+     column/row — scrollbars are 4px overlays on the stage edge
+     (see .h-scroll / .v-scroll).
+     Width: 300px. Figma started at 250 but at that width the
+     dropdown values (e.g. "Individual shots") truncate. Standard
+     DCC-inspector widths run 280-340 — 300 keeps the timeline wide
+     while letting reasonable value text fit. */
+  --inspector-w: 300px;
   grid-template-columns: var(--rail-w) var(--headers-w) 1fr var(--inspector-w);
   grid-template-rows: var(--utilstrip-h) 1fr;
   min-height: 0;
@@ -1520,18 +1524,14 @@ body.is-resizing-headers .body { transition: none; }
 
 /* Section card — Figma node 375:1176 / 376:1254. Grey-16 fill,
    4px corner radius, overflow-clip so the darker title bar reads
-   as part of the card. */
+   as part of the card. The collapsible body sits below the header
+   inside a grid-rows wrapper that animates 0fr ↔ 1fr. */
 .inspector-section {
   background: var(--color-grey-16);
   border-radius: 4px;
   overflow: hidden;
   display: flex;
   flex-direction: column;
-  gap: 4px;
-  padding-bottom: 10px;
-}
-.inspector-section.is-collapsed {
-  padding-bottom: 0;
 }
 .inspector-section__header {
   background: var(--color-grey-12);
@@ -1541,6 +1541,22 @@ body.is-resizing-headers .body { transition: none; }
   padding: 6px 10px 6px 15px;
   cursor: pointer;
   user-select: none;
+}
+/* Collapse wrapper — grid trick: animate the row from 0fr (closed)
+   to 1fr (open). The inner div uses min-height:0 + overflow:hidden
+   so it clips to the wrapper's animated height. Works for variable
+   content without measuring heights in JS. */
+.inspector-section__collapse {
+  display: grid;
+  grid-template-rows: 1fr;
+  transition: grid-template-rows 180ms cubic-bezier(0.4, 0, 0.2, 1);
+}
+.inspector-section.is-collapsed .inspector-section__collapse {
+  grid-template-rows: 0fr;
+}
+.inspector-section__collapse-inner {
+  min-height: 0;
+  overflow: hidden;
 }
 .inspector-section__title {
   font-family: Inter, sans-serif;
@@ -1566,17 +1582,18 @@ body.is-resizing-headers .body { transition: none; }
   display: flex;
   flex-direction: column;
   gap: 4px;
+  padding-bottom: 10px;
 }
 
 /* Row pattern — Figma nodes 376:1213, 376:1246, etc. Label on left,
-   control on right (flex-1). 8px Inter Regular white text, padded
+   control on right (flex-1). 10px Inter Regular white text, padded
    top 6px and left/right 15px per Figma. */
 .inspector-row {
   display: flex;
   align-items: center;
   justify-content: space-between;
+  gap: 14px;
   padding: 6px 15px 0 15px;
-  gap: 10px;
   overflow: hidden;
 }
 .inspector-row__label {
@@ -1597,22 +1614,58 @@ body.is-resizing-headers .body { transition: none; }
 }
 
 /* Dropdown control — Figma node 376:1216. Grey-24 pill with the
-   value centered and a 5x3 chevron-down at the right. */
+   value centered and a 5x3 chevron-down at the right. The menu is
+   portaled to document.body so it escapes the inspector + section
+   card's `overflow: hidden` clipping; positioned via fixed coords
+   computed from the pill's viewport rect at open time. */
 .inspector-dropdown {
   background: var(--color-grey-24);
   border-radius: 4px;
   padding: 6px 5px;
   display: flex;
   align-items: center;
-  gap: 5px;
+  justify-content: space-between;
   flex: 1 0 0;
   min-width: 0;
   cursor: pointer;
+  overflow: hidden;
+}
+/* Dropdown menu — portaled to document.body, positioned via fixed
+   coords set by JS (left/top/width). Matches the pill width. */
+.inspector-dropdown__menu {
+  position: fixed;
+  background: var(--color-grey-24);
+  border-radius: 4px;
+  padding: 4px 0;
+  z-index: 200;
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.4);
+}
+.inspector-dropdown__menu-item {
+  padding: 6px 10px;
+  font-family: Inter, sans-serif;
+  font-weight: 400;
+  font-size: 10px;
+  color: var(--color-grey-80);
+  cursor: pointer;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.inspector-dropdown__menu-item:hover {
+  background: var(--color-grey-16);
+  color: var(--color-grey-white);
+}
+.inspector-dropdown__menu-item.is-selected {
+  color: var(--color-grey-white);
 }
 .inspector-dropdown__value {
   flex: 1 0 0;
   min-width: 0;
-  text-align: center;
+  padding-left: 4px;
+  /* Left-aligned matches DCC inspector convention (Premiere /
+     Resolve / C4D AM). Figma showed center but that's less scannable
+     when rows stack. */
+  text-align: left;
   font-family: Inter, sans-serif;
   font-weight: 400;
   font-size: 10px;
@@ -1625,7 +1678,6 @@ body.is-resizing-headers .body { transition: none; }
   width: 8px;
   height: 5px;
   flex-shrink: 0;
-  margin-right: 4px;
 }
 
 /* Toggle switch — Figma node 376:1249. 37x20 pill, padding 2px,

@@ -81,6 +81,9 @@ interface SavedState {
   /** Markers visibility flag. Optional so older docs default to true
    *  (default visible). */
   markersVisible?: boolean;
+  /** Render workflow mode. Optional so older docs default to
+   *  'individual-shots'. */
+  renderMode?: 'whole-sequence' | 'individual-shots';
 }
 
 /** Resolve a saved track's per-track flags, defaulting any the doc
@@ -173,7 +176,8 @@ export function usePersistence(): void {
       if (s.videoTracks === prev.videoTracks
           && s.audioTracks === prev.audioTracks
           && s.markers === prev.markers
-          && s.markersVisible === prev.markersVisible) return;
+          && s.markersVisible === prev.markersVisible
+          && s.renderMode === prev.renderMode) return;
 
       // Detect audio MEDIA that is no longer referenced by any clip,
       // and free the persisted bytes. Audio lives in C++'s helper
@@ -317,11 +321,17 @@ async function loadFromHost(skipNextSave: React.MutableRefObject<boolean>) {
     const markers = Array.from(new Set(rawMarkers.map((f) => Math.max(0, f | 0))))
       .sort((a, b) => a - b);
     const markersVisible = parsed.markersVisible !== false;
+    // Render mode — coerce to a valid enum value; default to
+    // individual-shots if missing or garbage.
+    const renderMode = parsed.renderMode === 'whole-sequence'
+      ? 'whole-sequence' as const
+      : 'individual-shots' as const;
     useStore.setState({
       videoTracks: safeVideoTracks,
       audioTracks: safeAudioTracks,
       markers,
       markersVisible,
+      renderMode,
     });
 
     // Fetch persisted audio binaries for any audio MEDIA we don't
@@ -413,6 +423,7 @@ function saveToHost() {
     nextClipId: getNextClipId(),
     markers: s.markers,
     markersVisible: s.markersVisible,
+    renderMode: s.renderMode,
   };
   // Object ids list — every objectId currently referenced by a clip.
   // C++ uses this to prune stale BaseLinks from the helper.
