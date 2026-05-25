@@ -40,6 +40,13 @@ export function ShotBlock({
   const isDragging = dragClip?.clipId === clip.id;
   const isSelected = useStore((s) => s.selectedClipIds.has(clip.id));
   const beatGridVisible = useStore((s) => s.beatGridVisible);
+  // Orphan flag derived from the live BaseLink-resolution snapshot
+  // C++ pushes on every EVMSG_CHANGE. A video clip with a non-zero
+  // objectId whose link C++ couldn't resolve back to a BaseObject is
+  // an orphan — the source camera was deleted from the OM.
+  const isOrphan = useStore((s) =>
+    side === 'video' && clip.objectId > 0 && s.orphanObjectIds.has(clip.objectId)
+  );
   const ref = useRef<HTMLDivElement | null>(null);
   useClipDrag(clip, trackId, side, ref);
 
@@ -93,15 +100,15 @@ export function ShotBlock({
     sNow.setContextMenu({ x: ev.clientX, y: ev.clientY, targetClipId: clip.id, targetTrackId: null });
   }
 
-  // Selection is store-driven, not clip-state-driven. The legacy
-  // clip.state values for 'selected' / 'orphaned-selected' are kept as
-  // a compatibility hint (orphan + selected still need the red color),
-  // but the actual is-selected class comes from selectedClipIds.
+  // Selection is store-driven. Orphan is derived live from
+  // orphanObjectIds (Commit 1's BaseLink snapshot). The legacy
+  // clip.state values for 'selected' / 'orphaned-selected' are
+  // ignored here — they were never authoritative.
   const cls = [
     'shot-block',
     side === 'video' ? 'is-video' : 'is-audio',
     isSelected && 'is-selected',
-    (clip.state === 'orphaned' || clip.state === 'orphaned-selected') && 'is-orphaned',
+    isOrphan && 'is-orphaned',
     (clip.state === 'locked' || clip.locked) && 'is-locked',
     thin && 'is-thin',
     hoverLeft  && 'is-edge-left',
@@ -115,9 +122,7 @@ export function ShotBlock({
   //   audio (always)     -> waveform
   let iconClass = 'icon icon--block-camera';
   if (side === 'audio') iconClass = 'icon icon--block-waveform';
-  else if (clip.state === 'orphaned' || clip.state === 'orphaned-selected') {
-    iconClass = 'icon icon--block-camera-off';
-  }
+  else if (isOrphan) iconClass = 'icon icon--block-camera-off';
 
   return (
     <div

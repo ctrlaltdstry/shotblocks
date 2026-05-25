@@ -1054,7 +1054,7 @@ body.is-resizing-headers .body { transition: none; }
   border-color: color-mix(in srgb, var(--color-timeline-orphan-block) 70%, black);
 }
 .shot-block.is-orphaned.is-selected {
-  background: var(--color-timeline-red, #ff3b30);
+  background: var(--color-timeline-orphan-block-selected);
 }
 .shot-block.is-locked   {
   background: var(--color-timeline-locked);

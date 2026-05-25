@@ -19,6 +19,7 @@
   --color-timeline-icon-waveform-on:     #ffffff;
   --color-timeline-locked:               #383838;
   --color-timeline-orphan-block:         #ff6259;
+  --color-timeline-orphan-block-selected: #ff3b30;
   --color-timeline-hover:                #ffffff4d;
   --color-timeline-edge-highlight:       #EDA840;
   /* Beat-detection grid (lines + connector dots). Neutral white so it
