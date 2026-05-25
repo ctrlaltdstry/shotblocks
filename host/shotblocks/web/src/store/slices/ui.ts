@@ -31,6 +31,12 @@ export interface UiSlice {
     targetClipId: number | null;
     targetTrackId: string | null;
     targetLevelKf?: { clipId: number; index: number } | null;
+    /** Set when the right-click happened on the ruler. The `frame`
+     *  field is the marker frame that was hit (within MARKER_HIT_RADIUS
+     *  pixels of a marker), or null if no marker — i.e. the user
+     *  right-clicked empty ruler space. Mutually exclusive with the
+     *  other target fields. */
+    targetRulerMarker?: { frame: number | null } | null;
   } | null;
 
   setActiveTool: (tool: ToolId) => void;
@@ -55,6 +61,7 @@ export interface UiSlice {
     targetClipId: number | null;
     targetTrackId: string | null;
     targetLevelKf?: { clipId: number; index: number } | null;
+    targetRulerMarker?: { frame: number | null } | null;
   } | null) => void;
 }
 

@@ -285,6 +285,10 @@ export interface State {
     // Pen-tool: the volume keyframe right-clicked — its clip id and
     // index into that clip's levelKeyframes. Null for non-node menus.
     targetLevelKf?: { clipId: number; index: number } | null;
+    // Ruler right-click. Non-null = ruler menu; `frame` = the marker
+    // frame under the cursor (within hit-test radius), or null when
+    // the click missed any marker.
+    targetRulerMarker?: { frame: number | null } | null;
   } | null;
 
   // Actions
@@ -543,6 +547,7 @@ export interface State {
     targetClipId: number | null;
     targetTrackId: string | null;
     targetLevelKf?: { clipId: number; index: number } | null;
+    targetRulerMarker?: { frame: number | null } | null;
   } | null) => void;
 
   /** Remove a track and all of its clips, then RENUMBER the remaining

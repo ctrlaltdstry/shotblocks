@@ -56,6 +56,7 @@ export function ContextMenu() {
   const onLevelKf = menu.targetLevelKf != null;
   const onClip = menu.targetClipId != null;
   const onTrackHeader = menu.targetTrackId != null;
+  const onRuler = menu.targetRulerMarker != null;
   const trackId = menu.targetTrackId;
 
   // Determine lock-toggle label: "Unlock" if any selected clip is
@@ -112,6 +113,27 @@ export function ContextMenu() {
     ];
     if (!multi && cur === 'custom') {
       items.push({ kind: 'item', label: 'Custom', checked: true, onPick: close });
+    }
+  } else if (onRuler) {
+    const hitFrame = menu.targetRulerMarker!.frame;
+    const hasMarkers = state.markers.length > 0;
+    if (hitFrame != null) {
+      items = [
+        {
+          kind: 'item',
+          label: 'Delete Marker',
+          onPick: () => run(() => state.removeMarker(hitFrame)),
+        },
+      ];
+    } else {
+      items = [
+        {
+          kind: 'item',
+          label: 'Delete All Markers',
+          disabled: !hasMarkers,
+          onPick: () => run(() => state.clearAllMarkers()),
+        },
+      ];
     }
   } else if (onTrackHeader) {
     const side: 'video' | 'audio' | null = trackId

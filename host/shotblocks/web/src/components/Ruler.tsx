@@ -123,6 +123,36 @@ export function Ruler() {
     try { ev.currentTarget.releasePointerCapture(ev.pointerId); } catch { /* noop */ }
   }
 
+  // Right-click on the ruler → context menu. Hit-tests the cursor
+  // against rendered markers (within MARKER_HIT_RADIUS px); if a
+  // marker is hit the menu shows "Delete marker", otherwise it
+  // shows "Delete all markers" (disabled when no markers exist).
+  const MARKER_HIT_RADIUS = 8;
+  function onContextMenu(ev: React.MouseEvent<HTMLDivElement>) {
+    ev.preventDefault();
+    ev.stopPropagation();
+    const rect = innerRef.current?.getBoundingClientRect();
+    if (!rect) return;
+    const cursorFrame = frameFromClientX(ev.clientX);
+    const radiusFrames = MARKER_HIT_RADIUS / Math.max(0.0001, pxPerFrame);
+    let hitFrame: number | null = null;
+    for (const m of markers) {
+      if (Math.abs(m - cursorFrame) <= radiusFrames) {
+        // Pick the closest if multiple are in range.
+        if (hitFrame == null || Math.abs(m - cursorFrame) < Math.abs(hitFrame - cursorFrame)) {
+          hitFrame = m;
+        }
+      }
+    }
+    useStore.getState().setContextMenu({
+      x: ev.clientX,
+      y: ev.clientY,
+      targetClipId: null,
+      targetTrackId: null,
+      targetRulerMarker: { frame: hitFrame },
+    });
+  }
+
   return (
     <div
       ref={innerRef}
@@ -131,6 +161,7 @@ export function Ruler() {
       onPointerMove={onPointerMove}
       onPointerUp={onPointerEnd}
       onPointerCancel={onPointerEnd}
+      onContextMenu={onContextMenu}
     >
       <RangeDim />
       <RangeBar rulerRef={innerRef} />
