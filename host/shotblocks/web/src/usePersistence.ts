@@ -212,11 +212,22 @@ async function loadFromHost(skipNextSave: React.MutableRefObject<boolean>) {
     // and A1 will be auto-respawned by the load below). Without
     // this, an undo past creation would early-return and leave the
     // last in-memory state stuck on screen.
-    const json = ack.json && ack.json.length > 0
-      ? ack.json
-      : '{"videoTracks":[],"audioTracks":[],"nextClipId":1}';
-    const parsed: SavedState = JSON.parse(json);
-    if (!parsed || !Array.isArray(parsed.videoTracks) || !Array.isArray(parsed.audioTracks)) return;
+    const EMPTY_STATE = '{"videoTracks":[],"audioTracks":[],"nextClipId":1}';
+    const json = ack.json && ack.json.length > 0 ? ack.json : EMPTY_STATE;
+    // Corrupt JSON shouldn't lock the timeline into a stale state.
+    // Recover to empty (auto-respawn handles V1 / A1) and log so the
+    // user can see something went wrong but isn't blocked.
+    let parsed: SavedState;
+    try {
+      parsed = JSON.parse(json);
+    } catch (e) {
+      console.warn('[persistence] helper JSON is corrupt, resetting timeline', e);
+      parsed = JSON.parse(EMPTY_STATE);
+    }
+    if (!parsed || !Array.isArray(parsed.videoTracks) || !Array.isArray(parsed.audioTracks)) {
+      console.warn('[persistence] helper JSON has wrong shape, resetting timeline');
+      parsed = JSON.parse(EMPTY_STATE);
+    }
     // Coerce types — JSON loses Set / specific string unions etc.
     const videoTracks: Track[] = parsed.videoTracks.map((t) => ({
       id: t.id,
