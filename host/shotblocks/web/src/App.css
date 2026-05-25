@@ -1491,13 +1491,13 @@ body.is-resizing-headers .body { transition: none; }
 }
 
 /* Inspector panel — grid column 4, spanning both rows. Always
-   visible at 250px (per Figma node 365:668). Hosts render settings
-   and (in v2) motion-layer settings via a Render / Motion tab strip
-   that's currently hidden until v2 lands. */
+   visible at 250px (per Figma node 365:668). Hosts render settings;
+   the Render / Motion tab strip from Figma is omitted in v1 since
+   only one tab would be visible. */
 .inspector {
   grid-column: 4;
   grid-row: 1 / span 2;
-  background: var(--color-grey-12);
+  background: var(--color-grey-10);
   border-left: 1px solid var(--color-grey-16);
   display: flex;
   flex-direction: column;
@@ -1506,46 +1506,185 @@ body.is-resizing-headers .body { transition: none; }
   font-family: Inter, sans-serif;
 }
 
+/* Inspector body — vertical stack of section cards. Matches Figma
+   node 365:668 padding (5px top, 10px sides, 10px bottom) and the
+   4px gap between cards. */
 .inspector__body {
   flex: 1 1 auto;
   overflow-y: auto;
-  padding: 12px;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  padding: 5px 10px 10px;
 }
-.inspector__section + .inspector__section {
-  margin-top: 18px;
-  padding-top: 18px;
-  border-top: 1px solid var(--color-grey-16);
+
+/* Section card — Figma node 375:1176 / 376:1254. Grey-16 fill,
+   4px corner radius, overflow-clip so the darker title bar reads
+   as part of the card. */
+.inspector-section {
+  background: var(--color-grey-16);
+  border-radius: 4px;
+  overflow: hidden;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  padding-bottom: 10px;
 }
-.inspector__section-title {
-  font-size: 10px;
-  font-weight: 600;
-  letter-spacing: 0.08em;
-  text-transform: uppercase;
-  color: var(--color-grey-50);
-  margin-bottom: 10px;
+.inspector-section.is-collapsed {
+  padding-bottom: 0;
 }
-.inspector__row {
+.inspector-section__header {
+  background: var(--color-grey-12);
   display: flex;
   align-items: center;
   justify-content: space-between;
-  gap: 10px;
+  padding: 6px 10px 6px 15px;
   cursor: pointer;
+  user-select: none;
 }
-.inspector__row-label {
-  font-size: 11px;
-  color: var(--color-grey-white);
-}
-.inspector__checkbox {
-  flex: 0 0 auto;
-  width: 14px; height: 14px;
-  accent-color: var(--color-timeline-primary-highlight);
-  cursor: pointer;
-}
-.inspector__hint {
-  margin-top: 6px;
+.inspector-section__title {
+  font-family: Inter, sans-serif;
+  font-weight: 400;
   font-size: 10px;
-  line-height: 1.4;
-  color: var(--color-grey-50);
+  color: var(--color-grey-white);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.inspector-section__chevron {
+  width: 8px;
+  height: 5px;
+  flex-shrink: 0;
+  transition: transform 120ms ease;
+  /* Default: chevron points DOWN (the SVG itself), section is open. */
+}
+.inspector-section.is-collapsed .inspector-section__chevron {
+  /* Collapsed: rotate to point right. */
+  transform: rotate(-90deg);
+}
+.inspector-section__body {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+/* Row pattern — Figma nodes 376:1213, 376:1246, etc. Label on left,
+   control on right (flex-1). 8px Inter Regular white text, padded
+   top 6px and left/right 15px per Figma. */
+.inspector-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 6px 15px 0 15px;
+  gap: 10px;
+  overflow: hidden;
+}
+.inspector-row__label {
+  flex-shrink: 0;
+  font-family: Inter, sans-serif;
+  font-weight: 400;
+  font-size: 10px;
+  color: var(--color-grey-white);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.inspector-row__control {
+  flex: 1 0 0;
+  min-width: 0;
+  display: flex;
+  justify-content: flex-end;
+}
+
+/* Dropdown control — Figma node 376:1216. Grey-24 pill with the
+   value centered and a 5x3 chevron-down at the right. */
+.inspector-dropdown {
+  background: var(--color-grey-24);
+  border-radius: 4px;
+  padding: 6px 5px;
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  flex: 1 0 0;
+  min-width: 0;
+  cursor: pointer;
+}
+.inspector-dropdown__value {
+  flex: 1 0 0;
+  min-width: 0;
+  text-align: center;
+  font-family: Inter, sans-serif;
+  font-weight: 400;
+  font-size: 10px;
+  color: var(--color-grey-80);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.inspector-dropdown__chevron {
+  width: 8px;
+  height: 5px;
+  flex-shrink: 0;
+  margin-right: 4px;
+}
+
+/* Toggle switch — Figma node 376:1249. 37x20 pill, padding 2px,
+   handle 16x16 white circle. Off state = grey-24 bg, handle left;
+   on state = primary-highlight blue bg, handle right. */
+.inspector-toggle {
+  width: 37px;
+  height: 20px;
+  border-radius: 100px;
+  background: var(--color-grey-24);
+  padding: 2px;
+  display: flex;
+  align-items: center;
+  justify-content: flex-start;
+  cursor: pointer;
+  flex-shrink: 0;
+  transition: background-color 120ms ease, justify-content 120ms ease;
+}
+.inspector-toggle.is-on {
+  background: var(--color-timeline-primary-highlight);
+  justify-content: flex-end;
+}
+.inspector-toggle__handle {
+  width: 16px;
+  height: 16px;
+  border-radius: 24px;
+  background: var(--color-grey-white);
+  flex-shrink: 0;
+}
+
+/* File-path field — Figma node 376:1284. Grey-12 input with text
+   left, folder icon right, inner shadow for an inset feel. */
+.inspector-pathfield {
+  flex: 1 0 0;
+  min-width: 0;
+  background: var(--color-grey-12);
+  border-radius: 4px;
+  padding: 4px 10px;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  box-shadow: inset 0 0 4px 0 rgba(0, 0, 0, 0.25);
+}
+.inspector-pathfield__value {
+  flex: 1 0 0;
+  min-width: 0;
+  font-family: Inter, sans-serif;
+  font-weight: 400;
+  font-size: 10px;
+  color: var(--color-grey-80);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.inspector-pathfield__icon {
+  width: 12px;
+  height: 12px;
+  flex-shrink: 0;
+  cursor: pointer;
 }
 
 /* Settings modal — centered overlay opened from the utility-strip
