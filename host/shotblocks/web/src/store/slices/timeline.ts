@@ -33,6 +33,17 @@ export interface TimelineSlice {
    *  link no longer exists on the C++ side). */
   setCameraStatuses: (statuses: { id: number; alive: boolean }[]) => void;
 
+  /** Audio media that couldn't be resolved — bytes missing from the
+   *  C++ helper or the stored bytes failed to decode. An audio clip
+   *  whose mediaId is in this set is an orphan (clip stays on the
+   *  timeline; waveform doesn't render; playback is silent). Should
+   *  be rare — audio bytes are embedded in the .c4d, so the only way
+   *  to lose them is corruption or out-of-band helper edits. */
+  orphanMediaIds: Set<number>;
+  /** Mark a mediaId as orphan (or clear it). Called from the
+   *  audio-fetch / decode pipeline when a media can't be loaded. */
+  setAudioMediaOrphan: (mediaId: number, orphan: boolean) => void;
+
   addClip: (trackId: string, clip: Omit<Clip, 'id'>) => number | null;
   moveClip: (
     clipId: number,
@@ -109,6 +120,14 @@ export const createTimelineSlice: StateCreator<State, [], [], TimelineSlice> = (
   audioTracks: [{ id: 1, name: 'Audio 1', clips: [], ...TRACK_FLAG_DEFAULTS }],
 
   orphanObjectIds: new Set<number>(),
+  orphanMediaIds: new Set<number>(),
+  setAudioMediaOrphan: (mediaId, orphan) => set((s) => {
+    const has = s.orphanMediaIds.has(mediaId);
+    if (orphan === has) return s;
+    const next = new Set(s.orphanMediaIds);
+    if (orphan) next.add(mediaId); else next.delete(mediaId);
+    return { orphanMediaIds: next };
+  }),
   setCameraStatuses: (statuses) => set((s) => {
     const next = new Set<number>();
     for (const st of statuses) {

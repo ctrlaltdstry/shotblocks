@@ -274,15 +274,23 @@ async function loadFromHost(skipNextSave: React.MutableRefObject<boolean>) {
     // already have in memory. Keyed by mediaId so split halves
     // (which share one media) only trigger a single fetch. Each
     // fetch is async + independent; we don't block the load on them.
+    // Failed fetches flag the mediaId as orphan so the UI can show
+    // the no-audio state (rare — would mean the C++ helper has no
+    // bytes for that mediaId, e.g. corruption or out-of-band edit).
     const seenMedia = new Set<number>();
+    const setOrphan = useStore.getState().setAudioMediaOrphan;
     for (const t of audioTracks) {
       for (const c of t.clips) {
         const mediaId = c.mediaId ?? c.id;
         if (seenMedia.has(mediaId)) continue;
         seenMedia.add(mediaId);
-        if (!hasAudio(mediaId)) {
-          void fetchAudio(mediaId);
+        if (hasAudio(mediaId)) {
+          setOrphan(mediaId, false);
+          continue;
         }
+        fetchAudio(mediaId).then((ok) => {
+          setOrphan(mediaId, !ok);
+        }).catch(() => setOrphan(mediaId, true));
       }
     }
   } catch (e) {

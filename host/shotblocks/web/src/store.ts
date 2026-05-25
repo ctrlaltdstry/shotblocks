@@ -171,6 +171,13 @@ export interface State {
   // objectId lives in this set is an orphan.
   orphanObjectIds: Set<number>;
 
+  // Audio mediaIds whose embedded bytes couldn't be loaded on doc
+  // open — either C++ helper has no bytes, or decoding the bytes
+  // failed. Derived from the audio-load pipeline; never persisted.
+  // Audio clips referencing these mediaIds render as orphans
+  // (no waveform, silent playback).
+  orphanMediaIds: Set<number>;
+
   // Drop ghost shown while the user is dragging from the OM. Null when
   // no drag is in progress or the drag is outside our drop targets.
   dragPreview: DragPreview | null;
@@ -565,6 +572,9 @@ export interface State {
     sourceName: string,
     sourceType: number,
   ) => void;
+
+  /** Toggle a mediaId's audio-orphan status. */
+  setAudioMediaOrphan: (mediaId: number, orphan: boolean) => void;
 }
 
 /** Monotonic clip id. Unique across all tracks for the session.

@@ -40,13 +40,19 @@ export function ShotBlock({
   const isDragging = dragClip?.clipId === clip.id;
   const isSelected = useStore((s) => s.selectedClipIds.has(clip.id));
   const beatGridVisible = useStore((s) => s.beatGridVisible);
-  // Orphan flag derived from the live BaseLink-resolution snapshot
-  // C++ pushes on every EVMSG_CHANGE. A video clip with a non-zero
-  // objectId whose link C++ couldn't resolve back to a BaseObject is
-  // an orphan — the source camera was deleted from the OM.
-  const isOrphan = useStore((s) =>
-    side === 'video' && clip.objectId > 0 && s.orphanObjectIds.has(clip.objectId)
-  );
+  // Orphan flag — two cases:
+  //   - video: clip's objectId resolves to a deleted BaseObject (C++
+  //     EVMSG_CHANGE push flagged it).
+  //   - audio: clip's mediaId couldn't be loaded from the C++ helper
+  //     (bytes missing or decode failed). Rare in practice — embedded
+  //     bytes don't usually go missing — but handled for resilience.
+  const isOrphan = useStore((s) => {
+    if (side === 'video') {
+      return clip.objectId > 0 && s.orphanObjectIds.has(clip.objectId);
+    }
+    const mediaId = clip.mediaId ?? clip.id;
+    return s.orphanMediaIds.has(mediaId);
+  });
   const ref = useRef<HTMLDivElement | null>(null);
   useClipDrag(clip, trackId, side, ref);
 
@@ -119,10 +125,14 @@ export function ShotBlock({
   // Icon class follows state + side:
   //   video, non-orphan  -> camera
   //   video, orphan      -> camera-off
-  //   audio (always)     -> waveform
+  //   audio, non-orphan  -> waveform
+  //   audio, orphan      -> camera-off (no waveform-off icon yet)
   let iconClass = 'icon icon--block-camera';
-  if (side === 'audio') iconClass = 'icon icon--block-waveform';
-  else if (isOrphan) iconClass = 'icon icon--block-camera-off';
+  if (side === 'audio') {
+    iconClass = isOrphan ? 'icon icon--block-camera-off' : 'icon icon--block-waveform';
+  } else if (isOrphan) {
+    iconClass = 'icon icon--block-camera-off';
+  }
 
   return (
     <div
@@ -141,7 +151,7 @@ export function ShotBlock({
           the bracket / selected overlays can extend 1px past its
           border (see memory clip-state-overlay-pattern). */}
       <div className="shot-block__content">
-        {side === 'audio' && clip.peakLevels && clip.peakLevels.length > 0 && (
+        {side === 'audio' && !isOrphan && clip.peakLevels && clip.peakLevels.length > 0 && (
           <WaveformCanvas clip={clip} />
         )}
         <div className="shot-block__label">{clip.sourceName}</div>

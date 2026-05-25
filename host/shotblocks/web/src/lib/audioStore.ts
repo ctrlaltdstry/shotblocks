@@ -36,6 +36,15 @@ interface AudioEntry {
 
 const entries = new Map<number, AudioEntry>();
 
+/** Notifier set when a mediaId's decode fails. Wired by App-level
+ *  startup to push the failure into the Zustand store's
+ *  orphanMediaIds — keeping audioStore framework-agnostic and
+ *  pluggable. */
+let decodeFailureListener: ((mediaId: number) => void) | null = null;
+export function onDecodeFailure(fn: (mediaId: number) => void): void {
+  decodeFailureListener = fn;
+}
+
 /** Add a blob for `mediaId` and push it to C++ for persistence.
  *  Idempotent — re-adding the same mediaId replaces both in-memory
  *  blob and the persisted copy. */
@@ -71,6 +80,7 @@ export async function getAudioBuffer(
       return buf;
     } catch (err) {
       console.warn('[audioStore] decode failed for media', mediaId, err);
+      if (decodeFailureListener) decodeFailureListener(mediaId);
       return null;
     } finally {
       e.decodePromise = undefined;

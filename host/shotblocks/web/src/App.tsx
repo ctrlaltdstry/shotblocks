@@ -14,6 +14,7 @@ import { useAltRightZoom } from './useAltRightZoom';
 import { useMmbPan } from './useMmbPan';
 import { useToolCursor } from './useToolCursor';
 import { useStore } from './store';
+import { onDecodeFailure } from './lib/audioStore';
 import { Ruler } from './components/Ruler';
 import { Playhead } from './components/Playhead';
 import { ToolPalette } from './components/ToolPalette';
@@ -105,6 +106,15 @@ function App() {
     document.documentElement.style.setProperty('--va-video-share', String(vaShare));
     document.documentElement.style.setProperty('--va-audio-share', String(1 - vaShare));
   }, [vaShare]);
+
+  // Route audio decode failures into orphan state. WebAudio decoding
+  // happens lazily (on first playback request), so this also catches
+  // corruption that wasn't visible at load time.
+  useEffect(() => {
+    onDecodeFailure((mediaId) => {
+      useStore.getState().setAudioMediaOrphan(mediaId, true);
+    });
+  }, []);
 
   const activeTool = useStore((s) => s.activeTool);
   const inspectorOpen = useStore((s) => s.inspectorOpen);
