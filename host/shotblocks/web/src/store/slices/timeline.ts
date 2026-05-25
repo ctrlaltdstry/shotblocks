@@ -83,6 +83,18 @@ export interface TimelineSlice {
     peakLevels: { sps: number; b64: string }[],
     peakAbsMax: number,
   ) => void;
+
+  /** Rebind an orphan video clip to a freshly OM-dropped camera. The
+   *  old objectId's BaseLink stays on the C++ helper as cruft until
+   *  the next save-state prune; the clip's new objectId / sourceName /
+   *  sourceType drive the label + icon immediately. No-op if the clip
+   *  doesn't exist. */
+  relinkClipCamera: (
+    clipId: number,
+    objectId: number,
+    sourceName: string,
+    sourceType: number,
+  ) => void;
   setClipAudioPeaks: (
     mediaId: number,
     audioPeaks: number[],
@@ -693,6 +705,20 @@ export const createTimelineSlice: StateCreator<State, [], [], TimelineSlice> = (
         audioTracks: patch(s.audioTracks),
       };
     });
+  },
+
+  relinkClipCamera: (clipId, objectId, sourceName, sourceType) => {
+    set((s) => ({
+      videoTracks: s.videoTracks.map((t) => {
+        if (!t.clips.some((c) => c.id === clipId)) return t;
+        return {
+          ...t,
+          clips: t.clips.map((c) =>
+            c.id === clipId ? { ...c, objectId, sourceName, sourceType } : c
+          ),
+        };
+      }),
+    }));
   },
 
   setClipAudioPeaks: (mediaId, audioPeaks, audioPeaksSampleRate, audioBeatGrid, audioSongParts) => {

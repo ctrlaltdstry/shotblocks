@@ -555,6 +555,16 @@ export interface State {
    *  the full set of objectIds it knows about with each push; ids
    *  whose `alive` is false land in the orphan set. */
   setCameraStatuses: (statuses: { id: number; alive: boolean }[]) => void;
+
+  /** Rebind an orphan clip's source camera. Called when the user
+   *  drags a fresh camera from the OM onto an orphan clip — the
+   *  clip stays put, only its source ref + display name swap. */
+  relinkClipCamera: (
+    clipId: number,
+    objectId: number,
+    sourceName: string,
+    sourceType: number,
+  ) => void;
 }
 
 /** Monotonic clip id. Unique across all tracks for the session.
