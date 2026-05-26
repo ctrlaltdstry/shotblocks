@@ -1545,15 +1545,18 @@ private:
 			BaseContainer* bc = helper->GetDataInstance();
 			if (!bc) return "{\"ok\":false,\"error\":\"helper bc missing\"}";
 
-			doc->StartUndo();
-			doc->AddUndo(UNDOTYPE::CHANGE_SMALL, helper);
+			// Audio bytes are media, not undoable user state. Don't wrap
+			// this write in StartUndo/AddUndo — AddUndo(CHANGE_SMALL,
+			// helper) snapshots the ENTIRE helper BC, including any
+			// already-stored audio bytes. Over a few add/remove cycles
+			// the undo stack accumulates MBs of stale audio that ride
+			// along in the saved .c4d (see .agent/bugs.md "file size
+			// bloat"). The clip metadata IS still undoable via save-
+			// state's own AddUndo on the clip JSON, which is small.
 			bc->SetString(BCKEY_AUDIO_BASE + clipId, maxon::String(bytes.c_str()));
-			// Bump version so EVMSG_CHANGE handlers (Ctrl+Z / Ctrl+Y
-			// detection) stay in sync.
 			const Int32 newVersion = bc->GetInt32(BCKEY_VERSION) + 1;
 			bc->SetInt32(BCKEY_VERSION, newVersion);
 			_lastSeenVersion = newVersion;
-			doc->EndUndo();
 			EventAdd();
 			return "{\"ok\":true,\"kind\":\"audio-add-ack\"}";
 		}
@@ -1608,16 +1611,18 @@ private:
 			if (!bc)
 				return "{\"ok\":true,\"kind\":\"audio-remove-ack\"}";
 
-			doc->StartUndo();
-			doc->AddUndo(UNDOTYPE::CHANGE_SMALL, helper);
+			// No undo wrapping (see audio-add comment): the snapshot would
+			// otherwise re-capture the bytes we're about to delete and
+			// strand them in the undo stack permanently.
 			bc->RemoveData(BCKEY_AUDIO_BASE + clipId);
 			const Int32 newVersion = bc->GetInt32(BCKEY_VERSION) + 1;
 			bc->SetInt32(BCKEY_VERSION, newVersion);
 			_lastSeenVersion = newVersion;
-			doc->EndUndo();
 			EventAdd();
 			return "{\"ok\":true,\"kind\":\"audio-remove-ack\"}";
 		}
+		if (body.find("\"kind\":\"helper-stats\"") != std::string::npos) return HandleHelperStats();
+		if (body.find("\"kind\":\"helper-compact\"") != std::string::npos) return HandleHelperCompact();
 		if (body.find("\"kind\":\"add-to-queue\"") != std::string::npos) return HandleAddToQueue(body);
 		if (body.find("\"kind\":\"sync-render-settings\"") != std::string::npos) return HandleSyncRenderSettings(body);
 		if (body.find("\"kind\":\"undo\"") != std::string::npos)
@@ -1815,6 +1820,75 @@ private:
 	// of truth. individual-shots will land in Commit 10. Factored
 	// into its own method to keep Dispatch under the sourceprocessor's
 	// 600-line function cap.
+	// Diag: walk the helper BaseContainer and print per-range byte totals
+	// to the C4D Console. Used to triage .c4d file-size bloat
+	// (.agent/bugs.md "file size bloat"). One-shot — extracted to a
+	// helper to keep Dispatch under Maxon's 600-line source-processor cap.
+	std::string HandleHelperStats()
+	{
+		BaseDocument* doc = GetActiveDocument();
+		BaseObject* helper = doc ? FindV2Helper(doc) : nullptr;
+		if (!helper) return "{\"ok\":false,\"error\":\"no helper\"}";
+		BaseContainer* bc = helper->GetDataInstance();
+		if (!bc) return "{\"ok\":false,\"error\":\"no helper bc\"}";
+		Int64 metaBytes = 0, camLinkBytes = 0, audioBytes = 0, otherBytes = 0;
+		Int32 metaCount = 0, camCount = 0, audioCount = 0, otherCount = 0;
+		Int64 totalBytes = 0;
+		Int32 maxAudioKey = 0, maxAudioLen = 0;
+		for (Int32 i = 0; ; ++i)
+		{
+			Int32 id = bc->GetIndexId(i);
+			if (id == NOTOK) break;
+			maxon::String s = bc->GetString(id);
+			Int64 sLen = (Int64)s.GetLength();
+			Int64 entryBytes = sLen > 0 ? sLen : 8;
+			totalBytes += entryBytes;
+			if (id == BCKEY_HELPER_MARKER || id == BCKEY_CLIPS_JSON || id == BCKEY_VERSION)
+			{
+				metaBytes += entryBytes; ++metaCount;
+			}
+			else if (id >= BCKEY_CAM_LINK_BASE && id < BCKEY_AUDIO_BASE)
+			{
+				camLinkBytes += entryBytes; ++camCount;
+			}
+			else if (id >= BCKEY_AUDIO_BASE)
+			{
+				audioBytes += entryBytes; ++audioCount;
+				if ((Int32)sLen > maxAudioLen) { maxAudioLen = (Int32)sLen; maxAudioKey = id; }
+			}
+			else
+			{
+				otherBytes += entryBytes; ++otherCount;
+			}
+		}
+		Char buf[512];
+		std::snprintf(buf, sizeof(buf),
+			"[Shotblocks/v2] helper-stats total=%lld  meta=%lld(%d)  camLinks=%lld(%d)  audio=%lld(%d)  other=%lld(%d)  largestAudioMediaId=%d size=%d",
+			(long long)totalBytes,
+			(long long)metaBytes, (int)metaCount,
+			(long long)camLinkBytes, (int)camCount,
+			(long long)audioBytes, (int)audioCount,
+			(long long)otherBytes, (int)otherCount,
+			(int)(maxAudioKey - BCKEY_AUDIO_BASE), (int)maxAudioLen);
+		GePrint(maxon::String(buf));
+		return "{\"ok\":true,\"kind\":\"helper-stats-ack\"}";
+	}
+
+	// Flush the document's entire undo stack. Used to compact .c4d files
+	// that grew huge from accumulated undo snapshots of the helper BC
+	// (audio bytes were undo-wrapped pre-2026-05-26 fix). User runs this
+	// once on a bloated scene, then Ctrl+S — the saved file should be
+	// dramatically smaller. NOT something users should run accidentally
+	// (it wipes all undo history), hence keep it CDP-only.
+	std::string HandleHelperCompact()
+	{
+		BaseDocument* doc = GetActiveDocument();
+		if (!doc) return "{\"ok\":false,\"error\":\"no doc\"}";
+		doc->FlushUndoBuffer();
+		GePrint("[Shotblocks/v2] helper-compact: undo buffer flushed. Ctrl+S to write the smaller file."_s);
+		return "{\"ok\":true,\"kind\":\"helper-compact-ack\"}";
+	}
+
 	std::string HandleAddToQueue(const std::string& body)
 	{
 		BaseDocument* doc = GetActiveDocument();

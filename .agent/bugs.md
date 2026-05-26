@@ -10,45 +10,32 @@ work).
 
 ---
 
-## .c4d file size bloat from helper persistence
+## ~~.c4d file size bloat from helper persistence~~ FIXED 2026-05-26
 
-**Symptoms.** A scene with one geometry object and a couple of cameras
-clocks in at ~90 MB. Copy-OM-to-fresh-doc preserves the bloat. With
-nothing else in the doc, expected size is 1-2 MB.
+**RESOLUTION.** Root cause: `audio-add` and `audio-remove` wrapped
+their helper-BC writes in `StartUndo / AddUndo(CHANGE_SMALL, helper) /
+EndUndo`. `AddUndo(CHANGE_SMALL, helper)` snapshots the ENTIRE helper
+BC including any already-stored audio bytes. The undo stack is
+persisted with the doc, so even after deleting the audio clip (which
+correctly removes bytes from the live BC), the undo snapshot retained
+them — permanently. A 30MB audio clip survived as ~80MB of UTF-16
+base64 in the .c4d file.
 
-**Suspected cause.** The Shotblocks helper's BaseContainer
-accumulates large blobs:
-- Audio bytes per mediaId (base64-encoded WAV/MP3, often 50-100 MB).
-  Mike confirmed audio bytes DO get removed when the clip is deleted
-  + scene is re-saved, but stale mediaIds from earlier sessions /
-  unclean delete paths may still be in the helper.
-- Per-clip peak pyramids (peakLevels[].b64 stored in the clip JSON).
-  5 levels per clip × variable size. A long audio clip could carry
-  multiple MB just for peaks.
-- Stale BaseLinks from deleted cameras (smaller, but the save-state
-  prune comment mentions accumulation as "minor cruft").
+**Fix:** Don't wrap audio-add / audio-remove in undo. Audio binaries
+are media, not undoable user state. The clip metadata (size, position,
+mediaId reference) IS still undoable via save-state's own AddUndo on
+the clip JSON. See `host/shotblocks/source/main.cpp` audio-add (~1530)
+and audio-remove (~1594) for the working pattern.
 
-**Reproduction**:
-1. Open the current 90 MB scene.
-2. Run a CDP eval to dump per-clip peakLevels.b64 sizes + which
-   mediaIds the helper claims to hold bytes for.
-3. Compare with the expected baseline.
+**To compact an existing bloated scene:** open + close the bloated
+clip in C4D (drop audio, then delete it again, then save) — once the
+remove path runs without re-snapshotting, the bytes drop. There's
+also a `helper-compact` command kept in the code as a future debug
+tool (calls `doc->FlushUndoBuffer()`), reachable via CDP eval
+`window.__SHOTBLOCKS_SEND__({ kind: 'helper-compact' })`.
 
-**Likely fixes**:
-- Audit `audio-remove`: confirm bytes are actually being purged on
-  every clip-delete path (group delete, undo-then-redo, etc.). It
-  works for the simple case but might leak on edge paths.
-- Add a one-shot "compact helper" command: scan the helper for keys
-  whose mediaId no longer matches any clip's mediaId, RemoveData
-  them. Run on scene open or via a manual menu item.
-- Re-evaluate whether peak pyramids need to be persisted in the
-  clip JSON. They're recomputable from the audio bytes; persisting
-  just saves the ~200-400ms decode on doc open. Could be opt-in or
-  trimmed.
-
-**Not blocking** — cosmetic bloat, doesn't break functionality. Worth
-addressing before public release because 90 MB scenes are surprising
-and will trigger user reports.
+**Verified 2026-05-26:** 272KB → 85MB on audio drop (bug) → 272KB
+after delete + reopen + save (new behavior).
 
 ---
 
