@@ -19,7 +19,7 @@ import { send } from './lib/host';
  *  Adding a future tool cursor = one more case here + a `.cur` file
  *  + a mode id in the C++ CursorMode enum.
  */
-type CursorMode = 'slip' | 'razor' | 'pen' | 'select' | 'av-split' | 'roll' | 'play-range' | 'default';
+type CursorMode = 'slip' | 'razor' | 'pen' | 'select' | 'av-split' | 'roll' | 'play-range' | 'hand' | 'hand-grab' | 'zoom' | 'default';
 
 export function useToolCursor(): void {
   useEffect(() => {
@@ -65,6 +65,21 @@ export function useToolCursor(): void {
       // a handle, or for the whole duration of a handle drag.
       if (s.rangeHandleDragging || pointerOverRect(x, y, '.range-bar__handle')) {
         return 'play-range';
+      }
+      // Hand tool — open-hand cursor over the canvas (ruler / lanes
+      // area), closed-hand during a pan drag. Sticky during the
+      // drag: the closed-hand stays even if the pointer briefly
+      // exits the canvas, matching every map / NLE app's hand-tool
+      // feel.
+      if (s.activeTool === 'hand') {
+        if (s.handPanning) return 'hand-grab';
+        return pointerOverRect(x, y, '.ruler-row') || pointerOverRect(x, y, '.lanes-area')
+          ? 'hand' : 'default';
+      }
+      // Zoom tool — magnifier cursor over the canvas.
+      if (s.activeTool === 'zoom') {
+        return pointerOverRect(x, y, '.ruler-row') || pointerOverRect(x, y, '.lanes-area')
+          ? 'zoom' : 'default';
       }
       if (s.activeTool === 'slip') {
         // Slip drag in progress → stay slip unconditionally.
@@ -127,7 +142,8 @@ export function useToolCursor(): void {
         || s.rangeHandleDragging !== prev.rangeHandleDragging
         || s.altHeld !== prev.altHeld
         || s.altRmbZooming !== prev.altRmbZooming
-        || s.levelCurveDragging !== prev.levelCurveDragging) {
+        || s.levelCurveDragging !== prev.levelCurveDragging
+        || s.handPanning !== prev.handPanning) {
         reevaluate();
       }
     });

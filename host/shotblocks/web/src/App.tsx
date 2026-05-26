@@ -154,7 +154,12 @@ function App() {
         <UtilityStrip />
 
         {/* row 1, col 3 — ruler */}
-        <div className="ruler-row" id="ruler-row">
+        <div
+          className={'ruler-row'
+            + (activeTool === 'hand' ? ' is-tool-hand' : '')
+            + (activeTool === 'zoom' ? ' is-tool-zoom' : '')}
+          id="ruler-row"
+        >
           <Ruler />
         </div>
 
@@ -200,7 +205,9 @@ function App() {
             className={'lanes-area'
               + (activeTool === 'razor' ? ' is-tool-razor' : '')
               + (activeTool === 'slip' ? ' is-tool-slip' : '')
-              + (activeTool === 'select' ? ' is-tool-select' : '')}
+              + (activeTool === 'select' ? ' is-tool-select' : '')
+              + (activeTool === 'hand' ? ' is-tool-hand' : '')
+              + (activeTool === 'zoom' ? ' is-tool-zoom' : '')}
             id="lanes-area"
             ref={lanesAreaRef}
             onContextMenu={(ev) => {

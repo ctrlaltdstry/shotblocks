@@ -365,6 +365,14 @@ export function useClipDrag(
     function onDown(ev: PointerEvent) {
       if (ev.button !== 0) return;
 
+      // Hand and Zoom tools own left-click on the canvas — Hand for
+      // panning, Zoom for drag-rect zoom. Clip drag is suspended while
+      // either is active; user must switch tools to move clips.
+      {
+        const t = useStore.getState().activeTool;
+        if (t === 'hand' || t === 'zoom') return;
+      }
+
       // A locked track ignores every clip gesture — no select, no
       // body/edge drag, no razor split. The store actions also reject
       // these (defence in depth), but bailing here means the clip

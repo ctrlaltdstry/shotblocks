@@ -119,11 +119,16 @@ export function useKeyboard(): void {
       // Tool shortcuts — bare keys, NLE-standard letters. Mirror the
       // tool-palette buttons: set the store tool + tell C++.
       //   V → select   B → blade (razor)   S → slip
+      //   H → hand     Z → zoom
+      // Premiere-style: the tool stays active after the key press
+      // until the user picks another one.
       if (!mod && !ev.altKey && !ev.shiftKey) {
-        let toolId: 'select' | 'razor' | 'slip' | null = null;
+        let toolId: 'select' | 'razor' | 'slip' | 'hand' | 'zoom' | null = null;
         if (ev.key === 'v' || ev.key === 'V') toolId = 'select';
         else if (ev.key === 'b' || ev.key === 'B') toolId = 'razor';
         else if (ev.key === 's' || ev.key === 'S') toolId = 'slip';
+        else if (ev.key === 'h' || ev.key === 'H') toolId = 'hand';
+        else if (ev.key === 'z' || ev.key === 'Z') toolId = 'zoom';
         if (toolId) {
           ev.preventDefault();
           useStore.getState().setActiveTool(toolId);

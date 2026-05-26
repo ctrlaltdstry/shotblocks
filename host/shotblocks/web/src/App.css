@@ -719,6 +719,48 @@ body.is-resizing-headers .body { transition: none; }
   cursor: var(--slip-cursor);
 }
 
+/* Hand tool cursor — CSS layer of the two-layer cursor pattern (the
+   C++ side is the other layer; both must show the SAME image to avoid
+   a writer race that flickers during mouse-move). The two cursors are
+   defined as custom properties so the body.is-hand-panning override
+   below can reuse the closed-hand without duplicating the data URI.
+   Hotspot 16 16 (centre of 32px). */
+:root {
+  --hand-cursor:
+    url("data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAACAAAAAgCAYAAABzenr0AAABtUlEQVR4nO2WL2/CUBTFj0BMVFRUVExUIBH9CBUTlZWICiSySXEjKYJkHwCSCQQIkklIEIiJyYkKxAQC0Q9QgZioqLjbfekjHdvCSgszPUmT/j+/nvvuewVOywMQA3gHEPzh/kp0A8AAYH+aUrfbpX6/T7wPwAVwC0C5lLkDYJ+ZJbquk1Sr1eJzqbwGoFe1ucovbrfbtF6vqdlskmEYBwDTNImBFosFeZ4nYawsKa0KAJO/LgxDYcixHwN0Oh2xH8exLAnlErmrBGCz2QiTwWDwK8B+vxfGrutSFEVk2zYf764OsFwuxfFkMpFJ/A/AdDqtHmA4HH4B8H1fGF0KQD0GSJKEttst/aQ0TQ/1LwvQBLDNHo7zAEVUBuCV+30+n5NlWeIl3OfXBEjH4/Ehcm4nRVFEjYtoNBrJuaCwXnigyVoyxGw2K5wAdweAt3MAeNGJ8hBFxdCapjHAwzkApSGCIJDx6+cCnA2xWq2o0WgwwH0Z828QpzqBBylPTJn5UxXmUvyz8cwtxe3Jg4unZLnxCuk4DqmqKmP3qzTPi5fWRwAhp5Lbdhlgr2zNa9WqVatWLdYHaTUrcbMaQKwAAAAASUVORK5CYII=") 16 16,
+    grab;
+  --hand-grab-cursor:
+    url("data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAACAAAAAgCAYAAABzenr0AAABr0lEQVR4nO2VIW+DQBiGP4GYqERUIJAViP4ABGJiogJRWYGcaDIEAtGfUN8mFW0yWVGB5AdUTCAmEBWIiYkJRAUC8W0vuWtYszTtQZMJnuTCHbm77733vrsj+huNiHqiHhDRFxHlRBSKfz3R5y64IhgTUYLvdDpl3/dZ/HsX30/Rt1V0IipGoxFvNhvu9/s8GAxYgrqu67xcLnk8HkNEQUSWKA9tCHCwuizLqoBY9XA4PAlAHW6Aw+EgHSlrjjy2KmA2m7Ft278EQBRAH/R1XZf3+z07joN2qhoYFj7/7P1LXUBRFHw8Hk8CoijiJEl+CYjjuGqvVivpyM14NRu5LuASZVnyfD7nPM+r9nq9Vhbw4XleNaHM9GsEnNNEQImsBmmaVnspV3ULi8VC3YEwDG8OeE4QBAieqQh4tSyrsQDMgblUBFRHDxmuym63k/Y/qQgAkWEYSsmHMRhLRLFqcGBg/0zTPJ3za8AFhDFi740mAoBJRG/ydoOtuG6xwnrBSdlutzyZTFjTNBZjzKbBJXhQ/NqLd6mk4hK727NsiAQ9L3Ybdnd0dHR0dHT8G74BNZHSjgupDccAAAAASUVORK5CYII=") 16 16,
+    grabbing;
+}
+/* Idle hand (hovering canvas, no pan in progress) — applied to the
+   ruler and the lanes-area when the Hand tool is active. */
+.ruler-row.is-tool-hand,
+.ruler-row.is-tool-hand *,
+.lanes-area.is-tool-hand,
+.lanes-area.is-tool-hand * {
+  cursor: var(--hand-cursor);
+}
+/* Closed-hand while a pan is in flight. Body-level class so the
+   cursor stays correct even if the pointer briefly leaves the canvas
+   (matches every map / NLE app's hand-tool feel). Set by useMmbPan
+   on Hand-LMB pan, AND on MMB pan (MMB always shows closed-hand since
+   MMB has no "hover idle" state). */
+body.is-hand-panning,
+body.is-hand-panning * {
+  cursor: var(--hand-grab-cursor) !important;
+}
+
+/* Zoom tool cursor — single state (no hover-vs-grab variant). CSS
+   layer of the two-layer cursor pattern; C++ side mirrors. */
+.ruler-row.is-tool-zoom,
+.ruler-row.is-tool-zoom *,
+.lanes-area.is-tool-zoom,
+.lanes-area.is-tool-zoom * {
+  cursor: url("data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAACAAAAAgCAYAAABzenr0AAABvUlEQVR4nO2VrY6DQBSFj0AgViAQCAQCsaJiH2AFD1Cxj4CoWIGs6EOQlKSIJm2CRFQiEIiKCgQCUVFRwUOsQCBm926GhmzZn4bpruEkNyl0kvPNucMd4Fo2gADACUANoAFQAYgAPPeslyZVGDeWZTHP81gYhmy73bL5fM4mkwkDQBV/rNPuYZ6qqspNm6ZhfYrjmOm6zkQ6hkyAkMzTNO417qqqKmYYBkEkssyfKNr1et1rluf51fskSdp2vMgA8E3TZHVdXxm5rsscx+lNgt5T22QAHOnA9ek7ADor4itRhgI03fjP5zObzWbc3LZt3m/6TXU4HC7rsixr22BKBSiKgu+aisw1Tbs873a7y7r9ft8CWEMBqsVicXMLNpsNE0PqYShARFHfCjCdTgkgH2pOcihKGjKfRT3vxt6qLMs2/lcZAKSEJhx9979RJ/5HWQA02080D+h0fyXaOd0NpOVyycQlNfgQttIBZBQt9X21WnEYqiiKeM8VReE7D4LgbhAQ4zUTQ6btNcVdAHDFdV3dGwJiwlmi1E//WT0QR9kAP4lD+L7PDy+At78GaCFKYe79B8CoUaNGjRo1WO9d83U8RXTByAAAAABJRU5ErkJggg==") 16 16,
+    zoom-in;
+}
+
 /* Razor cut-line preview overlay. Spans ruler row (row 1) through
    stage (row 2), in the timeline column (col 3). pointer-events: none
    so it never blocks editing. Inner .cut-line is a 1px vertical

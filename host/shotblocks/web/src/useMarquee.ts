@@ -72,6 +72,12 @@ export function useMarquee(lanesAreaRef: RefObject<HTMLDivElement | null>): void
 
     function onDown(ev: PointerEvent) {
       if (ev.button !== 0) return;
+      // Hand and Zoom tools own left-click on the canvas — Hand for
+      // panning, Zoom for drag-rect zoom. Don't start a marquee while
+      // either is active. (Hand-LMB pan is handled by useMmbPan
+      // capture-phase; Zoom drag-rect lands in Commit 2.)
+      const tool = useStore.getState().activeTool;
+      if (tool === 'hand' || tool === 'zoom') return;
       // Reject if the pointer is over a clip — clip drag/select owns
       // its own pointerdown. We only start a marquee on bare
       // lanes-area background (or empty lane space).

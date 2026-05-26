@@ -21,6 +21,10 @@ export interface UiSlice {
   slipDragging: boolean;
   rollEditActive: boolean;
   rangeHandleDragging: boolean;
+  /** True while a Hand-tool pan drag is in flight. Drives the
+   *  cursor swap from open-hand → closed-hand for the duration of
+   *  the drag, even if the cursor briefly leaves the canvas. */
+  handPanning: boolean;
   spawnGhost: { side: 'video' | 'audio'; trackId: string } | null;
   razorHoverX: number | null;
   razorHoverClipBand: { top: number; bottom: number } | null;
@@ -53,6 +57,7 @@ export interface UiSlice {
   setSlipDragging: (on: boolean) => void;
   setRollEditActive: (on: boolean) => void;
   setRangeHandleDragging: (on: boolean) => void;
+  setHandPanning: (on: boolean) => void;
   setSpawnGhost: (ghost: { side: 'video' | 'audio'; trackId: string } | null) => void;
   setRazorHoverX: (x: number | null, clipBand?: { top: number; bottom: number } | null) => void;
   setContextMenu: (menu: {
@@ -80,6 +85,7 @@ export const createUiSlice: StateCreator<State, [], [], UiSlice> = (set) => ({
   slipDragging: false,
   rollEditActive: false,
   rangeHandleDragging: false,
+  handPanning: false,
   spawnGhost: null,
   razorHoverX: null,
   razorHoverClipBand: null,
@@ -114,6 +120,7 @@ export const createUiSlice: StateCreator<State, [], [], UiSlice> = (set) => ({
   setSlipDragging: (on) => set({ slipDragging: on }),
   setRollEditActive: (on) => set((s) => (s.rollEditActive === on ? s : { rollEditActive: on })),
   setRangeHandleDragging: (on) => set((s) => (s.rangeHandleDragging === on ? s : { rangeHandleDragging: on })),
+  setHandPanning: (on) => set((s) => (s.handPanning === on ? s : { handPanning: on })),
   setSpawnGhost: (ghost) => set((s) => {
     const a = s.spawnGhost;
     if (a === ghost) return s;

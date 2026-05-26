@@ -1,4 +1,4 @@
-export type ToolId = 'select' | 'razor' | 'pen' | 'slip';
+export type ToolId = 'select' | 'razor' | 'pen' | 'slip' | 'hand' | 'zoom';
 export type ClipState = 'unselected' | 'selected' | 'orphaned' | 'orphaned-selected' | 'locked';
 
 export interface Clip {

@@ -1,5 +1,6 @@
 import { useEffect } from 'react';
 import { useStore } from './store';
+import { send } from './lib/host';
 
 /** Middle-mouse-button drag = pan, C4D viewport style. The Python
  *  version couldn't ship this — C4D's framework intercepts MMB
@@ -36,7 +37,17 @@ export function useMmbPan() {
     }
 
     function onPointerDown(ev: PointerEvent) {
-      if (ev.button !== 1) return;
+      // Two entry points:
+      //   - Middle mouse button (button === 1): standard C4D-viewport
+      //     pan gesture, works regardless of active tool.
+      //   - Left mouse button (button === 0) WHEN the Hand tool is
+      //     active: surfaces the same gesture for users who don't
+      //     know the MMB shortcut. The Hand tool's whole purpose is
+      //     to expose pan without modifier keys.
+      const s0 = useStore.getState();
+      const isMmb = ev.button === 1;
+      const isHandLmb = ev.button === 0 && s0.activeTool === 'hand';
+      if (!isMmb && !isHandLmb) return;
       const target = ev.target as HTMLElement | null;
       if (!target) return;
       const ruler = target.closest('.ruler-row');
@@ -46,7 +57,24 @@ export function useMmbPan() {
       ev.preventDefault();
       ev.stopPropagation();
 
-      const s0 = useStore.getState();
+      // Body class for the closed-hand cursor. Applied for both
+      //   - Hand tool LMB pan (open-hand → closed-hand during drag)
+      //   - MMB pan from any tool (closed-hand is the only state;
+      //     MMB has no "hovering" idle moment to show open-hand).
+      // CSS rule (body.is-hand-panning * { cursor: grabbing }) wins
+      // over the per-element tool cursors via !important so the
+      // gesture's cursor is correct regardless of where the pointer
+      // wanders during the drag.
+      document.body.classList.add('is-hand-panning');
+      if (isHandLmb) {
+        useStore.getState().setHandPanning(true);
+      }
+      // Also push the C++ cursor mode to hand-grab so the C++
+      // WM_SETCURSOR layer matches CSS (same two-layer pattern as
+      // slip / razor / etc.). Without this the C++ layer keeps
+      // forcing the OS default while CSS shows closed-hand → flicker.
+      void send({ kind: 'set-cursor-mode', mode: 'hand-grab' }).catch(() => {});
+
       const startClientX = ev.clientX;
       const startClientY = ev.clientY;
 
@@ -139,6 +167,19 @@ export function useMmbPan() {
         window.removeEventListener('pointermove', onMove);
         window.removeEventListener('pointerup', onUp);
         window.removeEventListener('pointercancel', onUp);
+        document.body.classList.remove('is-hand-panning');
+        if (isHandLmb) {
+          useStore.getState().setHandPanning(false);
+        }
+        // Reassert the right C++ cursor for the CURRENT tool. Going
+        // to 'default' here would pop the override entirely and leave
+        // the cursor blank until the next pointermove (which is what
+        // a static post-release pointer never produces). useToolCursor
+        // already drives the right cursor on subsequent moves; we just
+        // need to bridge the gap from MMB-release to the next move.
+        const tool = useStore.getState().activeTool;
+        const next = tool === 'hand' ? 'hand' : tool === 'zoom' ? 'zoom' : 'default';
+        void send({ kind: 'set-cursor-mode', mode: next }).catch(() => {});
       }
       window.addEventListener('pointermove', onMove);
       window.addEventListener('pointerup', onUp);

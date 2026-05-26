@@ -230,6 +230,12 @@ export interface State {
   // drag even if the pointer strays off the small chevron handle.
   rangeHandleDragging: boolean;
 
+  // True while a Hand-tool pan drag is in flight. useToolCursor
+  // reads this to swap the hand-open ↔ hand-closed cursor and to
+  // hold the closed-hand for the entire drag even when the pointer
+  // momentarily exits the canvas.
+  handPanning: boolean;
+
   // Spawn-zone hint shown while dragging. Non-null when resolveLane
   // resolved to a `spawn` target on the current pointermove. The
   // SpawnGhostLane renders a faded outline where V<max+1> / A<max+1>
@@ -358,6 +364,7 @@ export interface State {
   setSlipDragging: (on: boolean) => void;
   setRollEditActive: (on: boolean) => void;
   setRangeHandleDragging: (on: boolean) => void;
+  setHandPanning: (on: boolean) => void;
   setSpawnGhost: (ghost: { side: 'video' | 'audio'; trackId: string } | null) => void;
   /** Update the selection. additive=false replaces with just `clipId`
    *  (or clears, if null). additive=true toggles `clipId` in the set

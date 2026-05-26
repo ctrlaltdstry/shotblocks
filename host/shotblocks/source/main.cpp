@@ -1090,50 +1090,7 @@ private:
 		}
 		if (body.find("\"kind\":\"set-cursor-mode\"") != std::string::npos)
 		{
-			// JS tells us which tool cursor to force. The dialog-window
-			// WM_SETCURSOR subclass reads _cursorMode on every move.
-			// Body: {"kind":"set-cursor-mode","mode":"slip"|"razor"|...}.
-			int m = CURSOR_DEFAULT;
-			if (body.find("\"mode\":\"slip\"") != std::string::npos)
-				m = CURSOR_SLIP;
-			else if (body.find("\"mode\":\"razor\"") != std::string::npos)
-				m = CURSOR_RAZOR;
-			// No "select" case — the Select tool uses the OS default
-			// cursor (removed to kill the playback cursor flicker).
-			else if (body.find("\"mode\":\"av-split\"") != std::string::npos)
-				m = CURSOR_AV_SPLIT;
-			else if (body.find("\"mode\":\"roll\"") != std::string::npos)
-				m = CURSOR_ROLL;
-			else if (body.find("\"mode\":\"play-range\"") != std::string::npos)
-				m = CURSOR_PLAY_RANGE;
-			else if (body.find("\"mode\":\"pen\"") != std::string::npos)
-				m = CURSOR_PEN;
-			_cursorMode.store(m);
-			{
-				char b[64];
-				_snprintf_s(b, sizeof(b), _TRUNCATE,
-					"[Shotblocks/v2] set-cursor-mode -> %d", m);
-				GePrint(maxon::String(b));
-			}
-			// Apply immediately (WM_SETCURSOR only fires on movement),
-			// and drive a fast Win32 timer that keeps re-asserting the
-			// cursor so WebView2's own resets never show. Kill the
-			// timer when we return to no-override.
-			if (_cursorSubclassed)
-			{
-				if (m != CURSOR_DEFAULT)
-				{
-					HCURSOR c = CurrentForcedCursor();
-					if (c) SetCursor(c);
-					// ::SetTimer — the Win32 one. Unqualified SetTimer
-					// resolves to GeDialog::SetTimer (different sig).
-					::SetTimer(_cursorSubclassed, kCursorTimerId, 16, nullptr);
-				}
-				else
-				{
-					::KillTimer(_cursorSubclassed, kCursorTimerId);
-				}
-			}
+			HandleSetCursorMode(body);
 			return "{\"ok\":true,\"kind\":\"set-cursor-mode-ack\"}";
 		}
 		if (body.find("\"kind\":\"tool\"") != std::string::npos)
@@ -1785,6 +1742,59 @@ private:
 	//   {"kind":"add-to-queue","mode":"whole-sequence"|"individual-shots"}
 	// For whole-sequence we append the saved .c4d to C4D's Render
 	// Queue once — the user's existing render settings is the source
+	// Handler for `set-cursor-mode`. Extracted from Dispatch to keep
+	// it under the sourceprocessor's 600-line function cap. Parses
+	// the mode from the body, stores into _cursorMode (read by the
+	// WM_SETCURSOR subclass proc on every move), applies immediately
+	// and drives the fast Win32 timer.
+	void HandleSetCursorMode(const std::string& body)
+	{
+		int m = CURSOR_DEFAULT;
+		if (body.find("\"mode\":\"slip\"") != std::string::npos)
+			m = CURSOR_SLIP;
+		else if (body.find("\"mode\":\"razor\"") != std::string::npos)
+			m = CURSOR_RAZOR;
+		// No "select" case — the Select tool uses the OS default
+		// cursor (removed to kill the playback cursor flicker).
+		else if (body.find("\"mode\":\"av-split\"") != std::string::npos)
+			m = CURSOR_AV_SPLIT;
+		else if (body.find("\"mode\":\"roll\"") != std::string::npos)
+			m = CURSOR_ROLL;
+		else if (body.find("\"mode\":\"play-range\"") != std::string::npos)
+			m = CURSOR_PLAY_RANGE;
+		else if (body.find("\"mode\":\"pen\"") != std::string::npos)
+			m = CURSOR_PEN;
+		else if (body.find("\"mode\":\"hand-grab\"") != std::string::npos)
+			m = CURSOR_HAND_GRAB;
+		else if (body.find("\"mode\":\"hand\"") != std::string::npos)
+			m = CURSOR_HAND;
+		else if (body.find("\"mode\":\"zoom\"") != std::string::npos)
+			m = CURSOR_ZOOM;
+		_cursorMode.store(m);
+		char b[64];
+		_snprintf_s(b, sizeof(b), _TRUNCATE, "[Shotblocks/v2] set-cursor-mode -> %d", m);
+		GePrint(maxon::String(b));
+		// Apply immediately (WM_SETCURSOR only fires on movement),
+		// and drive a fast Win32 timer that keeps re-asserting the
+		// cursor so WebView2's own resets never show. Kill the
+		// timer when we return to no-override.
+		if (_cursorSubclassed)
+		{
+			if (m != CURSOR_DEFAULT)
+			{
+				HCURSOR c = CurrentForcedCursor();
+				if (c) SetCursor(c);
+				// ::SetTimer — the Win32 one. Unqualified SetTimer
+				// resolves to GeDialog::SetTimer (different sig).
+				::SetTimer(_cursorSubclassed, kCursorTimerId, 16, nullptr);
+			}
+			else
+			{
+				::KillTimer(_cursorSubclassed, kCursorTimerId);
+			}
+		}
+	}
+
 	// of truth. individual-shots will land in Commit 10. Factored
 	// into its own method to keep Dispatch under the sourceprocessor's
 	// 600-line function cap.
@@ -2443,6 +2453,9 @@ private:
 		CURSOR_ROLL       = 5,
 		CURSOR_PLAY_RANGE = 6,
 		CURSOR_PEN        = 7,
+		CURSOR_HAND       = 8,
+		CURSOR_HAND_GRAB  = 9,
+		CURSOR_ZOOM       = 10,
 	};
 
 	// Load one multi-resolution .cur from <plugin>/web/cursors/.
@@ -2484,12 +2497,16 @@ private:
 		_rollCursor      = LoadCursorFile(path, L"roll.cur");
 		_playRangeCursor = LoadCursorFile(path, L"play-range.cur");
 		_penCursor       = LoadCursorFile(path, L"pen.cur");
-		char b[224];
+		_handCursor      = LoadCursorFile(path, L"hand.cur");
+		_handGrabCursor  = LoadCursorFile(path, L"hand-grab.cur");
+		_zoomCursor      = LoadCursorFile(path, L"zoom.cur");
+		char b[256];
 		_snprintf_s(b, sizeof(b), _TRUNCATE,
-			"[Shotblocks/v2] cursors loaded: slip=%d razor=%d avsplit=%d roll=%d playrange=%d pen=%d",
+			"[Shotblocks/v2] cursors loaded: slip=%d razor=%d avsplit=%d roll=%d playrange=%d pen=%d hand=%d handgrab=%d zoom=%d",
 			_slipCursor ? 1 : 0, _razorCursor ? 1 : 0,
 			_avSplitCursor ? 1 : 0, _rollCursor ? 1 : 0, _playRangeCursor ? 1 : 0,
-			_penCursor ? 1 : 0);
+			_penCursor ? 1 : 0,
+			_handCursor ? 1 : 0, _handGrabCursor ? 1 : 0, _zoomCursor ? 1 : 0);
 		GePrint(maxon::String(b));
 	}
 
@@ -2505,6 +2522,9 @@ private:
 			case CURSOR_ROLL:       return _rollCursor;
 			case CURSOR_PLAY_RANGE: return _playRangeCursor;
 			case CURSOR_PEN:        return _penCursor;
+			case CURSOR_HAND:       return _handCursor;
+			case CURSOR_HAND_GRAB:  return _handGrabCursor;
+			case CURSOR_ZOOM:       return _zoomCursor;
 			default:                return nullptr;
 		}
 	}
@@ -2606,6 +2626,9 @@ private:
 	HCURSOR              _rollCursor{nullptr};
 	HCURSOR              _playRangeCursor{nullptr};
 	HCURSOR              _penCursor{nullptr};
+	HCURSOR              _handCursor{nullptr};
+	HCURSOR              _handGrabCursor{nullptr};
+	HCURSOR              _zoomCursor{nullptr};
 	std::atomic<int>     _cursorMode{0};   // CursorMode id; 0 = no override
 	HWND                 _cursorSubclassed{nullptr};
 

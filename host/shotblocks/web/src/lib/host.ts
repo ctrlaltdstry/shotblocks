@@ -68,7 +68,7 @@ export type HostOutbound =
   | { kind: 'audio-remove'; clipId: number }
   | { kind: 'set-play-range'; inFrame: number; outFrame: number }
   | { kind: 'set-loop'; enabled: boolean }
-  | { kind: 'set-cursor-mode'; mode: 'slip' | 'razor' | 'pen' | 'select' | 'av-split' | 'roll' | 'play-range' | 'default' }
+  | { kind: 'set-cursor-mode'; mode: 'slip' | 'razor' | 'pen' | 'select' | 'av-split' | 'roll' | 'play-range' | 'hand' | 'hand-grab' | 'zoom' | 'default' }
   | { kind: 'sync-render-settings' }
   | { kind: 'add-to-queue'; mode: 'whole-sequence' }
   | { kind: 'add-to-queue';

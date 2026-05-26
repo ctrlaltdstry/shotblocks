@@ -13,10 +13,11 @@ The work to get Shotblocks to a shippable v1. After this lands, motion-layers be
 | # | Plan | Status | Spec | One-liner |
 |---|---|---|---|---|
 | 1 | **Edge cases + orphan handling** | shipped (`1323fa6`..`7607233`) | [v1-plan-1-orphan-and-edge-cases.md](v1-plan-1-orphan-and-edge-cases.md) | Orphan visuals for deleted cameras + audio, relink flows, edge-case audit across scene-load/rename/undo |
-| 2 | **Markers + render workflow** | ready to start | [v1-plan-2-markers-and-render.md](v1-plan-2-markers-and-render.md) | Timeline markers (M hotkey, ruler toggle, persist), render gear popover that adds C4D Render Queue entries per shot |
+| 2 | **Markers + render workflow** | shipped (`0f363cf`..`723fc29`) | [v1-plan-2-markers-and-render.md](v1-plan-2-markers-and-render.md) | Timeline markers (M hotkey, ruler toggle, persist), inspector with render mode dropdown + Add-to-Queue (Whole sequence + Individual shots) + Sync Settings |
+| 2.5 | **UI refinement + Hand/Zoom tools** | ready to start | [v1-plan-2.5-ui-refinement.md](v1-plan-2.5-ui-refinement.md) | Floating tool-palette + dB-meter cards, rounded track headers, JetBrains Mono timecode, new Hand + Zoom tools with H/Z hotkeys, Selection tool gains keyframe edit parity with Pen, progressive empty state (camera + audio dropzones), drag-clamp bug fix |
 | 3 | **User manual + docs** | ready to start | [v1-plan-3-user-manual.md](v1-plan-3-user-manual.md) | Bundled HTML manual covering every plugin feature, opens in default browser, written from plugin audit |
 
-Three plans. v1 ships when all three land verified.
+Four plans. v1 ships when all four land verified.
 
 ---
 
