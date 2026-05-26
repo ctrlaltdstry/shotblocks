@@ -2,7 +2,7 @@ import { useEffect, useRef } from 'react';
 import './icons.css';
 import './icons-block.css';
 import './App.css';
-import logoUrl from './icons/logo.svg';
+import { MotionLibraryButton } from './components/MotionLibraryButton';
 import { useHost } from './useHost';
 import { useOmDrop } from './useOmDrop';
 import { useFileDrop } from './useFileDrop';
@@ -154,9 +154,12 @@ function App() {
           + (isEmptyDoc ? ' is-empty-doc' : '')}
         style={{ '--headers-w': headersWidth + 'px' } as React.CSSProperties}
       >
-        {/* row 1, col 1 — logo */}
+        {/* row 1, col 1 — motion-library floating card. Per Figma
+            400:1932 the button lives at (4, 28) which is the same
+            row as the utility strip (row 1), col 1 (the rail
+            column). */}
         <div className="logo">
-          <img className="logo__mark" src={logoUrl} alt="Shotblocks" />
+          <MotionLibraryButton />
         </div>
 
         {/* row 1, col 2 — utilities strip */}

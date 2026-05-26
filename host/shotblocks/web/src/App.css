@@ -48,15 +48,73 @@
    any more — kept the marker class in case other selectors hook it.) */
 body.is-resizing-headers .body { transition: none; }
 
-/* row 1, col 1 */
+/* row 1, col 1 — holds the motion library floating card. Per
+   Figma 400:1932 the button sits at (4, 28) which is this grid cell
+   (rail column, utility-strip row). Cell bg is transparent so the
+   canvas grey-10 shows through behind the card. */
 .logo {
   grid-column: 1; grid-row: 1;
-  background: var(--color-grey-12);
-  border-right: 1px solid var(--color-grey-16);
-  border-bottom: 1px solid var(--color-grey-16);
-  display: flex; align-items: center; justify-content: center;
+  background: transparent;
+  display: flex;
+  align-items: center;
+  justify-content: center;
 }
-.logo__mark { width: 22px; height: 11px; display: block; }
+
+/* Motion library button — Figma 400:1932. Floating card pinned to
+   the top of the rail with a 4px gap. Same card chrome family as
+   the tool palette + dB meter (grey-12 fill, 0.5px grey-16 border,
+   6px radius) so the three rail elements visually group as one
+   column. */
+.motion-library-btn {
+  width: 39px;
+  height: 39px;
+  flex: 0 0 auto;
+  background: var(--color-grey-12);
+  border: 0.5px solid var(--color-grey-16);
+  border-radius: 6px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+  box-sizing: border-box;
+  user-select: none;
+}
+/* Inner glyph — two -45deg pills stacked, per Figma 357:875. Outer
+   wrapper is positioned so the glyph as a whole sits centered in the
+   39x39 card. Each pill-wrap is a 14.483x14.483 flex-center box; the
+   pill inside is rotated -45deg so the rotation centers on the
+   pill's own bounding box. The second pill-wrap is offset
+   (+1.93, +7.99) from the first per Figma's coordinates. Total
+   glyph bounding ~17x22. */
+.motion-library-btn__glyph {
+  position: relative;
+  width: 17px;
+  height: 22px;
+  flex-shrink: 0;
+}
+.motion-library-btn__pill-wrap {
+  position: absolute;
+  width: 14.483px;
+  height: 14.483px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+.motion-library-btn__pill-wrap--top {
+  left: 0;
+  top: 0;
+}
+.motion-library-btn__pill-wrap--bot {
+  left: 1.93px;
+  top: 7.99px;
+}
+.motion-library-btn__pill {
+  width: 15.02px;
+  height: 5.462px;
+  background: var(--color-grey-50);
+  border-radius: 5px;
+  transform: rotate(-45deg);
+}
 
 /* row 1, col 2 — utilities strip */
 .utilstrip {
@@ -254,8 +312,12 @@ body.is-resizing-headers .body { transition: none; }
 /* row 2 col 1 — rail (tool palette + meter) */
 .rail {
   grid-column: 1; grid-row: 2;
-  background: var(--color-grey-12);
-  border-right: 1px solid var(--color-grey-16);
+  /* Transparent so the canvas (grey-10) shows through behind the
+     floating motion / tool palette / dB meter cards. Each card has
+     its own grey-12 fill + 0.5px grey-16 border so they read as
+     three distinct floating elements rather than one docked column.
+     Right border removed for the same reason. */
+  background: transparent;
   display: flex; flex-direction: column;
   overflow: hidden;
   position: relative;
