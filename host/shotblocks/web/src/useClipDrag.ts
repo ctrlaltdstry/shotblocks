@@ -161,7 +161,13 @@ export function useClipDrag(
       // transform pushes it under the Inspector. (No auto-scroll on
       // canvas-edge in v1 — out of scope.)
       const docFrames = useStore.getState().docFrames;
-      const maxIn = Math.max(0, docFrames - duration);
+      // Upper clamp: the clip's LEFT edge must stay on the timeline.
+      // If the clip itself is longer than the doc, its right edge will
+      // hang off the right side — that's fine, the user can still drag
+      // the clip left/right. The previous clamp (docFrames - duration)
+      // produced maxIn = 0 for over-long clips, pinning every drag to
+      // frame 0 (audio files imported into a short timeline hit this).
+      const maxIn = Math.max(0, docFrames - 1);
       const rawInFrame = Math.min(maxIn, Math.max(0, d.startInFrame + frameDelta));
 
       const target = resolveLane(ev.clientX, ev.clientY, side);
@@ -389,16 +395,22 @@ export function useClipDrag(
       // never even enters a drag preview that would snap back.
       if (isTrackLocked(trackId)) return;
 
-      // LevelCurve overlay owns ANY pointerdown that lands on it. The
-      // overlay's React stopPropagation can't stop this NATIVE
-      // listener (React's synthetic event system and native
-      // addEventListener don't share propagation), so without this
-      // gate the clip would start a body-drag underneath an active
-      // keyframe / handle drag. Target-based gate covers Select tool
-      // keyframe edits (Commit 9) AND the old Pen / Alt-held cases.
+      // LevelCurve overlay owns the pointerdown ONLY when it actually
+      // captures the gesture — Pen tool, Alt-Select (== penActive), or
+      // when the press lands on an existing keyframe node / handle.
+      // Under plain Select tool with no node/handle hit, LevelCurve
+      // returns early without stopPropagation so the event bubbles to
+      // here for body-drag. Previously this gate fired for ANY press
+      // inside .level-curve, which broke body-drag entirely after
+      // Select-tool gained edit-kf parity (flipping the SVG to
+      // pointer-events:auto by default — so the SVG is the target for
+      // every press on the clip body). The fix: bail only when the
+      // SVG actually owns the gesture, which we detect by checking if
+      // setPointerCapture was called on it.
       if (side === 'audio') {
         const target = ev.target as Element | null;
-        if (target && target.closest('.level-curve')) return;
+        const svg = target && target.closest('.level-curve') as SVGSVGElement | null;
+        if (svg && svg.hasPointerCapture && svg.hasPointerCapture(ev.pointerId)) return;
       }
 
       // Razor tool: click splits the clip at the cursor frame instead

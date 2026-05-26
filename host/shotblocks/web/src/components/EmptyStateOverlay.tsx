@@ -23,7 +23,15 @@ const EXIT_MS = 280;
 
 export function EmptyStateOverlay() {
   const videoTracks = useStore((s) => s.videoTracks);
-  const videoEmpty = videoTracks.every((t) => t.clips.length === 0);
+  const audioTracks = useStore((s) => s.audioTracks);
+  // Empty = no clips ANYWHERE (video OR audio). Previously this only
+  // checked video tracks; dropping just an audio file left the empty-
+  // state panel covering the canvas, blocking pointer events on the
+  // audio clip below (the panel has default pointer-events:auto).
+  // Variable name kept as `videoEmpty` to minimise churn on the
+  // existing logic below — semantics are now "doc empty."
+  const videoEmpty = videoTracks.every((t) => t.clips.length === 0)
+                  && audioTracks.every((t) => t.clips.length === 0);
   // Suppress everything until the persistence layer has loaded the
   // saved doc state. Without this, the dropzone briefly flashes on
   // dialog reopen between mount (initial empty store) and hydration
