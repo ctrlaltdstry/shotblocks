@@ -5,13 +5,23 @@
 .app {
   display: flex; flex-direction: column;
   height: 100vh; width: 100vw;
+  /* Positioning context for the full-height Inspector — it floats
+     over the right edge of the app, spanning topbar + body, per
+     Figma 400:1933 at (1037, 0) with size 250x544. */
+  position: relative;
+  /* Reserve space at the right edge for the absolute-positioned
+     Inspector so .topbar and .body content don't slide under it.
+     The value matches the --inspector-w set on .body. */
+  padding-right: 300px;
+  box-sizing: border-box;
 }
 
 /* ---- top bar ---- */
 .topbar {
   flex: 0 0 var(--topbar-h);
   background: var(--color-grey-10);
-  border-bottom: 1px solid var(--color-grey-16);
+  /* No border-bottom — per Figma the topbar butts directly into the
+     body chrome with no seam line. */
   display: flex; align-items: center;
   padding: 0 11px;
 }
@@ -29,17 +39,10 @@
 .body {
   flex: 1 1 auto;
   display: grid;
-  /* Column 4 is the Inspector — always visible at a fixed width. The
-     `1fr` timeline column absorbs whatever width is left. No
-     animation: the inspector doesn't open or close. No scrollbar
-     column/row — scrollbars are 4px overlays on the stage edge
-     (see .h-scroll / .v-scroll).
-     Width: 300px. Figma started at 250 but at that width the
-     dropdown values (e.g. "Individual shots") truncate. Standard
-     DCC-inspector widths run 280-340 — 300 keeps the timeline wide
-     while letting reasonable value text fit. */
-  --inspector-w: 300px;
-  grid-template-columns: var(--rail-w) var(--headers-w) 1fr var(--inspector-w);
+  /* Inspector lives outside the grid as an absolute-positioned
+     full-height panel; .app pads its right edge to reserve room.
+     Three columns here: rail, headers, timeline. */
+  grid-template-columns: var(--rail-w) var(--headers-w) 1fr;
   grid-template-rows: var(--utilstrip-h) 1fr;
   min-height: 0;
 }
@@ -153,19 +156,18 @@ body.is-resizing-headers .body { transition: none; }
 .utilstrip__icon:hover .icon { background-color: var(--color-grey-50); }
 .utilstrip__icon.is-active .icon { background-color: var(--color-timeline-primary-highlight); }
 
-/* Audio scrub toggle. Now sits at the TOP of the dB meter card per
-   Figma 400:1962 — sized to the 14x16 skim glyph with a generous
-   click target. The icon itself is unchanged; only its position
-   relative to the meter moved (was a separate sibling below the
-   meter; now inside the meter card above the bars). */
+/* Audio scrub toggle inside the dB meter card — Figma 400:1962.
+   Wrapper is content-sized (14x16 glyph), NO explicit hit-area
+   padding, per Figma's inline-grid leading-[0]. The card's
+   justify-content: center handles vertical centering relative to
+   the bar stack 12px below. */
 .rail__scrub-toggle {
   flex: 0 0 auto;
   display: flex;
   align-items: center;
   justify-content: center;
-  width: 22px;
-  height: 22px;
-  border-radius: 4px;
+  width: 14px;
+  height: 16px;
   cursor: pointer;
 }
 
@@ -346,14 +348,20 @@ body.is-resizing-headers .body { transition: none; }
 .rail__tools {
   /* Floating tool palette card — Figma node 400:1960. All values
      pulled directly from the Figma design context, NOT guessed.
-     - 39px wide outer card, height grows to fit the six tools
+     - 39px wide outer card; grows to fill the rail's free height
+       between the motion button row above and the dB meter below.
+       At Figma's reference window size (544 tall) the palette is
+       242px; we let flex-grow do the work at any window size.
      - bg grey-12, 0.5px grey-16 border, 6px radius, drop shadow
      - 15px padding on all sides
-     - inner column distributes children space-between */
-  flex: 0 1 auto;
+     - inner column distributes children space-between
+     Top margin 9px matches Figma's 7px gap from motion-button
+     bottom (y=67) to palette top (y=74) PLUS the 2px gap the rail
+     itself sits below the utility-strip row's seam. */
+  flex: 1 1 auto;
   min-height: 0;
   width: 39px;
-  margin: 4px auto 0;
+  margin: 9px auto 0;
   background: var(--color-grey-12);
   border: 0.5px solid var(--color-grey-16);
   border-radius: 6px;
@@ -364,6 +372,7 @@ body.is-resizing-headers .body { transition: none; }
   justify-content: space-between;
   gap: 0;
   overflow: hidden;
+  box-sizing: border-box;
 }
 .rail__tool {
   width: 28px; height: 28px;
@@ -404,7 +413,16 @@ body.is-resizing-headers .body { transition: none; }
    - No drop shadow (Figma omits it on the meter; tool palette has one) */
 .rail__meter {
   width: 39px;
-  margin: 7px auto 0;
+  /* Per Figma 400:1961, the meter card is a FIXED 216px tall. The
+     skim + bars content is 14 + 12 + 153 = 179px; padding-top 3
+     accounts for another 3px; the remaining ~34px lives below the
+     bars as designed empty space. justify-content: center within
+     the 216 box keeps the proportions consistent regardless of
+     other rail changes. 7px gap above (palette → meter,
+     Figma 316→323), 5px below (meter bottom 539 → rail bottom
+     544). */
+  height: 216px;
+  margin: 7px auto 5px;
   flex: 0 0 auto;
   background: var(--color-grey-12);
   border: 0.5px solid var(--color-grey-16);
@@ -1102,12 +1120,10 @@ body.is-hand-panning * {
   visibility: hidden;
 }
 
-/* Empty-state overlay — discoverability cue for a fresh doc. Per
-   Figma 400:2073. Two variants:
-   - .empty-state--camera: centered in the whole canvas, 319x99.
-   - .empty-state--audio: centered in the audio sub-stack, smaller.
-   Both are pointer-events:none so they never intercept drops — the
-   existing OM-drop / file-drop targets keep doing the real work. */
+/* Empty-state overlay — discoverability cue for a fresh doc, camera
+   side only. Per Figma 400:2073. Centered in the whole canvas with
+   pointer-events:none so it never intercepts drops — the existing
+   OM-drop target on the canvas keeps doing the real work. */
 .empty-state {
   position: absolute;
   inset: 0;
@@ -1123,25 +1139,56 @@ body.is-hand-panning * {
   background: var(--color-grey-12);
   border: 1px dashed #313131;
   border-radius: 4px;
-  width: 319px;
-  height: 99px;
+  /* Figma 400:2073 grew from 319x99 to 451x133 with the bigger
+     30x30 plus glyph and 12px label. */
+  width: 451px;
+  height: 133px;
   display: flex;
   flex-direction: column;
   align-items: center;
   justify-content: center;
   gap: 10px;
+  /* Smooth into the is-active highlight; transform is included so
+     the .is-active scale-up animates with spring. The .is-exiting
+     state overrides transform / opacity with its own (longer)
+     transition for the scale-to-0 exit, so the panel scales DOWN
+     IN PLACE after the doc becomes non-empty. */
+  transition: border-color 160ms ease, background-color 160ms ease,
+              box-shadow 160ms ease, transform 220ms cubic-bezier(0.34, 1.56, 0.64, 1);
+  transform-origin: center;
 }
-.empty-state--audio .empty-state__panel {
-  /* Slightly shorter for the in-lane audio variant — fits inside A1
-     without dwarfing the 65px lane height when zoomed-out. */
-  width: 280px;
-  height: 56px;
-  gap: 6px;
+.empty-state__panel.is-exiting {
+  /* Scale-to-0 exit. Anchored in place by virtue of the panel still
+     being centered in .empty-state (which is absolute inset:0 over
+     the canvas). Component unmounts EXIT_MS after this class
+     applies; see EmptyStateOverlay. */
+  transform: scale(0);
+  opacity: 0;
+  transition: transform 260ms cubic-bezier(0.55, 0, 0.55, 0.2),
+              opacity 220ms ease;
+}
+/* Active = the user is dragging a camera over the canvas while the
+   empty-state is showing. Border becomes solid primary-highlight,
+   subtle outer glow, label + plus pop to grey-50, panel grows
+   slightly so the dropzone reads as "open and ready" instead of a
+   passive hint. */
+.empty-state__panel.is-active {
+  border-style: solid;
+  border-color: var(--color-timeline-primary-highlight);
+  background: color-mix(in srgb, var(--color-timeline-primary-highlight) 8%, var(--color-grey-12));
+  box-shadow: 0 0 24px color-mix(in srgb, var(--color-timeline-primary-highlight) 35%, transparent);
+  transform: scale(1.05);
+}
+.empty-state__panel.is-active .empty-state__label {
+  color: var(--color-grey-50);
+}
+.empty-state__panel.is-active .empty-state__plus path {
+  fill: var(--color-grey-50);
 }
 .empty-state__label {
   font-family: Inter, sans-serif;
   font-weight: 400;
-  font-size: 10px;
+  font-size: 12px;
   color: var(--color-grey-24);
   text-align: center;
   white-space: nowrap;
@@ -1692,8 +1739,12 @@ body.is-hand-panning * {
    the Render / Motion tab strip from Figma is omitted in v1 since
    only one tab would be visible. */
 .inspector {
-  grid-column: 4;
-  grid-row: 1 / span 2;
+  /* Full-height floating panel per Figma 400:1933 at (1037, 0) with
+     size 250x544. Spans topbar + body via absolute positioning on
+     the .app element (which has padding-right reserving the space). */
+  position: absolute;
+  top: 0; right: 0; bottom: 0;
+  width: 300px;
   background: var(--color-grey-10);
   border-left: 1px solid var(--color-grey-16);
   display: flex;
@@ -1701,6 +1752,7 @@ body.is-hand-panning * {
   overflow: hidden;
   min-width: 0;
   font-family: Inter, sans-serif;
+  z-index: 10;
 }
 
 /* Inspector body — vertical stack of section cards. Matches Figma

@@ -207,6 +207,15 @@ export interface State {
   // Drop ghost shown while the user is dragging from the OM. Null when
   // no drag is in progress or the drag is outside our drop targets.
   dragPreview: DragPreview | null;
+  // OM drag in flight (first om-hover → om-cancel/om-drop). Unlike
+  // dragPreview, this stays solid even when the cursor is off a
+  // valid drop target — used by the empty-state overlay to keep
+  // its highlight steady.
+  omDragging: boolean;
+  // True after usePersistence's initial load-state resolves. Gates
+  // EmptyStateOverlay's render so the dropzone doesn't flash up
+  // briefly on dialog reopen between mount and hydration.
+  isHydrated: boolean;
 
   // Clip currently being dragged for reposition. Drives the .is-dragging
   // class on the source ShotBlock (z-index lift + grabbing cursor) and
@@ -358,6 +367,8 @@ export interface State {
   ) => void;
 
   setDragPreview: (preview: DragPreview | null) => void;
+  setOmDragging: (on: boolean) => void;
+  setHydrated: (on: boolean) => void;
   setEdgeHover: (edges: Set<string>) => void;
   setRazorHoverX: (x: number | null, clipBand?: { top: number; bottom: number } | null) => void;
   setDragClip: (drag: { clipId: number; fromTrackId: string } | null) => void;

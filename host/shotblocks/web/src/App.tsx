@@ -195,9 +195,12 @@ function App() {
           videosRef={headersVideosRef}
         />
 
-        {/* row 2, col 3 — stage (lanes, rendered from store) */}
+        {/* row 2, col 3 — stage (lanes, rendered from store).
+            The .stage__edge-shadow was a left-edge gradient cue
+            simulating depth between the headers column and the
+            canvas; removed per Figma which has clean panel seams
+            without that shadow. */}
         <div className="stage">
-          <div className="stage__edge-shadow" />
           {/* Detected beat grid — FCP-style green tempo lines. First
               child + z-index 0 so clip bodies paint over it; the
               lines show through the transparent empty lane area and

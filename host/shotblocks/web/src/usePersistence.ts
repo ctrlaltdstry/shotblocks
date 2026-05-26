@@ -218,7 +218,13 @@ async function loadFromHost(skipNextSave: React.MutableRefObject<boolean>) {
   try {
     const raw = await send({ kind: 'load-state' });
     const ack = raw as { ok?: boolean; json?: string } | undefined;
-    if (!ack || !ack.ok) return;
+    if (!ack || !ack.ok) {
+      // No saved state to apply, but the EmptyStateOverlay still
+      // needs to know we're done loading so it can render the
+      // dropzone for a fresh doc.
+      useStore.setState({ isHydrated: true });
+      return;
+    }
     // Empty json means the helper has no BCKEY_CLIPS_JSON entry —
     // either a brand-new scene OR Ctrl+Z just rolled the helper back
     // past the first save. Reset to the default empty timeline (V1
@@ -332,6 +338,7 @@ async function loadFromHost(skipNextSave: React.MutableRefObject<boolean>) {
       markers,
       markersVisible,
       renderMode,
+      isHydrated: true,
     });
 
     // Fetch persisted audio binaries for any audio MEDIA we don't
@@ -359,6 +366,9 @@ async function loadFromHost(skipNextSave: React.MutableRefObject<boolean>) {
     }
   } catch (e) {
     console.warn('[persistence] load failed', e);
+    // Hydration flag still flips so the empty-state overlay can
+    // render for whatever in-memory state is left.
+    useStore.setState({ isHydrated: true });
   }
 }
 

@@ -18,6 +18,16 @@ export interface UiSlice {
   altRmbZooming: boolean;
 
   dragPreview: DragPreview | null;
+  /** True from the first om-hover until om-cancel / om-drop. Unlike
+   *  dragPreview (which goes null whenever the cursor is off a valid
+   *  drop target), this stays solid for the entire drag — used by
+   *  the EmptyStateOverlay to keep its highlight steady while the
+   *  user moves the OM cursor over the dropzone panel. */
+  omDragging: boolean;
+  /** True once usePersistence's initial load-state has resolved.
+   *  EmptyStateOverlay gates rendering on this so the dropzone
+   *  doesn't flash up on dialog reopen between mount and hydration. */
+  isHydrated: boolean;
   slipDragging: boolean;
   rollEditActive: boolean;
   rangeHandleDragging: boolean;
@@ -54,6 +64,8 @@ export interface UiSlice {
   setAltRmbZooming: (on: boolean) => void;
 
   setDragPreview: (preview: DragPreview | null) => void;
+  setOmDragging: (on: boolean) => void;
+  setHydrated: (on: boolean) => void;
   setSlipDragging: (on: boolean) => void;
   setRollEditActive: (on: boolean) => void;
   setRangeHandleDragging: (on: boolean) => void;
@@ -82,6 +94,8 @@ export const createUiSlice: StateCreator<State, [], [], UiSlice> = (set) => ({
   altRmbZooming: false,
 
   dragPreview: null,
+  omDragging: false,
+  isHydrated: false,
   slipDragging: false,
   rollEditActive: false,
   rangeHandleDragging: false,
@@ -117,6 +131,8 @@ export const createUiSlice: StateCreator<State, [], [], UiSlice> = (set) => ({
   setAltRmbZooming: (on) => set({ altRmbZooming: on }),
 
   setDragPreview: (preview) => set({ dragPreview: preview }),
+  setOmDragging: (on) => set((s) => (s.omDragging === on ? s : { omDragging: on })),
+  setHydrated: (on) => set((s) => (s.isHydrated === on ? s : { isHydrated: on })),
   setSlipDragging: (on) => set({ slipDragging: on }),
   setRollEditActive: (on) => set((s) => (s.rollEditActive === on ? s : { rollEditActive: on })),
   setRangeHandleDragging: (on) => set((s) => (s.rangeHandleDragging === on ? s : { rangeHandleDragging: on })),

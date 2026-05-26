@@ -6,7 +6,6 @@ import { send } from '../lib/host';
 import playheadHandleUrl from '../icons/playhead-handle.svg';
 import markerUrl from '../icons/marker.svg';
 import { RangeBar } from './RangeBar';
-import { RangeDim } from './RangeDim';
 
 /** Ruler row content: numbers + ticks + the playhead handle (which
  *  needs to be clipped to the ruler's overflow). Click + drag scrubs. */
@@ -163,7 +162,9 @@ export function Ruler() {
       onPointerCancel={onPointerEnd}
       onContextMenu={onContextMenu}
     >
-      <RangeDim />
+      {/* Play-range dim used to render here too, but it darkens the
+          ruler in a way that fights the chrome design. The dim still
+          shows on the lanes area below (mounted in App.tsx). */}
       <RangeBar rulerRef={innerRef} />
       <div className="ruler__numbers">
         {layout.labels.map((lbl) => {

@@ -11,7 +11,13 @@ export function DropGhost({
 }) {
   const dragPreview = useStore((s) => s.dragPreview);
   const h = useStore((s) => s.h);
-  if (!dragPreview) return null;
+  // Suppress the ghost when the doc is empty — the EmptyStateOverlay
+  // owns the visual feedback (the dropzone panel lights up) and a
+  // competing clip-shaped ghost on V1 would muddle the focal point.
+  const videoEmpty = useStore((s) => s.videoTracks.every((t) => t.clips.length === 0));
+  const audioEmpty = useStore((s) => s.audioTracks.every((t) => t.clips.length === 0));
+  const docEmpty = videoEmpty && audioEmpty;
+  if (!dragPreview || docEmpty) return null;
 
   const lanesArea = lanesAreaRef.current;
   if (!lanesArea) return null;
