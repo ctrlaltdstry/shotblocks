@@ -23,6 +23,16 @@
   font-display: block;
   src: url('./fonts/Inter-Bold.woff2') format('woff2');
 }
+/* JetBrains Mono Regular — used by the top-bar timecode per Figma
+   354:478. OFL-licensed (free to bundle). Inlined as a base64 data
+   URL by Vite same as Inter. */
+@font-face {
+  font-family: 'JetBrains Mono';
+  font-style: normal;
+  font-weight: 400;
+  font-display: block;
+  src: url('./fonts/JetBrainsMono-Regular.woff2') format('woff2');
+}
 
 html, body {
   margin: 0; padding: 0;
