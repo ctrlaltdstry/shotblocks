@@ -291,10 +291,15 @@ export function Lane({ track, side }: { track: Track; side: 'video' | 'audio' })
     if (!t || !t.active) return;
     const dxPx = ev.clientX - t.startClientX;
     const dxFrames = Math.round(dxPx / Math.max(0.0001, t.pxPerFrame));
-    // Raw cursor-driven edge target frame, before snap.
-    const rawWant = t.edge === 'left'
+    // Raw cursor-driven edge target frame, before snap. Clamped to
+    // [0, docFrames] so the cursor going past the Inspector panel
+    // (or off-screen left of frame 0) doesn't keep stretching the
+    // trim past the document. Mirrors the body-drag upper-clamp.
+    const docFrames = useStore.getState().docFrames;
+    const rawWantUnclamped = t.edge === 'left'
       ? t.origInFrame + dxFrames
       : t.origOutFrame + dxFrames;
+    const rawWant = Math.min(docFrames, Math.max(0, rawWantUnclamped));
 
     // Snap to edit points across the WHOLE timeline — every clip's
     // in/out on both sides (video + audio), all tracks — excluding the
@@ -345,7 +350,12 @@ export function Lane({ track, side }: { track: Track; side: 'video' | 'audio' })
     if (!r || !r.active) return;
     const dxPx = ev.clientX - r.startClientX;
     const dxFrames = Math.round(dxPx / Math.max(0.0001, r.pxPerFrame));
-    const rawSeam = r.origSeamFrame + dxFrames;
+    // Clamp the seam frame to [0, docFrames] so the cursor going past
+    // the Inspector (or off-screen left) doesn't keep stretching the
+    // roll past the document. Mirrors the body-drag and trim-drag
+    // upper clamps.
+    const docFrames = useStore.getState().docFrames;
+    const rawSeam = Math.min(docFrames, Math.max(0, r.origSeamFrame + dxFrames));
 
     // Snap the seam to edit points across the WHOLE timeline — every
     // clip's in/out on BOTH sides (video + audio), plus the playhead.

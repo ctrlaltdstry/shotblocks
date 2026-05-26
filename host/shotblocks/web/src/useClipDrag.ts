@@ -152,7 +152,17 @@ export function useClipDrag(
 
       const duration = d.startOutFrame - d.startInFrame;
       const frameDelta = Math.round(dx / Math.max(0.0001, d.pxPerFrame));
-      const rawInFrame = Math.max(0, d.startInFrame + frameDelta);
+      // Clamp the dragged position to [0, docFrames - duration] so the
+      // clip can't slide past either end of the document. The lower
+      // clamp prevents inFrame < 0; the upper clamp prevents the clip
+      // from translating visually under the Inspector panel when the
+      // cursor keeps moving right past the canvas edge. Without the
+      // upper clamp, frameDelta grows without bound and the clip's
+      // transform pushes it under the Inspector. (No auto-scroll on
+      // canvas-edge in v1 — out of scope.)
+      const docFrames = useStore.getState().docFrames;
+      const maxIn = Math.max(0, docFrames - duration);
+      const rawInFrame = Math.min(maxIn, Math.max(0, d.startInFrame + frameDelta));
 
       const target = resolveLane(ev.clientX, ev.clientY, side);
       if (!target) {
