@@ -489,13 +489,19 @@ body.is-resizing-headers .body { transition: none; }
   flex: 0 0 var(--track-h);
   min-height: 0;
   overflow: hidden;
+  /* Per Figma 373:1133 (video) / 373:1148 (audio):
+     - bg --color-grey-12
+     - 0.5px --color-grey-16 border
+     - 4px radius
+     - 8px horizontal padding (no vertical padding listed)
+     The previous bottom-border-as-gap pattern crashed into the new
+     rounded corners; switched to a margin-bottom that matches the
+     lane below so header/lane rows stay 1:1 aligned vertically. */
   background: var(--color-grey-12);
-  /* 2px gap between tracks — drawn as a bottom border in the column
-     background (grey-10) so it reads as a gap without adding a flex
-     row and breaking the 1:1 header/lane alignment. box-sizing keeps
-     the row at --track-h. Matches the Figma layout's 2px track gap. */
+  border: 0.5px solid var(--color-grey-16);
+  border-radius: 4px;
   box-sizing: border-box;
-  border-bottom: 2px solid var(--color-grey-10);
+  margin-bottom: 2px;
   display: flex; align-items: center; justify-content: center;
   padding: 0 8px;
   position: relative;
@@ -890,6 +896,10 @@ body.is-hand-panning * {
      clip's box without being clipped at the lane border. Clips clip
      their OWN content via .shot-block__content. */
   background: transparent;
+  /* Matches the .track-header margin-bottom so each row's header
+     and lane keep 1:1 vertical alignment as the inter-track gap
+     grows the stack. */
+  margin-bottom: 2px;
   position: relative;
   overflow: visible;
 }
