@@ -1145,8 +1145,15 @@ body.is-hand-panning * {
   pointer-events: none;
   overflow: visible;
 }
-.level-curve.is-pen {
+/* Either flag makes the SVG capture pointer events — Pen tool for
+   full spawn/edit, Select tool for edit-only (Commit 9). When edit-
+   only, onPointerDown bails on empty-area presses so the event
+   bubbles to the clip; KF + handle presses still get owned. */
+.level-curve.is-pen,
+.level-curve.is-edit-kf {
   pointer-events: auto;
+}
+.level-curve.is-pen {
   /* Pen-tool cursor — CSS data-URI layer (matches the C++ pen.cur).
      Hotspot at the pen tip (0,0) — the source PNG is drawn with the
      tip at the top-left, so the OS-reported cursor position coincides

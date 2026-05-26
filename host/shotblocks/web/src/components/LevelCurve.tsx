@@ -68,7 +68,17 @@ export function LevelCurve({ clip }: { clip: Clip }) {
   // gesture is in flight so Alt+RMB stays a zoom, not a pen invite.
   const altHeld = useStore((s) => s.altHeld);
   const altRmbZooming = useStore((s) => s.altRmbZooming);
+  // penActive — the historical gate. True under: Pen tool active, OR
+  // Alt-as-modifier (Pen-while-Alt held), but never during Alt+RMB
+  // zoom. Controls SPAWNING new KFs on a curve-line click — Pen tool
+  // spawns, Select+Alt spawns (because Alt flips penActive on), plain
+  // Select does NOT spawn.
   const penActive = (activeTool === 'pen' || altHeld) && !altRmbZooming;
+  // editKfActive — controls EDITING existing KFs (drag node, drag
+  // tangent handle, right-click context menu). True under: penActive,
+  // OR Select tool. Adds full keyframe-edit parity for Select tool
+  // while keeping spawn gated to penActive.
+  const editKfActive = penActive || (activeTool === 'select' && !altRmbZooming);
   const kfs = clip.levelKeyframes ?? [];
 
   // The level-keyframe selection (store-owned). `sel` is THIS clip's
@@ -237,9 +247,7 @@ export function LevelCurve({ clip }: { clip: Clip }) {
   }
 
   function onPointerDown(ev: React.PointerEvent<SVGSVGElement>) {
-    if (!penActive || ev.button !== 0) return;
-    ev.stopPropagation();
-    ev.preventDefault();
+    if (!editKfActive || ev.button !== 0) return;
     const { fx, fy, rw, rh } = localFrac(ev);
 
     // Decide what the press is OVER. The actual gesture (drag vs click)
@@ -251,6 +259,25 @@ export function LevelCurve({ clip }: { clip: Clip }) {
       const g = evaluateLevel(kfs, fracToAf(fx));
       if (Math.abs(gainToFrac(g) - fy) * rh <= LINE_HIT_PX) lineGain = g;
     }
+
+    // Under the Select tool (without Alt — which would flip penActive
+    // on), the SVG overlay should only own the gesture if the press
+    // lands on an existing KF or tangent handle. Empty-area and
+    // on-line presses pass through to the clip body's selection /
+    // marquee / drag handlers — that's what "Select does not spawn
+    // KFs without Alt" requires in practice. Pen tool keeps the
+    // intercept-everything behavior so it can spawn-on-line.
+    if (!penActive && nodeIdx < 0 && handleSide === null) return;
+
+    // Alt-as-modifier under Select tool means "create new KF." Over
+    // an EXISTING node, Alt is ambiguous (grab vs. create-duplicate)
+    // so it's a no-op per the user's spec: release Alt to grab the
+    // node. Pen tool alone (no Alt) is unaffected — clicking a node
+    // with Pen still grabs it normally.
+    if (activeTool === 'select' && altHeld && nodeIdx >= 0) return;
+
+    ev.stopPropagation();
+    ev.preventDefault();
 
     drag.current = {
       kind: 'pending',
@@ -413,7 +440,7 @@ export function LevelCurve({ clip }: { clip: Clip }) {
     if (!drag.current && hoverKf !== -1) setHoverKf(-1);
   }
   function onContextMenu(ev: React.MouseEvent<SVGSVGElement>) {
-    if (!penActive) return;
+    if (!editKfActive) return;
     const r = svgRef.current!.getBoundingClientRect();
     const fx = r.width > 0 ? (ev.clientX - r.left) / r.width : 0;
     const fy = r.height > 0 ? (ev.clientY - r.top) / r.height : 0;
@@ -441,7 +468,7 @@ export function LevelCurve({ clip }: { clip: Clip }) {
     () => buildPath(kfs, clip.inFrame, clip.outFrame, mediaOffset),
     [kfs, clip.inFrame, clip.outFrame, mediaOffset],
   );
-  const handles = penActive ? selectedHandles() : [];
+  const handles = editKfActive ? selectedHandles() : [];
   const selNode = sel.length === 1 ? kfs[sel[0]] : null;
   const mRect = marquee ? {
     left: Math.min(marquee.x0, marquee.x1) * 100,
@@ -454,7 +481,9 @@ export function LevelCurve({ clip }: { clip: Clip }) {
     <>
       <svg
         ref={svgRef}
-        className={'level-curve' + (penActive ? ' is-pen' : '')}
+        className={'level-curve'
+          + (penActive ? ' is-pen' : '')
+          + (editKfActive ? ' is-edit-kf' : '')}
         viewBox={`0 0 ${VB} ${VB}`}
         preserveAspectRatio="none"
         onPointerDown={onPointerDown}

@@ -389,15 +389,16 @@ export function useClipDrag(
       // never even enters a drag preview that would snap back.
       if (isTrackLocked(trackId)) return;
 
-      // Pen tool on an audio clip: the LevelCurve overlay owns the
-      // gesture (add / drag volume keyframes). The overlay's React
-      // stopPropagation can't stop this NATIVE listener, so the clip
-      // would otherwise start a body-drag underneath the curve edit.
-      // Alt held counts the same (Alt is the pen modifier — see
-      // useToolCursor / LevelCurve's penActive).
+      // LevelCurve overlay owns ANY pointerdown that lands on it. The
+      // overlay's React stopPropagation can't stop this NATIVE
+      // listener (React's synthetic event system and native
+      // addEventListener don't share propagation), so without this
+      // gate the clip would start a body-drag underneath an active
+      // keyframe / handle drag. Target-based gate covers Select tool
+      // keyframe edits (Commit 9) AND the old Pen / Alt-held cases.
       if (side === 'audio') {
-        const st = useStore.getState();
-        if (st.activeTool === 'pen' || (st.altHeld && !st.altRmbZooming)) return;
+        const target = ev.target as Element | null;
+        if (target && target.closest('.level-curve')) return;
       }
 
       // Razor tool: click splits the clip at the cursor frame instead
