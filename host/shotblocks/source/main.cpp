@@ -49,6 +49,7 @@
 #include "c4d_libs/lib_batchrender.h"
 #include "c4d_libs/lib_takesystem.h"
 #include "description/drendersettings.h"
+#include "description/dbasedraw.h"
 
 #include <stdio.h>
 
@@ -1235,18 +1236,34 @@ private:
 				prevCam = bd->GetSceneCamera(doc);
 				if (prevCam != cam)
 				{
-					bd->SetSceneCamera(cam);
-					// EventAdd alone reliably repaints the viewport when
-					// scrubbing forward (time-change + camera-change land
-					// together), but does NOT always repaint when the
-					// camera change isn't accompanied by a time change in
-					// the same direction — backward scrub from the same
-					// frame number that previously belonged to a
-					// different clip is the case. DrawViews with
-					// FORCEFULLREDRAW pushes the new camera state through
-					// to the GL drawport immediately.
-					DrawViews(DRAWFLAGS::FORCEFULLREDRAW);
-					EventAdd();
+					// Route through SetParameter — the description-framework
+					// path the Take System uses internally on take-camera
+					// switches. SetSceneCamera writes the link directly via a
+					// C-table call, bypassing MSG_DESCRIPTION_POSTSETPARAMETER
+					// — the message the BaseDraw's own message handler
+					// listens to in order to invalidate its draw-side scene
+					// snapshot. Without this invalidation, reverse scrub
+					// renders the previous camera even though the link write
+					// commits (Object Manager updates correctly).
+					AutoAlloc<BaseLink> link;
+					if (link)
+					{
+						link->SetLink(cam);
+						GeData data;
+						data.SetBaseLink(*link);
+						bd->SetParameter(ConstDescIDLevel(BASEDRAW_DATA_CAMERA, 0, 0), data, DESCFLAGS_SET::NONE);
+					}
+					// Dirty the cameras so the dependency graph rebuilds their
+					// world matrices at the current time on next ExecutePasses.
+					if (prevCam) prevCam->SetDirty(DIRTYFLAGS::MATRIX | DIRTYFLAGS::CACHE);
+					if (cam)     cam->SetDirty(DIRTYFLAGS::MATRIX | DIRTYFLAGS::CACHE);
+					// Force animation + expression + cache rebuild at the
+					// current time. SetTime alone doesn't — per the 2026 SDK
+					// docs, the canonical "behave like a real scrub" sequence
+					// is SetTime → ExecutePasses → DrawViews → EventAdd.
+					doc->ExecutePasses(nullptr, true, true, true, BUILDFLAGS::INTERACTIVEEDITOR);
+					DrawViews(DRAWFLAGS::ONLY_ACTIVE_VIEW | DRAWFLAGS::NO_THREAD | DRAWFLAGS::FORCEFULLREDRAW);
+					EventAdd(EVENT::ANIMATE);
 					changed = true;
 				}
 			}
