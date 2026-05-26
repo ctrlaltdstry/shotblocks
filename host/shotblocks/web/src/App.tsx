@@ -20,6 +20,7 @@ import { Playhead } from './components/Playhead';
 import { ToolPalette } from './components/ToolPalette';
 import { DropGhost } from './components/DropGhost';
 import { MarqueeOverlay } from './components/MarqueeOverlay';
+import { EmptyStateOverlay } from './components/EmptyStateOverlay';
 import { CutLineOverlay } from './components/CutLineOverlay';
 import { SnapIndicators } from './components/SnapIndicators';
 import { BeatGrid } from './components/BeatGrid';
@@ -119,6 +120,13 @@ function App() {
 
   const activeTool = useStore((s) => s.activeTool);
   const headersWidth = useStore((s) => s.headersWidth);
+  // Empty-doc state — same trigger the camera dropzone uses. Drives
+  // a body-level class that hides the track headers, the V/A divider,
+  // and lane chrome so the empty state reads as a true empty canvas
+  // rather than a populated timeline with an overlay on top.
+  const isEmptyDoc = useStore((s) =>
+    s.videoTracks.every((t) => t.clips.length === 0)
+    && s.audioTracks.every((t) => t.clips.length === 0));
 
   useVerticalZoomVars(lanesVideosRef, lanesAudiosRef);
 
@@ -142,7 +150,8 @@ function App() {
 
       <div
         className={'body'
-          + (activeTool === 'select' ? ' is-tool-select' : '')}
+          + (activeTool === 'select' ? ' is-tool-select' : '')
+          + (isEmptyDoc ? ' is-empty-doc' : '')}
         style={{ '--headers-w': headersWidth + 'px' } as React.CSSProperties}
       >
         {/* row 1, col 1 — logo */}
@@ -225,6 +234,7 @@ function App() {
             />
             <DropGhost lanesAreaRef={lanesAreaRef} />
             <MarqueeOverlay />
+            <EmptyStateOverlay />
           </div>
           {/* Playhead lives at the .stage level (sibling of lanes-area)
               rather than INSIDE lanes-area, so it isn't blocked by the

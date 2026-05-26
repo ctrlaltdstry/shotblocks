@@ -436,6 +436,9 @@ body.is-resizing-headers .body { transition: none; }
   display: flex; flex-direction: column;
   justify-content: flex-start;
   overflow: hidden;
+  /* Positioning context for the audio empty-state overlay (which is
+     portaled into this element via #lanes-audios). */
+  position: relative;
 }
 
 /* Pan within an overflowing (zoomed-in) lane. --video-scroll-y /
@@ -996,6 +999,72 @@ body.is-hand-panning * {
   border: 1px solid var(--color-timeline-primary-highlight);
   background: color-mix(in srgb, var(--color-timeline-primary-highlight) 12%, transparent);
   z-index: 5;
+}
+
+/* When the doc has zero clips, hide the track-list chrome — the
+   headers column, the V/A divider, and the per-track-header chrome
+   inside the audio stack — so the empty state reads as a true empty
+   canvas with just the camera dropzone, not a populated timeline
+   with an overlay on top. Tracks (.lane elements) keep their layout
+   space (so the lanes-area is still the same size, and the camera
+   dropzone is centered relative to it); they just paint nothing.
+   The class is driven by App.tsx's isEmptyDoc derivation. */
+.body.is-empty-doc .headers {
+  visibility: hidden;
+}
+.body.is-empty-doc .stack__divider {
+  visibility: hidden;
+}
+.body.is-empty-doc .track-header {
+  visibility: hidden;
+}
+
+/* Empty-state overlay — discoverability cue for a fresh doc. Per
+   Figma 400:2073. Two variants:
+   - .empty-state--camera: centered in the whole canvas, 319x99.
+   - .empty-state--audio: centered in the audio sub-stack, smaller.
+   Both are pointer-events:none so they never intercept drops — the
+   existing OM-drop / file-drop targets keep doing the real work. */
+.empty-state {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 3;
+}
+/* Audio variant is portaled into #lanes-audios so its inset:0 fills
+   the audio sub-stack — no extra positioning needed. */
+.empty-state__panel {
+  background: var(--color-grey-12);
+  border: 1px dashed #313131;
+  border-radius: 4px;
+  width: 319px;
+  height: 99px;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 10px;
+}
+.empty-state--audio .empty-state__panel {
+  /* Slightly shorter for the in-lane audio variant — fits inside A1
+     without dwarfing the 65px lane height when zoomed-out. */
+  width: 280px;
+  height: 56px;
+  gap: 6px;
+}
+.empty-state__label {
+  font-family: Inter, sans-serif;
+  font-weight: 400;
+  font-size: 10px;
+  color: var(--color-grey-24);
+  text-align: center;
+  white-space: nowrap;
+}
+.empty-state__plus {
+  flex-shrink: 0;
 }
 
 /* Shot block — Figma node 173:1827 spec. State × type × height matrix
