@@ -116,11 +116,20 @@ body.is-resizing-headers .body { transition: none; }
   transform: rotate(-45deg);
 }
 
-/* row 1, col 2 — utilities strip */
+/* row 1, col 2 — utilities strip. Per Figma 400:1909 (asset
+   408ae4d1...svg): grey-12 fill, 1px grey-16 stroke on top/bottom/
+   LEFT only (no right border), border-radius 6px on the LEFT
+   corners and SQUARE on the right so the strip butts seamlessly
+   into the ruler (also grey-12 with grey-16 strokes on top/bottom/
+   left). The two pieces read as one continuous chrome strip. */
 .utilstrip {
   grid-column: 2; grid-row: 1;
-  background: var(--color-grey-10);
+  background: var(--color-grey-12);
+  border-top: 1px solid var(--color-grey-16);
   border-bottom: 1px solid var(--color-grey-16);
+  border-left: 1px solid var(--color-grey-16);
+  border-radius: 6px 0 0 6px;
+  box-sizing: border-box;
   display: flex; align-items: center;
   color: var(--color-grey-50);
   font-size: 11px;
