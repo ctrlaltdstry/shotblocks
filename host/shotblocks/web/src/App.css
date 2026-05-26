@@ -249,17 +249,25 @@ body.is-resizing-headers .body { transition: none; }
   position: relative;
 }
 .rail__tools {
-  /* Content-sized: take only the height the 4 tool icons + gap need.
-     The meter wrap below (flex: 1 1 0) grabs whatever's left. The
-     gap shrinks via clamp() so the palette compacts on narrow rails
-     instead of overflowing onto the meter. */
+  /* Floating tool palette card — Figma node 400:1960. All values
+     pulled directly from the Figma design context, NOT guessed.
+     - 39px wide outer card, height grows to fit the six tools
+     - bg grey-12, 0.5px grey-16 border, 6px radius, drop shadow
+     - 15px padding on all sides
+     - inner column distributes children space-between */
   flex: 0 1 auto;
   min-height: 0;
+  width: 39px;
+  margin: 4px auto 0;
+  background: var(--color-grey-12);
+  border: 0.5px solid var(--color-grey-16);
+  border-radius: 6px;
+  box-shadow: 0 0 4.75px rgba(0, 0, 0, 0.6);
+  padding: 15px;
   display: flex; flex-direction: column;
   align-items: center;
-  justify-content: flex-start;
-  padding: 16px 0 8px;
-  gap: clamp(4px, 4vh, 26px);
+  justify-content: space-between;
+  gap: 0;
   overflow: hidden;
 }
 .rail__meter-wrap {
