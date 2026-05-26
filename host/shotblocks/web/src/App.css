@@ -135,8 +135,10 @@ body.is-resizing-headers .body { transition: none; }
 .ruler__handle {
   position: absolute;
   bottom: 0;
-  width: 18.58px;
-  height: 16px;
+  /* Figma 317:905: 14x18 rounded bullet (rounded top, point bottom)
+     with three decorative grip lines. */
+  width: 14px;
+  height: 18px;
   display: block;
   /* Visual only. It must NOT be pointer-grabbable: the handle's
      `left` updates every playback frame, and a moving grabbable

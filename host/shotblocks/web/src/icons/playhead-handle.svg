@@ -1,3 +1,8 @@
-<svg preserveAspectRatio="xMidYMid meet" width="100%" height="100%" viewBox="0 0 18.5838 16" fill="none" xmlns="http://www.w3.org/2000/svg">
-<path d="M16.581 0C18.1361 0.000314553 19.0961 1.69743 18.2949 3.03027L11.0058 15.1494C10.2286 16.4417 8.35527 16.4417 7.57806 15.1494L0.288996 3.03027C-0.512344 1.6974 0.447654 0.000248579 2.00286 0H16.581Z" fill="#007AFF"/>
+<svg width="14" height="18" viewBox="0 0 14 18" fill="none" xmlns="http://www.w3.org/2000/svg">
+  <g>
+    <path d="M0 9.8806V2C0 0.895431 0.89543 0 2 0H12C13.1046 0 14 0.895431 14 2V9.8806C14 10.6868 13.6755 11.4592 13.0996 12.0234L8.39973 16.6285C7.62211 17.3904 6.37789 17.3904 5.60026 16.6285L0.900398 12.0234C0.32452 11.4592 0 10.6868 0 9.8806Z" fill="#007AFF"/>
+    <line x1="4" y1="5.5" x2="10" y2="5.5" stroke="black" stroke-opacity="0.2" stroke-linecap="round"/>
+    <line x1="4" y1="7.5" x2="10" y2="7.5" stroke="black" stroke-opacity="0.2" stroke-linecap="round"/>
+    <line x1="5.16667" y1="9.5" x2="8.83333" y2="9.5" stroke="black" stroke-opacity="0.2" stroke-linecap="round"/>
+  </g>
 </svg>
