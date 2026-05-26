@@ -160,11 +160,19 @@ body.is-resizing-headers .body { transition: none; }
   cursor: pointer;
 }
 
-/* row 1, col 3 — ruler */
+/* row 1, col 3 — ruler. Per Figma 400:1791: grey-12 fill, 1px
+   grey-16 border on TOP, BOTTOM, and LEFT (no right border — the
+   ruler runs flush into the inspector). The left border seams it
+   against the utility strip / track-headers column.
+   Bg was grey-16 — bumped to grey-12 so it matches the dark-chrome
+   strip the rest of the design uses. */
 .ruler-row {
   grid-column: 3; grid-row: 1;
-  background: var(--color-grey-16);
+  background: var(--color-grey-12);
+  border-top: 1px solid var(--color-grey-16);
   border-bottom: 1px solid var(--color-grey-16);
+  border-left: 1px solid var(--color-grey-16);
+  box-sizing: border-box;
   position: relative;
   overflow: hidden;
   z-index: 2;
@@ -179,7 +187,11 @@ body.is-resizing-headers .body { transition: none; }
 .ruler__ticks   { bottom: 0; height: 18px; }
 .ruler__number {
   position: absolute;
-  font-size: 10px; line-height: 1;
+  /* Figma 400:1847: Inter Regular 8px grey-50. Was 10px. */
+  font-family: Inter, sans-serif;
+  font-weight: 400;
+  font-size: 8px;
+  line-height: 1;
   color: var(--color-grey-50);
   font-variant-numeric: tabular-nums;
   transform: translateX(-50%);
