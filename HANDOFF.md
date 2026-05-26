@@ -1,161 +1,199 @@
-# Handoff — v1 Plan 2 Commit 10 (Individual shots / Takes)
+# Handoff — v1 polish + final bug-fix pass (before Plan 3 user manual)
 
-**Last updated:** end of session, ready to start Commit 10.
+**Last updated:** end of session. Plan 2.5 is functionally complete;
+this handoff is for a focused final sweep — known bugs, paper-cuts,
+and any verification gaps — before kicking off Plan 3 (the user
+manual). When this pass is done, v1 is feature-complete and ready
+for the manual.
 
-## Read these first
+## Read these first, in order
 
-1. `CLAUDE.md` (project root) — non-negotiable rules: dev-loop, debugging method, commit policy, plugin model essentials, style.
-2. `.agent/router.md` — task-keyed navigation into the rest of `.agent/`.
-3. `.agent/plans/v1-plan-2-markers-and-render.md` — current plan, including the post-audit revision that changed the render workflow shape. **Commit 10 is described in detail in the "Implementation order" section.**
-4. `.agent/bugs.md` — known issues filed for later; the scrub-direction bug + .c4d file-size bloat are still open.
-5. (Claude only — these are auto-loaded) memory files under `C:\Users\Mike\.claude\projects\c--Dev-SHOTBLOCKS\memory\`. Codex won't see these; relevant ones for Commit 10:
-   - `feedback_dev_loop_kill_before_deploy.md` — kill C4D before deploying ANY C++ change.
-   - `feedback_dev_loop_does_not_build_cpp.md` — must run `cmake --build` BEFORE `dev-loop.ps1` for C++ changes.
-   - `feedback_undo_addundo_timing.md` — BaseContainer undo registers AT AddUndo time; every helper-container write inside StartUndo/EndUndo must follow a single AddUndo.
-   - `feedback_no_silent_except_pass_at_boundaries.md` — never swallow C4D API errors silently.
+1. `CLAUDE.md` (project root) — non-negotiable rules: dev-loop,
+   debugging method, commit policy, plugin model essentials, style.
+2. `.agent/router.md` — task-keyed navigation into the rest of
+   `.agent/`.
+3. `.agent/bugs.md` — open bugs filed for later. Triage these into
+   what's still real vs. what's been fixed since they were filed.
+4. `.agent/plans/v1-release-roadmap.md` — where the project sits in
+   the v1 release sequence.
+5. `.agent/plans/v1-plan-2.5-ui-refinement.md` — Plan 2.5 plan doc;
+   read the "What this plan explicitly does NOT do" section to
+   understand scope boundaries.
+6. Claude-only auto-loaded memories — see the new entries logged in
+   this session at the bottom of `MEMORY.md`. The four newest
+   directly inform this pass:
+   - `figma-flattened-raster-assets` — when Figma's design-context
+     returns just `<img src=...>`, read the SVG path data instead
+     of guessing chrome properties.
+   - `gsap-selector-scope-during-react-swap` — `querySelectorAll`
+     at tween time can match a newly-mounted variant rather than
+     the one that was visible when triggered.
+   - `css-transition-two-paint-pattern` — exit animations driven
+     by class-add need a 1-rAF deferral so the browser captures
+     the "before" state.
+   - `hydration-aware-first-render` — gate first-run UI on an
+     `isHydrated` flag set by `usePersistence` after load resolves.
+   - `canvas-chrome-grey-palette` — the grey ramp / radii / strokes
+     for every floating chrome surface; reference when adjusting
+     anything visual.
 
-## What's shipped so far in Plan 2
+## What shipped this session
 
 | # | Hash | Subject |
 |---|---|---|
-| 1 | `0f363cf` | feat(markers): marker data model + persistence |
-| 2 | `f1603d5` | feat(markers): M hotkey + ruler pin visual |
-| 3 | `0077c73` | feat(markers): right-click delete (marker + clear all) |
-| 4 | `3ab4958` | feat(markers): utility-strip toggle wires to visibility |
-| 5 | `a442052` | chore(inspector): always-open inspector; Settings modal owns Audio toggle |
-| 6 | `ee5ab49` | feat(inspector): section scaffold + reusable building blocks per Figma |
-| 7 | (in-session audit, not committed) — drove the plan revision |
-| — | `873e7b4` | docs: revise v1 Plan 2 render workflow post-API-audit |
-| 8 | `9cc391b` | feat(render): Render mode dropdown in inspector |
-| 9 | `bff6cc6` | feat(render): Add to Queue button — Whole sequence mode |
+| - | `96e6d2f` | feat(tools): Hand tool — click-drag pan, H hotkey, open/closed-hand cursors |
+| - | `7c082ca` | feat(tools): Zoom tool — left-click drag zoom, Z hotkey |
+| - | `424fc2e` | feat(ui): floating tool palette card chrome |
+| - | `2eb93e4` | feat(ui): floating dB meter card + skim icon above bars |
+| - | `798c35a` | feat(ui): rounded track headers + 2px inter-track gap |
+| - | `c57a981` | feat(ui): JetBrains Mono timecode |
+| - | `ae7e4a0` | feat(ui): new playhead shape from Figma |
+| - | `3c35bfa` | fix(drag): clamp clip body / trim / roll drags at the doc end |
+| - | `c6448ae` | feat(audio): Selection tool gains keyframe edit parity with Pen |
+| - | `487c059` | feat(ui): progressive empty-state overlay (camera + audio dropzones) |
+| - | `e35ff94` | feat(ui): motion library floating button replaces logo cell |
+| - | `efea842` | feat(ui): ruler chrome — grey-12 fill, 8px numbers, top/left borders |
+| - | `23aa3e3` | feat(ui): utilities strip chrome — grey-12 fill, rounded left corners |
+| - | `897d346` | feat(ui): layout pass — floating chrome, full-height inspector, drop ceremony |
 
-Plus prep work earlier this session: revised plan doc (`873e7b4`).
+That covers Plan 2.5 commits 1–10 + the deferred spacing pass + the
+drop ceremony + the bug fixes that fell out of the polish work
+(re-add-after-delete, multi-track reset, drop-into-audio-side,
+dropzone flash on reopen).
 
-## What Commit 10 needs to do
+## What this session DID NOT do (and what to look at first)
 
-Wire the **Individual shots** branch of `HandleAddToQueue` in `host/shotblocks/source/main.cpp` (currently a stub returning `"Individual shots mode coming soon"`).
+Open items from this session that didn't land:
 
-The architecture, locked in during Commit 7 audit:
-- **One Take per shot**, named `Shotblocks_<shotName>` (or `Shotblocks_<shotNum>` if no name).
-- Each Take overrides:
-  - **The active camera** via `BaseTake::SetCamera(takeData, BaseObject*)`.
-  - **The doc's master RenderData's `RDATA_FRAMEFROM` and `RDATA_FRAMETO`** via `BaseTake::FindOrAddOverrideParam(takeData, masterRenderData, DescID(RDATA_FRAMEFROM), GeData(BaseTime(inFrame, fps)), backup)`. Same for FRAMETO with `outFrame - 1` (queue uses inclusive end frame; verify this).
-- **No new RenderData presets** — the user's existing master RenderData keeps AOVs / sampling / format / output template. Takes only override the two range fields.
-- After Takes are created/updated, plugin calls `BatchRender::AddFile(docPath, 1<<30)` N times, then `SetActiveTakeIndex(entryIndex, takeIndex, takeOnly=true)` per entry.
-- Orphan clips (`_cameraLinks[id]->GetLink(doc) == nullptr`) are skipped; status line counts them: e.g. `"Added 5 shots · skipped 1 orphan"`.
+- **`.agent/bugs.md` triage.** Two bugs there were filed during
+  earlier rounds. They may have been incidentally fixed by the work
+  in this session — start by re-reading the file and verifying
+  whether each repro still happens. If a bug no longer repros,
+  remove it from the file.
 
-### JS-side changes needed
+- **Cursor verification through screensharing.** The user is using
+  Jump Desktop to remote in, which doesn't render custom cursors at
+  all — so we couldn't visually verify cursor behavior remotely
+  during the session. If you have local-only access available, run
+  through the cursor states (slip / razor / pen / hand-open /
+  hand-closed / zoom / play-range / roll / av-split) to confirm none
+  flicker, none disappear on release, and that the hand-open ↔
+  hand-closed swap during MMB pan / Hand-tool pan works smoothly.
+  Memory `tool-cursor-pattern` has the full recipe.
 
-The current JS only sends `{kind, mode}`. For Commit 10, JS needs to include the shot list so C++ knows which clips to render. Add to the outbound payload:
+- **Empty-state edge cases.** The drop ceremony works for the happy
+  path (V1/A1 only, first drop). Worth testing:
+  - Drop a clip → undo → redo. Does the empty-state ceremony fire on
+    the redo? Probably should NOT — the redo is a state-restore, not
+    a user drop.
+  - Drop a clip → undo → drop a DIFFERENT camera. Should work
+    cleanly.
+  - Drop a clip while the Add to Queue button is active (mid-render-
+    settings interaction). No reason to break, just worth sanity-
+    checking.
 
-```ts
-{ kind: 'add-to-queue', mode: 'individual-shots',
-  shots: [{ clipId, name, inFrame, outFrame, objectId }, ...] }
+- **GSAP timeline lingering.** Hot reload of the JS bundle during dev
+  can leave stale GSAP tweens running on detached elements. Not a
+  user-facing issue, but if you see odd console errors during
+  `deploy.ps1` reload they're probably from this. Killing the tweens
+  in `useDropCeremony`'s cleanup might be worth adding.
+
+- **Spacing pass — final tightening.** The user said "padding and
+  spacing are wrong again but we'll address that in a single pass
+  once we get the rest updated" at one point. Most of that landed
+  in `897d346` but the user may still flag specific paddings that
+  feel off. Use the Figma `400:1788` frame as the source of truth;
+  read every value before changing.
+
+## Open bugs / paper cuts to verify or close
+
+These are all small. If any reproduces, fix in its own commit; if it
+doesn't repro on this branch, just close it from `.agent/bugs.md`.
+
+1. **Scrub direction reversal sometimes misses camera switch.**
+   Filed in `.agent/bugs.md`. Documented as ~50% repro with the
+   clip-3 → gap → clip-4 → reverse pattern. The orphan-handling
+   commits + this session's polish may or may not have nudged it.
+   Re-test with the test scene; if it still happens, the bugs.md
+   entry has the diagnostic plan (instrument the C++
+   set-active-camera handler to log prevCam / cam / branch fired).
+
+2. **.c4d file-size bloat.** Filed in `.agent/bugs.md`. Scene with
+   one geometry + cameras clocks at ~90MB; expected 1-2MB. Suspect
+   is helper-BC audio-bytes + peak-pyramid accumulation. Has its
+   own CDP-eval diagnostic plan in the entry. Not blocking v1 ship
+   but worth at least confirming whether it's still as bad.
+
+3. **Drag-clamp on body/trim/roll.** Already fixed in `3c35bfa`,
+   but worth verifying that:
+   - Dragging a clip body past the inspector → clip stops at doc end ✓
+   - Trimming an edge past the inspector → edge stops at doc end ✓
+   - Roll-edit past the inspector → seam stops at doc end ✓
+   Plus the cases on the LEFT edge (dragging past frame 0).
+
+4. **Re-adding the same camera after delete.** Fixed mid-session
+   when the resolver short-circuit was added (the dropzone's
+   centered position landed below the V/A divider, which the
+   resolver was rejecting). Worth verifying the path still works
+   after various delete states (delete-via-Delete, delete-via-
+   right-click, delete-multiple-then-redrag).
+
+5. **Multi-track reset on empty-doc redrag.** Fixed by calling
+   `deleteEmptyTracks` on both sides before the addClip. Verify by:
+   set up V1/V2/V3 + A1/A2 with clips → delete all → empty-state
+   shows → drop a camera → only V1 + A1 remain.
+
+6. **Dropzone flash on reopen.** Fixed via `isHydrated` gate.
+   Verify by saving a scene with a clip → close + reopen the
+   Shotblocks dialog → populated state should appear without ANY
+   panel flash.
+
+## Reference: how the drop ceremony is now wired
+
+If you need to touch the empty-state / first-drop flow, the moving
+pieces:
+
+- `EmptyStateOverlay.tsx` — owns the camera dropzone DOM + the
+  CSS-transition-driven scale-to-0 exit. Reads `isHydrated`
+  (gates initial render), `omDragging` (sticky highlight
+  precondition), and the bounding-rect hit-test against `panelRef`
+  per om-hover (actual highlight gate).
+- `useDropCeremony.ts` — GSAP timeline for the tracks-parting +
+  divider fade + new-clip scale-in. Exports `runDropCeremony()`
+  (called from `useOmDrop`) and `consumeDropCeremonyFlag()`
+  (called from `EmptyStateOverlay`'s exit effect to distinguish
+  user-drop from hydration).
+- `useOmDrop.ts` — om-drop handler. On `wasEmpty` it overrides
+  inFrame to 0, short-circuits the resolver to V1, calls
+  `deleteEmptyTracks` on both sides, calls `addClip`, then
+  `runDropCeremony()`.
+- `usePersistence.ts` — `loadFromHost` flips `isHydrated: true`
+  after the load resolves (success or failure paths).
+- App.css — `.empty-state__panel.is-active` for the hover
+  highlight (scale 1.05 + glow); `.empty-state__panel.is-exiting`
+  for the scale-to-0 exit (260ms transform transition).
+
+## Hard rules (re-stated)
+
+- Dev loop: `dev-loop.ps1` kills C4D + deploys + relaunches with
+  `dev-test.c4d`. JS-only changes can use `deploy.ps1` + close-and-
+  reopen the dialog. C++ changes must `cmake --build` first.
+- Commit when explicitly asked — never auto-commit.
+- Read every Figma property from `get_design_context`; never guess.
+  If the context is flattened to a raster, read the SVG path data.
+- Memories under `C:\Users\Mike\.claude\projects\c--Dev-SHOTBLOCKS\
+  memory\` are auto-loaded for Claude only. New rules learned in
+  this session are in MEMORY.md.
+
+## Commit message style
+
+Match the existing v1 Plan 2.5 commits. `feat(ui): ...`,
+`feat(tools): ...`, `fix(drag): ...`, etc. Subject is a single
+imperative sentence — no "and"s. Body explains WHY where the WHAT
+isn't obvious. Co-author trailer if Claude:
+
 ```
-
-Gather the shots in `Inspector.tsx`'s `onAddToQueue`: iterate `useStore.getState().videoTracks` in document order (V1 → V2 → …), collect every clip where `clip.objectId > 0`, attach `clip.sourceName` as the name. Filter orphans on the C++ side (we have the live `_cameraLinks` resolution there).
-
-You'll need to extend the `HostOutbound` union in `host/shotblocks/web/src/lib/host.ts`:
-
-```ts
-| { kind: 'add-to-queue';
-    mode: 'whole-sequence';
-  }
-| { kind: 'add-to-queue';
-    mode: 'individual-shots';
-    shots: { clipId: number; name: string; inFrame: number; outFrame: number; objectId: number }[];
-  };
+Co-Authored-By: Claude Opus 4.7 (1M context) <noreply@anthropic.com>
 ```
-
-### C++-side changes needed
-
-In `host/shotblocks/source/main.cpp`, the `HandleAddToQueue` method has a stub for individual-shots. Replace it with the real implementation:
-
-1. **Parse the shots array** from the JSON body. The naive parser (`ParseIntField` / `ParseStringField`) doesn't do arrays; you'll either need to extend it or extract a small helper that walks `"shots":[{...},{...}]` and pulls each object's fields. Keep it scoped to this command — a real JSON parser is a separate cleanup.
-2. **Get TakeData:** `TakeData* takeData = doc->GetTakeData();` (from c4d_basedocument.h).
-3. **Resolve the master RenderData:** `RenderData* masterRD = doc->GetActiveRenderData();` (or `GetFirstRenderData()` — pick the active one).
-4. **Wrap everything in StartUndo/EndUndo.** Per the project rule, every BaseContainer write inside StartUndo/EndUndo must follow a single AddUndo. For Take edits you'll AddUndo(UNDOTYPE::CHANGE_SMALL, take) on each modified Take.
-5. **For each shot in the JS-provided list:**
-   - Look up the camera via `_cameraLinks[objectId]->GetLink(doc)`. Skip if null (orphan); increment a counter for the status line.
-   - Find or create a Take. To find: walk `takeData->GetMainTake()->GetDown()` (or use `BaseTake::GetTakeFromName` if it exists — check the header) for a child named `Shotblocks_<name>`. If not found, create one via `takeData->AddTake()`.
-   - `take->SetCamera(takeData, cam)`.
-   - Build a `DescID` for `RDATA_FRAMEFROM`: `DescID(RDATA_FRAMEFROM)`. The override value goes through GeData wrapping `BaseTime(inFrame, fps)`. Backup value can be the master RD's current value (read via `masterRD->GetParameter(...)`).
-   - `take->FindOrAddOverrideParam(takeData, masterRD, fromDescID, GeData(BaseTime(inFrame, fps)), GeData(/*backup*/));`
-   - Same for `RDATA_FRAMETO`. Confirm the inclusive-vs-exclusive end frame; if C4D's render range is inclusive, you'll want `outFrame - 1`.
-6. **Add the doc to the queue N times:**
-   - For each shot (in queue-add order, same as the iteration above), call `br->AddFile(docPath, 1<<30)`.
-   - Right after each AddFile, call `br->SetActiveTakeIndex(newEntryIndex, takeIndex, true)`. `newEntryIndex` is the index of the entry you just added — i.e. `br->GetElementCount() - 1`.
-   - `takeIndex` is the position of the Take. Get this via `SetActiveTakeIndex` documentation — usually a flat index across all takes. You'll likely need to count the Takes in document order and map your `Shotblocks_<name>` Take to its index.
-7. **EventAdd()** at the end so Take Manager refreshes.
-8. **`br->Open()`** to bring the queue window forward.
-9. **Return** a status JSON like `{"ok":true,"kind":"add-to-queue-ack","status":"Added 5 shots to Render Queue"}` (or with `· skipped N orphan` appended when applicable).
-
-### Risk / unknowns
-
-- **Inclusive vs exclusive end frame.** C4D's `RDATA_FRAMETO` is inclusive (last frame to render). Shotblocks' `clip.outFrame` is exclusive (first frame NOT in the clip). So pass `outFrame - 1` to FRAMETO. Verify this with a small render test (1 clip, expected frames vs actual rendered output).
-- **`SetActiveTakeIndex` takeIndex meaning.** It might be "index into the doc's Take tree flattened" or "index in some hash order." Likely the same flat tree-walk index that `GetAllTakeNames` produces. The BatchRender's `GetAllTakeNames(n, names)` output is the authoritative ordering — use the same order to compute your take index.
-- **`DescID(RDATA_FRAMEFROM)` construction.** C4D's DescID can be one or multi-level. RenderData params are flat top-level Int32 IDs; `DescID(DescLevel(RDATA_FRAMEFROM))` may be the exact form. Check how other plugin code in `main.cpp` constructs DescIDs (e.g. the `BASEDRAW_DATA_PROJECTION` read in `PickTargetBaseDraw`).
-- **TakeData API surface.** Some methods on `BaseTake` actually live on `TakeData` or `iBaseTake`. The header `c4d_libs/lib_takesystem.h` has the canonical signatures. Read the header carefully before guessing.
-- **Pre-existing Shotblocks Takes.** If a Take named `Shotblocks_X` already exists from a prior Add-to-Queue run, the spec says: update it in place, don't duplicate. So always find-first, create-if-missing.
-
-### Build + verify
-
-This is C++ work → full kill-deploy-relaunch cycle.
-
-```powershell
-# Build C++
-cmake --build "C:/Dev/c4d_sdk_2026/build-win64" --config Release --target shotblocks
-
-# Then deploy + relaunch (kills C4D first, see memory)
-powershell -ExecutionPolicy Bypass -File scripts/dev-loop.ps1
-```
-
-For JS-only iteration on the inspector wiring, you can skip the C4D restart:
-```powershell
-powershell -ExecutionPolicy Bypass -File scripts/deploy.ps1
-```
-Then close + reopen the Shotblocks dialog.
-
-CDP eval for inspecting JS state without DevTools UI:
-```powershell
-node scripts/cdp-eval.mjs "__SHOTBLOCKS_STORE__.getState().renderMode"
-```
-
-### Verification scenario (from the plan)
-
-Scene with 3 clips on V1: shot 1 (Cam A, 0–60), shot 2 (Cam B, 60–120), shot 3 (Cam A, 120–180).
-1. Set Render mode → Individual shots in the inspector.
-2. Save the scene (required for AddFile).
-3. Click Add to Queue.
-4. Open Render → Render Queue in C4D.
-5. **Expect:** 3 entries, all pointing at the same .c4d. Each entry's active Take is `Shotblocks_<cameraName>`.
-6. Take Manager (Window → Take System) shows the 3 new Takes under Main.
-7. Hover an entry → frame range matches the shot's `[inFrame, outFrame)`.
-8. Render → output goes wherever the user's render settings has the path.
-
-Edge cases (Commit 11 handles polish, but Commit 10 should at least not crash):
-- Empty doc (no video clips) → status `"No shots to render"` and button is no-op.
-- All clips orphan → status `"All shots orphan — nothing to queue"`.
-- Mix of orphan + healthy → only healthy added; status counts orphans skipped.
-- Add to Queue twice → second click updates existing Takes in place (no duplicates).
-
-### Files you'll be touching
-
-- `host/shotblocks/source/main.cpp` — extend `HandleAddToQueue` for `mode == "individual-shots"`.
-- `host/shotblocks/web/src/lib/host.ts` — extend `HostOutbound` for the new shots-array payload.
-- `host/shotblocks/web/src/components/Inspector.tsx` — gather the shots list in `onAddToQueue`.
-
-No new files expected.
-
-### One last thing about Dispatch's 600-line limit
-
-The Maxon sourceprocessor enforces a hard 600-line cap per function. `Dispatch` is currently around 580 lines after Commit 9's extraction of `HandleAddToQueue`. If you add more inline handlers in Dispatch, you'll need to extract them into helper methods — same pattern as `HandleAddToQueue` (just one if-line that calls a private method).
-
-### Commit message style
-
-Match the existing Plan 2 commits — see `git log --oneline -20`. Format:
-- Subject: `feat(render): Add to Queue button — Individual shots mode (Takes)` or similar.
-- Body explains the architecture chosen + any non-obvious decisions.
-- `Co-Authored-By: Claude Opus 4.7 (1M context) <noreply@anthropic.com>` trailer if Claude.
 
 Good luck.

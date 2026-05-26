@@ -11,23 +11,33 @@ No restructuring. The dev-test scene should look like the Figma
 
 ---
 
-## Status
+## Status — Plan 2.5 SHIPPED
+
+All 10 originally-planned commits landed plus four follow-up commits
+that fell out of the spacing/polish pass at the end. See HANDOFF.md
+for the full hash list and the next pass (Plan 2.9 — final bug-fix +
+polish).
 
 | # | Commit | Status |
 |---|---|---|
-| 1 | feat(tools): Hand tool — click-drag pan | not started |
-| 2 | feat(tools): Zoom tool — drag-rect zoom-to-area | not started |
-| 3 | feat(ui): floating tool palette card | not started |
-| 4 | feat(ui): simplified floating dB meter + skim icon | not started |
-| 5 | feat(ui): rounded track headers | not started |
-| 6 | feat(ui): top-bar timecode font + color | not started |
-| 7 | feat(ui): playhead shape from Figma | not started |
-| 8 | fix(drag): clamp clip drag at Inspector's left edge | not started |
-| 9 | feat(audio): Selection tool can edit level keyframes | not started |
-| 10 | feat(ui): progressive empty state — camera + audio dropzones | not started |
+| 1 | feat(tools): Hand tool — click-drag pan | shipped (`96e6d2f`) |
+| 2 | feat(tools): Zoom tool — left-click drag zoom | shipped (`7c082ca`) |
+| 3 | feat(ui): floating tool palette card | shipped (`424fc2e`) |
+| 4 | feat(ui): floating dB meter + skim icon | shipped (`2eb93e4`) |
+| 5 | feat(ui): rounded track headers | shipped (`798c35a`) |
+| 6 | feat(ui): top-bar timecode font + color | shipped (`c57a981`) |
+| 7 | feat(ui): playhead shape from Figma | shipped (`ae7e4a0`) |
+| 8 | fix(drag): clamp clip drag at doc end | shipped (`3c35bfa`) |
+| 9 | feat(audio): Selection tool keyframe edit parity | shipped (`c6448ae`) |
+| 10 | feat(ui): progressive empty state | shipped (`487c059`) |
+| + | feat(ui): motion library floating button | shipped (`e35ff94`) |
+| + | feat(ui): ruler chrome | shipped (`efea842`) |
+| + | feat(ui): utilities strip chrome | shipped (`23aa3e3`) |
+| + | feat(ui): layout pass + drop ceremony | shipped (`897d346`) |
 
-10 commits total. (1), (2), (9), and (10) are functional changes;
-(3)–(7) are visual; (8) is a bug fix.
+The deferred spacing pass collapsed into a single big commit
+(`897d346`) because the chrome elements all reshaped each other and
+the drop-ceremony animation reshape the empty-state in turn.
 
 ---
 
