@@ -83,13 +83,20 @@ body.is-resizing-headers .body { transition: none; }
 .utilstrip__icon:hover .icon { background-color: var(--color-grey-50); }
 .utilstrip__icon.is-active .icon { background-color: var(--color-timeline-primary-highlight); }
 
-/* Audio scrub toggle in the left rail — sits near the bottom of the
-   rail, centered, with a small breathing margin below. */
+/* Audio scrub toggle. Now sits at the TOP of the dB meter card per
+   Figma 400:1962 — sized to the 14x16 skim glyph with a generous
+   click target. The icon itself is unchanged; only its position
+   relative to the meter moved (was a separate sibling below the
+   meter; now inside the meter card above the bars). */
 .rail__scrub-toggle {
   flex: 0 0 auto;
-  width: 100%;
-  height: 30px;
-  margin-bottom: 2px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 22px;
+  height: 22px;
+  border-radius: 4px;
+  cursor: pointer;
 }
 
 /* row 1, col 3 — ruler */
@@ -270,15 +277,6 @@ body.is-resizing-headers .body { transition: none; }
   gap: 0;
   overflow: hidden;
 }
-.rail__meter-wrap {
-  /* `flex: 1 1 0` (no 50% basis) — claim whatever's left after the
-     content-sized tools palette and the fixed toggle take their
-     share. With a 50% basis the wrap fights the tools for space,
-     causing visible overlap at narrow rail heights. */
-  flex: 1 1 0;
-  min-height: 0;
-  position: relative;
-}
 .rail__tool {
   width: 28px; height: 28px;
   min-width: 28px; min-height: 28px;
@@ -309,78 +307,49 @@ body.is-resizing-headers .body { transition: none; }
 .rail__tool:hover .icon { background-color: var(--color-grey-white); }
 .rail__tool.is-active .icon { background-color: var(--color-grey-white); }
 
-/* dB meter — single mono bar with a label scale beside it. Purely
-   visual; this isn't an audio mixing app. Shrinks freely with the
-   rail; labels clip if there isn't room rather than forcing a
-   minimum height. */
-.rail__meter-wrap .rail__meter {
-  position: absolute;
-  /* Breathing room above the meter, sized as a fraction of the
-     wrap's own height so it scales with the rail. At a tall window
-     (~500px wrap) clamp resolves to the 48px max; at a narrow rail
-     (~150px wrap) it floors at 16px. Sits between the bottom of the
-     tool palette and the top of the meter. */
-  top: clamp(16px, 12%, 48px);
-  bottom: 0;
-  /* Center the meter BAR (not the meter+labels group) on the rail's
-     horizontal axis so it lines up with the tool icons above. The
-     meter layout is [labels:16px][bar:14px], so the bar's center
-     sits at left + 16 + 7 = left + 23. Setting left = 50% - 23px
-     puts the bar's center exactly at the rail center; labels hang
-     off to the left. */
-  left: calc(50% - 23px);
-  width: 30px;
-}
+/* Floating dB meter card — Figma node 400:1961. Every value pulled
+   directly from the Figma design context, NOT guessed.
+   - 39px wide outer card, 216px tall (matches Figma frame)
+   - bg grey-12, 0.5px grey-16 border, 6px radius
+   - padding: 3px top, 15px x, 0 bottom (Figma `pt-[3px] px-[15px]`)
+   - flex column, 12px gap, centered horizontally + vertically
+   - No drop shadow (Figma omits it on the meter; tool palette has one) */
 .rail__meter {
-  display: flex;
-  align-items: stretch;
+  width: 39px;
+  margin: 7px auto 0;
+  flex: 0 0 auto;
+  background: var(--color-grey-12);
+  border: 0.5px solid var(--color-grey-16);
+  border-radius: 6px;
+  padding: 3px 15px 0;
+  display: flex; flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 12px;
   color: var(--color-grey-50);
   font-family: Inter, sans-serif;
   overflow: hidden;
-  min-height: 0;
-}
-.rail__meter-scale {
-  display: flex;
-  align-items: stretch;
-  min-height: 0;
-}
-.rail__meter-scale__labels {
-  flex: 1 1 auto;
-  min-height: 0;
-  display: flex; flex-direction: column;
-  align-items: flex-end;
-  justify-content: space-between;
-  width: 16px;
-  padding-right: 3px;
-  font-size: 6px;
-  font-weight: 400;
-  line-height: 1;
   box-sizing: border-box;
-  overflow: hidden;
 }
-.rail__meter-bars {
-  width: 14px;
-  display: flex;
-  align-items: stretch;
-  justify-content: center;
-  min-height: 0;
-}
-/* Live stereo dB meter — two thin bars (L/R) sharing the meter width
-   with a small gap. Each bar is a dark track; the gradient is
-   masked from the top by .rail__meter-cover; the peak tick floats at
-   the recent peak. */
+/* Live stereo dB meter — two thin bars (L/R). Per Figma 400:1970:
+   each bar is 8px wide x 153px tall, grey-7 background (the track),
+   1px radius, gap 3px between L and R. The track fills bottom-up
+   with the green→yellow→red gradient via the existing cover/peak
+   mechanism in Meter.tsx. */
 .rail__meter-stereo {
-  flex: 1 1 0;
-  min-height: 0;
+  flex: 0 0 auto;
   display: flex;
-  gap: 2px;
+  gap: 3px;
+  align-items: flex-end;
+  justify-content: center;
 }
 .rail__meter-bar {
-  flex: 1 1 0;
-  min-width: 0;
-  min-height: 0;
+  flex: 0 0 8px;
+  width: 8px;
+  height: 153px;
   position: relative;
   background: var(--color-grey-7);
+  border-radius: 1px;
   overflow: hidden;
 }
 /* The gradient spans the FULL bar height — its colour at any point is

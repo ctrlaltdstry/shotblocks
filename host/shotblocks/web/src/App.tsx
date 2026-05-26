@@ -163,23 +163,18 @@ function App() {
           <Ruler />
         </div>
 
-        {/* row 2, col 1 — tool palette + dB meter + audio-scrub toggle */}
+        {/* row 2, col 1 — floating tool palette + dB meter cards.
+            Per Figma node 400:1961 the dB meter is its own card with
+            the audio-scrub toggle (skim icon) at the top of the card
+            and the two bars below. The .rail wrapper stays as the
+            grid cell; each card lays out as a floating element inside
+            it. */}
         <div className="rail">
           <ToolPalette />
-          <div className="rail__meter-wrap">
-            <div className="rail__meter" title="dB meter">
-              <div className="rail__meter-scale">
-                <div className="rail__meter-scale__labels">
-                  <span>6</span><span>0</span><span>-6</span><span>-12</span>
-                  <span>-20</span><span>-30</span><span>-40</span><span>-50</span><span>-∞</span>
-                </div>
-              </div>
-              <div className="rail__meter-bars">
-                <Meter />
-              </div>
-            </div>
+          <div className="rail__meter" title="dB meter">
+            <AudioScrubToggle />
+            <Meter />
           </div>
-          <AudioScrubToggle />
         </div>
 
         {/* row 2, col 2 — track headers (rendered from store) */}
