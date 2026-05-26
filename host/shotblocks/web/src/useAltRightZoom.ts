@@ -37,20 +37,33 @@ export function useAltRightZoom() {
     }
 
     function onPointerDown(ev: PointerEvent) {
-      if (ev.button !== 2 || !ev.altKey) return;
+      // Two triggers for the same gesture:
+      //   - Alt + Right-click drag: the C4D-viewport modifier shortcut.
+      //   - Left-click drag with the Zoom tool active: surfaces the
+      //     same gesture for users who don't know the modifier.
+      // Both paths run the identical zoom math below.
+      const s0 = useStore.getState();
+      const isAltRmb = ev.button === 2 && ev.altKey;
+      const isZoomLmb = ev.button === 0 && s0.activeTool === 'zoom';
+      if (!isAltRmb && !isZoomLmb) return;
       const target = ev.target as HTMLElement | null;
       if (!target) return;
 
       const inRuler = !!target.closest('.ruler-row');
       const inLanes = !!target.closest('.lanes-area');
-      const inHeaders = !!target.closest('#headers-videos')
-        || !!target.closest('#headers-audios');
+      // The Zoom tool only scopes to the timeline canvas — track-
+      // header drags don't exist for it (no tool affordance there).
+      // Alt+RMB keeps its existing header scope (audio-only vertical
+      // zoom).
+      const inHeaders = isAltRmb && (
+        !!target.closest('#headers-videos')
+        || !!target.closest('#headers-audios')
+      );
       if (!inRuler && !inLanes && !inHeaders) return;
 
       ev.preventDefault();
       ev.stopPropagation();
 
-      const s0 = useStore.getState();
       const startClientX = ev.clientX;
       const startClientY = ev.clientY;
 
