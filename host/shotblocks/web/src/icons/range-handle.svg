@@ -1,6 +1,6 @@
-<svg preserveAspectRatio="none" width="100%" height="100%" overflow="visible" style="display: block;" viewBox="0 0 16 39" fill="none" xmlns="http://www.w3.org/2000/svg">
+<svg preserveAspectRatio="none" width="100%" height="100%" overflow="visible" style="display: block;" viewBox="0 0 16 50" fill="none" xmlns="http://www.w3.org/2000/svg">
 <g id="Group 23">
-<path id="Rectangle 67" d="M9 0H12V39H9V0Z" fill="var(--fill-0, #007AFF)"/>
-<path id="Polygon 3" d="M1.55466 20.4586C0.712551 19.6685 0.712552 18.3315 1.55466 17.5414L8.63158 10.9019C9.90873 9.70369 12 10.6092 12 12.3605L12 25.6395C12 27.3908 9.90873 28.2963 8.63158 27.0981L1.55466 20.4586Z" fill="var(--fill-0, #007AFF)"/>
+<path id="Rectangle 67" d="M9 0H12V50H9V0Z" fill="var(--fill-0, #007AFF)"/>
+<path id="Polygon 3" d="M1.55465 26.4586C0.712549 25.6685 0.71255 24.3315 1.55466 23.5414L8.63158 16.9019C9.90873 15.7037 12 16.6092 12 18.3605L12 31.6395C12 33.3908 9.90873 34.2963 8.63158 33.0981L1.55465 26.4586Z" fill="var(--fill-0, #007AFF)"/>
 </g>
 </svg>

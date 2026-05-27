@@ -352,6 +352,9 @@ export interface State {
     audioSongParts: number[],
   ) => void;
 
+  /** Toggle per-clip waveform visibility on one audio clip. */
+  toggleClipWaveform: (clipId: number) => void;
+
   /** Append a clip to the named track (e.g. 'V1' or 'A2'). Returns
    *  the assigned clip id, or null if the track doesn't exist. */
   addClip: (trackId: string, clip: Omit<Clip, 'id'>) => number | null;

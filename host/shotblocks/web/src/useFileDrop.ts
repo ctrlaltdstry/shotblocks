@@ -169,6 +169,10 @@ export function useFileDrop(): void {
           mediaDurationFrames: durationFrames,
           mediaOffsetFrames: 0,
           mediaId,
+          // Waveform OFF by default; user toggles on via the button at
+          // the clip's bottom-left. Peaks are still decoded in the
+          // background so the toggle reveals them immediately when on.
+          waveformVisible: false,
         });
         // Decode + summarize in parallel so the clip appears
         // immediately and the waveform fills in once decode finishes

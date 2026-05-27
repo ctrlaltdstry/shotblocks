@@ -14,8 +14,19 @@
   /* Timeline accents */
   --color-timeline-primary-highlight:    #007aff;
   --color-timeline-default-block:        #4da2ff;
-  --color-timeline-audio:                #5fe781;
-  --color-timeline-audio-selected:       #27dc56;
+  /* Audio keyframe accent — orange to contrast against the audio
+     clip's green fill. Used on selected nodes, tangent handles +
+     connector lines, and the pen-tool marquee. Separate from the
+     primary-highlight blue so we can recolor without affecting the
+     rest of the "selected" UI. */
+  --color-audio-kf-accent:               #ff9500;
+  /* Audio fill #01904b (Figma 440:2618). Selected variant is the same
+     base bumped ~30% brighter for visual feedback (no Figma reference
+     for the selected state yet). Border on shot-block.is-audio is
+     auto-derived via color-mix(audio 70%, black) → ~#016535 which
+     matches Figma's audio border. */
+  --color-timeline-audio:                #01904b;
+  --color-timeline-audio-selected:       #02b85d;
   --color-timeline-icon-audio-default:   #9bf0b1;
   --color-timeline-icon-waveform-on:     #ffffff;
   --color-timeline-locked:               #383838;
@@ -31,10 +42,15 @@
 
   /* Layout */
   --topbar-h:    26px;
-  --utilstrip-h: 39px;
-  --rail-w:      50px;
+  /* Rail column is 64px wide: 4px left inset + 50px card width + 10px
+     right gap (to the utilities strip / track headers in column 2).
+     Per Figma 150:1348 the rail cards sit at x=4 and the next column
+     starts at x=64. */
+  --rail-w:      64px;
+  /* Utilities + ruler rows are 50px tall per Figma (442:2708, 442:2632). */
+  --utilstrip-h: 50px;
   --headers-w:   200px;
-  --ruler-h:     39px;
+  --ruler-h:     50px;
   --track-h:     65px;
   --video-track-h: 65px;
   --audio-track-h: 65px;

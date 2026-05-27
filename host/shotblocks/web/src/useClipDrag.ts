@@ -1,4 +1,4 @@
-import { useEffect, useRef, type RefObject } from 'react';
+import { useCallback, useEffect, useRef, type PointerEventHandler, type RefObject } from 'react';
 import { gsap } from 'gsap';
 import { useStore, magneticSnap, audioPeakDocFrames, isTrackLocked, SNAP_PIXEL_RADIUS, clipEdgeZonePx, type Clip } from './store';
 import { DRAG_THRESHOLD_PX, type DragRef } from './hooks/clipDrag/types';
@@ -27,7 +27,7 @@ export function useClipDrag(
   trackId: string,
   side: 'video' | 'audio',
   elRef: RefObject<HTMLElement | null>,
-) {
+): PointerEventHandler<HTMLElement> {
   const dragRef = useRef<DragRef>({
     active: false,
     pointerId: -1,
@@ -45,6 +45,20 @@ export function useClipDrag(
     groupIds: null,
     rippleMode: false,
   });
+
+  // The latest `onDown` from the effect closure — exposed via a ref so
+  // the hook can return a STABLE React callback that always invokes the
+  // up-to-date closure (clip/trackId/side might change across renders).
+  // ShotBlock binds the returned callback via React's onPointerDown,
+  // which means LevelCurve's React stopPropagation reliably blocks our
+  // handler when LevelCurve owns the gesture (keyframe / handle press)
+  // — the previous native addEventListener approach received events
+  // BEFORE React dispatched the synthetic event to LevelCurve, defeating
+  // stopPropagation entirely.
+  const onDownRef = useRef<(ev: PointerEvent) => void>(() => {});
+  const reactOnDown = useCallback<PointerEventHandler<HTMLElement>>((ev) => {
+    onDownRef.current(ev.nativeEvent);
+  }, []);
 
   useEffect(() => {
     const el = elRef.current;
@@ -208,6 +222,11 @@ export function useClipDrag(
       // user-confirmed: invisible lines shouldn't magnet the drag.
       if (state.beatGridVisible) {
         for (const f of audioPeakDocFrames(state)) editPoints.push(f);
+      }
+      // Markers — same visibility rule as beats: only snap when the
+      // marker overlay is on, so invisible markers don't magnet drags.
+      if (state.markersVisible) {
+        for (const f of state.markers) editPoints.push(f);
       }
       // Snap gating (Premiere model): snap is active when the Snap
       // toggle is on, OR while Shift is held — Shift temporarily
@@ -395,24 +414,16 @@ export function useClipDrag(
       // never even enters a drag preview that would snap back.
       if (isTrackLocked(trackId)) return;
 
-      // LevelCurve overlay owns the pointerdown ONLY when it actually
-      // captures the gesture — Pen tool, Alt-Select (== penActive), or
-      // when the press lands on an existing keyframe node / handle.
-      // Under plain Select tool with no node/handle hit, LevelCurve
-      // returns early without stopPropagation so the event bubbles to
-      // here for body-drag. Previously this gate fired for ANY press
-      // inside .level-curve, which broke body-drag entirely after
-      // Select-tool gained edit-kf parity (flipping the SVG to
-      // pointer-events:auto by default — so the SVG is the target for
-      // every press on the clip body). The fix: bail only when the
-      // SVG actually owns the gesture, which we detect by checking if
-      // setPointerCapture was called on it.
-      if (side === 'audio') {
-        const target = ev.target as Element | null;
-        const svg = target && target.closest('.level-curve') as SVGSVGElement | null;
-        if (svg && svg.hasPointerCapture && svg.hasPointerCapture(ev.pointerId)) return;
-      }
+      // LevelCurve's React onPointerDown calls stopPropagation when it
+      // owns the gesture (pen tool, or keyframe-node / handle press
+      // under Select). React's stopPropagation halts native bubble
+      // before reaching us here, so if we got the event, LevelCurve
+      // didn't claim it — we can proceed with body-drag setup
+      // unconditionally for audio.
+      runBodyDragSetup(ev);
+    }
 
+    function runBodyDragSetup(ev: PointerEvent) {
       // Razor tool: click splits the clip at the cursor frame instead
       // of starting a drag. Map cursor X → frame via the lane's
       // pxPerFrame, then call splitClip. Validation (frame inside
@@ -420,6 +431,11 @@ export function useClipDrag(
       // edge-zone clicks just no-op silently. Ports Python
       // _split_shot's caller path (sb_canvas razor mode).
       if (useStore.getState().activeTool === 'razor') {
+        // Razor cuts AUDIO clips only — video clips ARE hard cuts
+        // already (the timeline boundary is the cut) and razoring a
+        // camera shot doesn't have a meaningful "split the take"
+        // semantic. Silently no-op on video.
+        if (side === 'video') return;
         const laneEl = el!.closest('.lane') as HTMLElement | null;
         if (!laneEl) return;
         const laneRect = laneEl.getBoundingClientRect();
@@ -537,9 +553,8 @@ export function useClipDrag(
       window.addEventListener('keydown', onKey);
     }
 
-    el.addEventListener('pointerdown', onDown);
+    onDownRef.current = onDown;
     return () => {
-      el.removeEventListener('pointerdown', onDown);
       window.removeEventListener('pointermove', onMove);
       window.removeEventListener('pointerup', onUp);
       window.removeEventListener('pointercancel', onCancel);
@@ -553,4 +568,6 @@ export function useClipDrag(
     // already; onMove uses dragRef-stored startInFrame for delta
     // math, not closure clip.inFrame.
   }, [clip.id, trackId, side, elRef]);
+
+  return reactOnDown;
 }

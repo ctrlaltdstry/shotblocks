@@ -58,6 +58,10 @@ interface SavedClip {
     inTan: { tx: number; ty: number };
     outTan: { tx: number; ty: number };
   }[];
+  // Per-clip waveform-toggle (audio only). Undefined / true = visible,
+  // false = hidden. Toggled via the small button at the audio clip's
+  // bottom-left.
+  waveformVisible?: boolean;
 }
 interface SavedTrack {
   id: number;
@@ -299,6 +303,7 @@ async function loadFromHost(skipNextSave: React.MutableRefObject<boolean>) {
           audioBeatGrid: c.audioBeatGrid,
           audioSongParts: c.audioSongParts,
           levelKeyframes: levelKeyframesFromSaved(c.levelKeyframes),
+          waveformVisible: c.waveformVisible,
           // Backfill mediaId: pre-media-window scenes keyed audio
           // bytes in the C++ helper by the (then-unsplit) clipId, so
           // the clip's own id IS the correct media key for old data.
@@ -428,6 +433,7 @@ function saveToHost() {
         audioBeatGrid: c.audioBeatGrid,
         audioSongParts: c.audioSongParts,
         levelKeyframes: c.levelKeyframes,
+        waveformVisible: c.waveformVisible,
       })),
     })),
     nextClipId: getNextClipId(),

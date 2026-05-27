@@ -120,6 +120,8 @@ export interface TimelineSlice {
     audioBeatGrid: { periodSamples: number; phaseSamples: number; confidence: number; barOffset: number } | null,
     audioSongParts: number[],
   ) => void;
+  /** Toggle the waveform-visible flag for one audio clip. */
+  toggleClipWaveform: (clipId: number) => void;
 }
 
 export const createTimelineSlice: StateCreator<State, [], [], TimelineSlice> = (set) => ({
@@ -806,6 +808,22 @@ export const createTimelineSlice: StateCreator<State, [], [], TimelineSlice> = (
     });
   },
 
+  toggleClipWaveform: (clipId) => {
+    set((s) => ({
+      audioTracks: s.audioTracks.map((t) => {
+        if (!t.clips.some((c) => c.id === clipId)) return t;
+        return {
+          ...t,
+          clips: t.clips.map((c) => {
+            if (c.id !== clipId) return c;
+            const cur = c.waveformVisible ?? true;
+            return { ...c, waveformVisible: !cur };
+          }),
+        };
+      }),
+    }));
+  },
+
   addClip: (trackId, clip) => {
     const id = mintId();
     const side = trackId.startsWith('V') ? 'video' : trackId.startsWith('A') ? 'audio' : null;
@@ -813,9 +831,24 @@ export const createTimelineSlice: StateCreator<State, [], [], TimelineSlice> = (
     const num = parseInt(trackId.slice(1), 10);
     let added: number | null = null;
     set((s) => {
-      const list = side === 'video' ? s.videoTracks : s.audioTracks;
-      const idx = list.findIndex((t) => t.id === num);
-      if (idx < 0) return s;
+      let list = side === 'video' ? s.videoTracks : s.audioTracks;
+      let idx = list.findIndex((t) => t.id === num);
+      // Spawn-target case: trackId is one past the current max (e.g.
+      // V2 when only V1 exists). Mirrors moveClip's spawn behavior so
+      // OM drops on a locked V1 (which useOmDrop rewrites to V2) can
+      // create the new track in the same action.
+      if (idx < 0) {
+        const maxId = list.reduce((m, t) => Math.max(m, t.id), 0);
+        if (num !== maxId + 1) return s;
+        const namePrefix = side === 'video' ? 'Video ' : 'Audio ';
+        list = [...list, {
+          id: num,
+          name: namePrefix + num,
+          clips: [],
+          ...TRACK_FLAG_DEFAULTS,
+        }];
+        idx = list.length - 1;
+      }
       const track = list[idx];
       // Find a non-overlapping placement closest to the requested
       // inFrame. Clips never overlap; a minimum 1-frame data gap is

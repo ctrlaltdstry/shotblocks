@@ -55,8 +55,11 @@ export function useMarquee(lanesAreaRef: RefObject<HTMLDivElement | null>): void
       window.removeEventListener('pointerup', onUp);
       window.removeEventListener('pointercancel', onCancel);
       // Click (no drag): clear selection unless additive (Shift held).
+      // Also clears the level-keyframe selection so an empty-canvas
+      // click is a true "deselect everything" gesture.
       if (!wasActive && !additive) {
         useStore.getState().setSelectedClipIds(new Set<number>());
+        useStore.getState().setLevelKfSelection(null);
       }
       try { el!.releasePointerCapture(ev.pointerId); } catch { /* noop */ }
     }

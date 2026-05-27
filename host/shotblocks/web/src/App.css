@@ -59,19 +59,23 @@ body.is-resizing-headers .body { transition: none; }
   grid-column: 1; grid-row: 1;
   background: transparent;
   display: flex;
-  align-items: center;
-  justify-content: center;
+  align-items: stretch;
+  justify-content: flex-start;
+  /* 4px left inset to match the rail's other cards (tool palette +
+     dB meter at x=4 per Figma 150:1348). */
+  padding-left: 4px;
 }
 
-/* Motion library button — Figma 400:1932. Floating card pinned to
-   the top of the rail with a 4px gap. Same card chrome family as
-   the tool palette + dB meter (grey-12 fill, 0.5px grey-16 border,
-   6px radius) so the three rail elements visually group as one
-   column. */
+/* Motion library button — Figma 442:2728. 50×50 floating card filling
+   the .logo grid cell (the utility-strip row, 50px tall). Same card
+   chrome family as the tool palette + dB meter (grey-12 fill, 0.5px
+   grey-16 border, 6px radius) so the three rail elements visually
+   group as one column. */
 .motion-library-btn {
-  width: 39px;
-  height: 39px;
+  width: 50px;
+  height: 50px;
   flex: 0 0 auto;
+  align-self: center;
   background: var(--color-grey-12);
   border: 0.5px solid var(--color-grey-16);
   border-radius: 6px;
@@ -339,46 +343,59 @@ body.is-resizing-headers .body { transition: none; }
      floating motion / tool palette / dB meter cards. Each card has
      its own grey-12 fill + 0.5px grey-16 border so they read as
      three distinct floating elements rather than one docked column.
-     Right border removed for the same reason. */
+     Right border removed for the same reason. 4px left inset matches
+     Figma 150:1348 (rail cards sit at x=4); 10px gap below the meter
+     to the canvas bottom (Figma: meter bottom 534 → frame 544).
+     `gap: 10px` enforces a MINIMUM 10px gap between palette and
+     meter — the meter still uses margin-top: auto to anchor to the
+     bottom, but `gap` keeps that 10px floor when the window shrinks
+     enough that auto-margin collapses to 0. Without this, the meter
+     slides up and visually collides with the palette. */
   background: transparent;
   display: flex; flex-direction: column;
+  padding: 0 0 4px 4px;
+  gap: 10px;
   overflow: hidden;
   position: relative;
 }
 .rail__tools {
-  /* Floating tool palette card — Figma node 400:1960. All values
-     pulled directly from the Figma design context, NOT guessed.
-     - 39px wide outer card; grows to fill the rail's free height
-       between the motion button row above and the dB meter below.
-       At Figma's reference window size (544 tall) the palette is
-       242px; we let flex-grow do the work at any window size.
-     - bg grey-12, 0.5px grey-16 border, 6px radius, drop shadow
-     - 15px padding on all sides
-     - inner column distributes children space-between
-     Top margin 9px matches Figma's 7px gap from motion-button
-     bottom (y=67) to palette top (y=74) PLUS the 2px gap the rail
-     itself sits below the utility-strip row's seam. */
-  flex: 1 1 auto;
-  min-height: 0;
-  width: 39px;
-  margin: 9px auto 0;
+  /* Floating tool palette card — Figma 443:2781. 50×292 fixed; sits
+     at x=4, y=88 in the canvas frame which equals 10px below the
+     motion library button's bottom (y=78). Inter-card 10px gap is
+     managed by .rail's `gap`; this `margin-top: 10px` adds the gap
+     between the row-1/row-2 grid seam and the palette's top edge.
+     bg grey-12, 0.5px grey-16 border, 6px radius, drop shadow.
+     Padding 8px all sides — 34px tool hit-box centered in 50px card
+     leaves (50 − 34) / 2 = 8px gap on every side. */
+  flex: 0 0 292px;
+  width: 50px;
+  height: 292px;
+  margin-top: 10px;
   background: var(--color-grey-12);
   border: 0.5px solid var(--color-grey-16);
   border-radius: 6px;
   box-shadow: 0 0 4.75px rgba(0, 0, 0, 0.6);
-  padding: 15px;
+  padding: 8px;
+  display: flex; flex-direction: column;
+  align-items: stretch;
+  box-sizing: border-box;
+}
+.rail__tools-inner {
+  /* Inner column: 6 tool hit-boxes distributed top→bottom with
+     space-between. No extra padding — the outer card's 11px on
+     every side already gives the equal margin around the first /
+     last active highlight. */
+  flex: 1 1 auto;
   display: flex; flex-direction: column;
   align-items: center;
   justify-content: space-between;
-  gap: 0;
-  overflow: hidden;
-  box-sizing: border-box;
+  min-height: 0;
 }
 .rail__tool {
-  width: 28px; height: 28px;
-  min-width: 28px; min-height: 28px;
-  max-width: 28px; max-height: 28px;
-  flex: 0 0 28px;
+  width: 34px; height: 34px;
+  min-width: 34px; min-height: 34px;
+  max-width: 34px; max-height: 34px;
+  flex: 0 0 34px;
   box-sizing: border-box;
   padding: 0; border: 0;
   display: flex; align-items: center; justify-content: center;
@@ -404,46 +421,37 @@ body.is-resizing-headers .body { transition: none; }
 .rail__tool:hover .icon { background-color: var(--color-grey-white); }
 .rail__tool.is-active .icon { background-color: var(--color-grey-white); }
 
-/* Floating dB meter card — Figma node 400:1961. Every value pulled
-   directly from the Figma design context, NOT guessed.
-   - 39px wide outer card, 216px tall (matches Figma frame)
-   - bg grey-12, 0.5px grey-16 border, 6px radius
-   - padding: 3px top, 15px x, 0 bottom (Figma `pt-[3px] px-[15px]`)
-   - flex column, 12px gap, centered horizontally + vertically
-   - No drop shadow (Figma omits it on the meter; tool palette has one) */
+/* Floating dB meter card — Figma 443:2782. 50×144 fixed. Inside:
+   17px top padding → skim icon (14×16) → 10px gap → bars frame
+   (19×93, two 8w bars with 3px gap) → 8px bottom padding.
+   bg grey-12, 0.5px grey-16 border, 6px radius. No drop shadow. */
 .rail__meter {
-  width: 39px;
-  /* Per Figma 400:1961, the meter card is a FIXED 216px tall. The
-     skim + bars content is 14 + 12 + 153 = 179px; padding-top 3
-     accounts for another 3px; the remaining ~34px lives below the
-     bars as designed empty space. justify-content: center within
-     the 216 box keeps the proportions consistent regardless of
-     other rail changes. 7px gap above (palette → meter,
-     Figma 316→323), 5px below (meter bottom 539 → rail bottom
-     544). */
-  height: 216px;
-  margin: 7px auto 5px;
-  flex: 0 0 auto;
+  width: 50px;
+  height: 144px;
+  flex: 0 0 144px;
+  /* Push the meter to the bottom of the rail flex column; any slack
+     between palette + meter is absorbed by this auto margin so the
+     meter stays anchored 10px above the canvas bottom regardless of
+     window height. */
+  margin-top: auto;
   background: var(--color-grey-12);
   border: 0.5px solid var(--color-grey-16);
   border-radius: 6px;
-  padding: 3px 15px 0;
+  padding: 17px 0 8px;
   display: flex; flex-direction: column;
   align-items: center;
-  justify-content: center;
-  gap: 12px;
+  gap: 10px;
   color: var(--color-grey-50);
   font-family: Inter, sans-serif;
   overflow: hidden;
   box-sizing: border-box;
 }
-/* Live stereo dB meter — two thin bars (L/R). Per Figma 400:1970:
-   each bar is 8px wide x 153px tall, grey-7 background (the track),
-   1px radius, gap 3px between L and R. The track fills bottom-up
-   with the green→yellow→red gradient via the existing cover/peak
-   mechanism in Meter.tsx. */
+/* Live stereo dB meter — two thin bars (L/R). Per Figma 443:2792:
+   each bar is 8w × 93h, grey-7 background (the track), 1px radius,
+   gap 3px between L and R. */
 .rail__meter-stereo {
-  flex: 0 0 auto;
+  flex: 0 0 93px;
+  height: 93px;
   display: flex;
   gap: 3px;
   align-items: flex-end;
@@ -452,7 +460,7 @@ body.is-resizing-headers .body { transition: none; }
 .rail__meter-bar {
   flex: 0 0 8px;
   width: 8px;
-  height: 153px;
+  height: 93px;
   position: relative;
   background: var(--color-grey-7);
   border-radius: 1px;
@@ -1328,10 +1336,14 @@ body.is-hand-panning * {
      the parent. */
   height: 100%;
   pointer-events: none;
-  color: rgba(255, 255, 255, 0.55);
+  /* Translucent black so the waveform reads as a darkening of the
+     clip's green fill rather than a competing white shape. JS reads
+     this `color` value via getComputedStyle and uses it as the
+     canvas fill. */
+  color: rgba(0, 0, 0, 0.30);
 }
 .shot-block.is-audio.is-selected .waveform-canvas {
-  color: rgba(255, 255, 255, 0.75);
+  color: rgba(0, 0, 0, 0.45);
 }
 
 /* Pen-tool volume-automation curve overlay. Covers the audio clip;
@@ -1396,13 +1408,14 @@ body.is-hand-panning * {
   border-color: var(--color-grey-50);
 }
 .level-curve__node.is-selected {
-  border-color: var(--color-timeline-primary-highlight);
+  border-color: var(--color-audio-kf-accent);
   border-width: 2px;
 }
 /* Bezier handles for the selected node's outgoing segment — round
-   (vs the diamond nodes), blue, with thin connector lines. */
+   (vs the diamond nodes), orange (audio kf accent), with thin
+   connector lines. */
 .level-curve__handle-line {
-  stroke: var(--color-timeline-primary-highlight);
+  stroke: var(--color-audio-kf-accent);
   stroke-width: 1;
   opacity: 0.6;
 }
@@ -1411,15 +1424,15 @@ body.is-hand-panning * {
   width: 7px; height: 7px;
   margin: -3.5px 0 0 -3.5px;
   border-radius: 50%;
-  background: var(--color-timeline-primary-highlight);
+  background: var(--color-audio-kf-accent);
   border: 1px solid #141414;
   pointer-events: none;
 }
 /* Pen-tool marquee rectangle over the volume curve. */
 .level-curve__marquee {
   position: absolute;
-  background: rgba(0, 122, 255, 0.12);
-  border: 1px solid var(--color-timeline-primary-highlight);
+  background: rgba(255, 149, 0, 0.12);
+  border: 1px solid var(--color-audio-kf-accent);
   pointer-events: none;
 }
 
@@ -1467,6 +1480,64 @@ body.is-hand-panning * {
 .shot-block .icon--block-camera     { width: 17px; height: 11px; }
 .shot-block .icon--block-camera-off { width: 17px; height: 14px; }
 .shot-block .icon--block-waveform   { width: 17px; height: 17px; }
+
+/* Audio waveform toggle — Figma 440:2624. 24×24 rounded button at
+   the bottom-left of audio clips. Click toggles waveform visibility
+   on that clip. Three states (per Figma 440:2618 / 439:2577 / 440:2604):
+     off    — BG black/0.2, icon black/0.3 (waveform hidden)
+     hover  — BG black/0.2, icon white/0.5
+     on     — BG black/0.5, icon white/1.0 (waveform shown — default) */
+.audio-waveform-toggle {
+  align-self: flex-start;       /* left edge of .shot-block__content */
+  /* Align the button's left edge to the title text's left edge.
+     The label band has padding 3px 13px so text starts at x=13 from
+     the clip's outer left edge. The content box has padding 14px
+     sides; nudging the button left by 1px makes its left edge sit
+     at x=13 to match. */
+  margin-left: -1px;
+  width: 24px;
+  height: 24px;
+  flex: 0 0 24px;
+  padding: 0;
+  border: 0;
+  border-radius: 4px;
+  background: rgba(0, 0, 0, 0.5);  /* on — default */
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+  transition: background-color 0.12s ease;
+  /* Stack above the LevelCurve SVG, which renders later in the DOM
+     and would otherwise capture the click. Both need to be positioned
+     for z-index to take effect. */
+  position: relative;
+  z-index: 1;
+}
+.audio-waveform-toggle.is-off {
+  background: rgba(0, 0, 0, 0.2);
+}
+.audio-waveform-toggle:hover {
+  background: rgba(0, 0, 0, 0.2);
+}
+.audio-waveform-toggle .icon--block-waveform {
+  width: 14px;
+  height: 13px;
+  background-color: #ffffff;  /* on state default */
+}
+.audio-waveform-toggle.is-off .icon--block-waveform {
+  background-color: rgba(0, 0, 0, 0.3);
+}
+.audio-waveform-toggle:hover .icon--block-waveform {
+  background-color: rgba(255, 255, 255, 0.5);
+}
+.audio-waveform-toggle.is-on:hover {
+  /* On-state hover keeps the brighter background so the user can see
+     they're about to switch OFF something currently lit. */
+  background: rgba(0, 0, 0, 0.5);
+}
+.audio-waveform-toggle.is-on:hover .icon--block-waveform {
+  background-color: #ffffff;
+}
 
 /* Tall layout: label top, icon bottom-left. */
 .shot-block:not(.is-thin) .shot-block__icon-wrap {

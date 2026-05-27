@@ -85,6 +85,11 @@ export interface Clip {
    *  (audio clips only). Undefined / empty = no automation (unity
    *  everywhere). See LevelKeyframe. */
   levelKeyframes?: LevelKeyframe[];
+  /** Audio clips only — per-clip waveform display toggle. `undefined`
+   *  or `true` shows the waveform (default); `false` hides it. Toggled
+   *  via the small icon button at the clip's bottom-left. Persisted
+   *  through save/load. */
+  waveformVisible?: boolean;
 }
 
 /** A level-keyframe's segment interpolation. The named modes are

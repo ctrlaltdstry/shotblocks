@@ -84,19 +84,63 @@ function resolveDrop(viewportX: number, viewportY: number, items: OmItem[]): Res
 
   const targets = document.elementsFromPoint(viewportX, viewportY);
   const laneEl = targets.find((el) => el.classList && el.classList.contains('lane')) as HTMLElement | undefined;
-  if (!laneEl) return null;
-  // OM drops are video-only — audio comes from file imports.
-  if (laneEl.getAttribute('data-side') !== 'video') return null;
 
-  const trackId = laneEl.getAttribute('data-track');
-  if (!trackId) return null;
+  // Resolve target track id + the lane rect we'll use to compute the
+  // horizontal frame. Two cases:
+  //   1) cursor is on an existing video lane     → that lane / track
+  //   2) cursor is in the empty area above the   → spawn V<max+1>
+  //      outermost video lane (the "spawn band")
+  // Other cases (cursor over audio lane, or off-canvas entirely) → null.
+  let trackId: string;
+  let laneRect: DOMRect;
+  if (laneEl && laneEl.getAttribute('data-side') === 'video') {
+    const rawTrackId = laneEl.getAttribute('data-track');
+    if (!rawTrackId) return null;
+    trackId = rawTrackId;
+    laneRect = laneEl.getBoundingClientRect();
+    // If the cursor lands on a LOCKED video track, bump the drop to
+    // the next non-locked video track above it. If no non-locked track
+    // exists above the cursor, spawn a new one (V<max+1>). Drops are
+    // never silently rejected because of a locked target.
+    const rawNum = parseInt(rawTrackId.slice(1), 10);
+    const rawTrack = state.videoTracks.find((t) => t.id === rawNum);
+    if (rawTrack && rawTrack.locked) {
+      const above = state.videoTracks
+        .filter((t) => t.id > rawNum && !t.locked)
+        .sort((a, b) => a.id - b.id);
+      if (above.length > 0) {
+        trackId = 'V' + above[0].id;
+      } else {
+        const maxId = state.videoTracks.reduce((m, t) => Math.max(m, t.id), 0);
+        trackId = 'V' + (maxId + 1);
+      }
+    }
+  } else {
+    // No lane under cursor. Check the spawn band: the area above the
+    // topmost video lane up to the ruler. If the cursor sits there,
+    // target V<max+1>. Uses the topmost lane's rect to compute the
+    // frame from cursor X.
+    const topmost = document.querySelector<HTMLElement>(
+      '#lanes-videos .lane');
+    if (!topmost) return null;
+    const tr = topmost.getBoundingClientRect();
+    if (viewportY >= tr.top) return null;        // not in spawn band
+    if (viewportX < tr.left || viewportX > tr.right) return null;
+    const maxId = state.videoTracks.reduce((m, t) => Math.max(m, t.id), 0);
+    trackId = 'V' + (maxId + 1);
+    laneRect = tr;
+  }
 
-  const laneRect = laneEl.getBoundingClientRect();
   const xInLane = Math.max(0, viewportX - laneRect.left);
   const visibleSpan = Math.max(1, state.h.vMax - state.h.vMin);
   const pxPerFrame = laneRect.width / visibleSpan;
   if (pxPerFrame <= 0) return null;
-  const startFrame = Math.round(state.h.vMin + xInLane / pxPerFrame);
+  const cursorFrame = state.h.vMin + xInLane / pxPerFrame;
+  // Center the ghost (and the eventual dropped clip) under the cursor
+  // — feels like the mouse is "grabbing" the clip rather than tugging
+  // it from one end. Clamp the LEFT edge to >= 0 so the ghost doesn't
+  // extend off the timeline's left edge when the cursor is near frame 0.
+  const startFrame = Math.max(0, Math.round(cursorFrame - duration / 2));
 
   return {
     kind: 'create',

@@ -31,18 +31,20 @@ export function ToolPalette() {
 
   return (
     <div className="rail__tools">
-      {TOOLS.map((t) => (
-        <div
-          key={t.id}
-          className={'rail__tool' + (activeTool === t.id ? ' is-active' : '')}
-          title={t.title}
-          data-tool={t.id}
-          style={t.iconStyle}
-          onClick={() => pick(t.id)}
-        >
-          <span className={'icon ' + t.iconClass} aria-label={t.title} />
-        </div>
-      ))}
+      <div className="rail__tools-inner">
+        {TOOLS.map((t) => (
+          <div
+            key={t.id}
+            className={'rail__tool' + (activeTool === t.id ? ' is-active' : '')}
+            title={t.title}
+            data-tool={t.id}
+            style={t.iconStyle}
+            onClick={() => pick(t.id)}
+          >
+            <span className={'icon ' + t.iconClass} aria-label={t.title} />
+          </div>
+        ))}
+      </div>
     </div>
   );
 }

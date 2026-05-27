@@ -62,7 +62,7 @@ export function ShotBlock({
   );
   const displayName = liveName ?? clip.sourceName;
   const ref = useRef<HTMLDivElement | null>(null);
-  useClipDrag(clip, trackId, side, ref);
+  const onClipPointerDown = useClipDrag(clip, trackId, side, ref);
 
   // Razor cut-line preview: when the razor tool is active and the
   // cursor is over this clip, publish the pointer's viewport X to the
@@ -77,6 +77,10 @@ export function ShotBlock({
   function onRazorPointerMove(ev: React.PointerEvent<HTMLDivElement>) {
     const s = useStore.getState();
     if (s.activeTool !== 'razor') return;
+    // Razor only cuts audio clips. Don't preview the cut line over a
+    // video clip — the user would see the highlight and expect a cut
+    // to happen, which won't (see razor branch in useClipDrag).
+    if (side === 'video') return;
     let hoverX = ev.clientX;
     if (s.snapEnabled || ev.shiftKey) {
       const laneEl = ev.currentTarget.closest('.lane') as HTMLElement | null;
@@ -149,6 +153,7 @@ export function ShotBlock({
       style={style}
       title={displayName}
       data-clip={clip.id}
+      onPointerDown={onClipPointerDown}
       onPointerMove={onRazorPointerMove}
       onPointerLeave={onRazorPointerLeave}
       onContextMenu={onContextMenu}
@@ -159,13 +164,29 @@ export function ShotBlock({
           the bracket / selected overlays can extend 1px past its
           border (see memory clip-state-overlay-pattern). */}
       <div className="shot-block__content">
-        {side === 'audio' && !isOrphan && clip.peakLevels && clip.peakLevels.length > 0 && (
+        {side === 'audio' && !isOrphan && (clip.waveformVisible ?? true) && clip.peakLevels && clip.peakLevels.length > 0 && (
           <WaveformCanvas clip={clip} />
         )}
         <div className="shot-block__label">{displayName}</div>
-        <div className="shot-block__icon-wrap">
-          <span className={iconClass} />
-        </div>
+        {side === 'video' && (
+          <div className="shot-block__icon-wrap">
+            <span className={iconClass} />
+          </div>
+        )}
+        {side === 'audio' && !isOrphan && (
+          <button
+            className={'audio-waveform-toggle'
+              + ((clip.waveformVisible ?? true) ? ' is-on' : ' is-off')}
+            title={(clip.waveformVisible ?? true) ? 'Hide waveform' : 'Show waveform'}
+            onPointerDown={(e) => { e.stopPropagation(); }}
+            onClick={(e) => {
+              e.stopPropagation();
+              useStore.getState().toggleClipWaveform(clip.id);
+            }}
+          >
+            <span className="icon icon--block-waveform" />
+          </button>
+        )}
         {/* LevelCurve renders LAST so its pen-tool hit area covers the
             whole clip — incl. the strip under the label band, where
             the curve line actually sits. */}

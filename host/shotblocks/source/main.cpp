@@ -2800,7 +2800,13 @@ public:
 			_dlg = NewObjClear(ShotblocksDialog);
 		if (!_dlg)
 			return false;
-		return _dlg->Open(DLG_TYPE::ASYNC, g_shotblocks_cmd_id, -1, -1, 700, 400);
+		// Default window size matches the Figma reference layout
+		// (ShotBlocks Edit frame 150:1348 — 1284 wide × 544 tall) plus
+		// C4D's window chrome. Sized for an actual editing session
+		// instead of the previous 700×400 placeholder. C4D will still
+		// respect any saved layout (RestoreLayout below); these values
+		// only apply when no saved layout exists.
+		return _dlg->Open(DLG_TYPE::ASYNC, g_shotblocks_cmd_id, -1, -1, 1497, 594);
 	}
 
 	Bool RestoreLayout(void* secret) override

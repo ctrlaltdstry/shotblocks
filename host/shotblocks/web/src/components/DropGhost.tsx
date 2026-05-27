@@ -45,7 +45,6 @@ export function DropGhost({
     const stackId = side === 'video' ? 'lanes-videos' : 'lanes-audios';
     const stack = lanesArea.querySelector('#' + stackId) as HTMLElement | null;
     if (!stack) return null;
-    const stackRect = stack.getBoundingClientRect();
     const lanes = Array.from(stack.querySelectorAll<HTMLElement>('.lane'));
     if (!lanes.length) return null;
     // Video stack is rendered Vn..V1 top-to-bottom (outermost on top).
@@ -56,9 +55,17 @@ export function DropGhost({
     laneWidth = outerRect.width;
     height = outerRect.height;
     if (side === 'video') {
-      top = (stackRect.top - areaRect.top) - height;
+      // Project the spawn ghost DIRECTLY ABOVE the outermost video
+      // lane. Using stackRect.top instead pushed the ghost above
+      // the WHOLE video share (which extends well above the lanes
+      // when flex-grow stretches the stack), landing in the ruler
+      // area with a big gap to V1.
+      top = (outerRect.top - areaRect.top) - height;
     } else {
-      top = stackRect.bottom - areaRect.top;
+      // Symmetrically: project BELOW the outermost audio lane (not
+      // below the audio stack), so the ghost reads as the next row
+      // down rather than at the very bottom of the audio share.
+      top = (outerRect.bottom - areaRect.top);
     }
   }
 
