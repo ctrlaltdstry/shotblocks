@@ -1610,6 +1610,7 @@ private:
 		if (body.find("\"kind\":\"get-camera-types\"") != std::string::npos) return HandleGetCameraTypes();
 		if (body.find("\"kind\":\"create-camera\"") != std::string::npos) return HandleCreateCamera(body);
 		if (body.find("\"kind\":\"select-in-om\"") != std::string::npos) return HandleSelectInOm(body);
+		if (body.find("\"kind\":\"set-stage-cameras\"") != std::string::npos) return HandleSetStageCameras(body);
 		if (body.find("\"kind\":\"audio-add\"") != std::string::npos)
 		{
 			// JS pushes the original audio bytes (base64) once at drop
@@ -2172,6 +2173,56 @@ private:
 		doc->SetActiveObject(cam, SELECTION_NEW);
 		EventAdd();
 		return "{\"ok\":true,\"kind\":\"select-in-om-ack\",\"selected\":true}";
+	}
+
+	// Plan 4.1 commit 2 — cache the per-clip-boundary camera events JS
+	// computed via lib/stageCameras.ts. The driver tag (Commit 3) reads
+	// this cache per render-frame and writes Stage's STAGEOBJECT_CLINK
+	// directly. We deliberately do NOT animate the Stage's parameter via
+	// CKey — three attempts to write a BaseLink into a CKey produced
+	// empty link fields (see plan-4.1 spike + research notes). The
+	// per-frame parameter-write pattern is the architectural fallback.
+	//
+	// Body shape:
+	//   {"kind":"set-stage-cameras","events":[{"frame":0,"objectId":1},
+	//                                          {"frame":72,"objectId":2}, ...]}
+	std::string HandleSetStageCameras(const std::string& body)
+	{
+		BaseDocument* doc = GetActiveDocument();
+		if (!doc) return "{\"ok\":false,\"error\":\"no doc\"}";
+		// Ensure the Stage helper exists so the driver tag has somewhere
+		// to attach to (Commit 3 wires that up). Idempotent.
+		GetOrCreateStageHelper(doc);
+
+		std::vector<StageCameraEvent> next;
+		auto pos = body.find("\"events\"");
+		if (pos != std::string::npos)
+		{
+			pos = body.find('[', pos);
+			if (pos != std::string::npos)
+			{
+				++pos;
+				while (pos < body.size() && body[pos] != ']')
+				{
+					if (body[pos] != '{') { ++pos; continue; }
+					const auto objStart = pos;
+					const auto objEnd = body.find('}', pos);
+					if (objEnd == std::string::npos) break;
+					const std::string objBody = body.substr(objStart, objEnd - objStart + 1);
+					StageCameraEvent ev;
+					ev.frame    = ParseIntField(objBody, "frame");
+					ev.objectId = ParseIntField(objBody, "objectId");
+					next.push_back(ev);
+					pos = objEnd + 1;
+				}
+			}
+		}
+		_stageEvents = std::move(next);
+
+		std::string out = "{\"ok\":true,\"kind\":\"set-stage-cameras-ack\",\"count\":";
+		out += std::to_string((long long)_stageEvents.size());
+		out += "}";
+		return out;
 	}
 
 	// Individual-shots branch of add-to-queue.
@@ -2991,6 +3042,13 @@ private:
 	// _pick_target_basedraw / sb_canvas_playback.py:192).
 	BaseDraw*            _pinnedBaseDraw{nullptr};
 	Int32                _currentActiveObjectId{0};
+	// Plan 4.1 — cache of per-clip-boundary camera events that the
+	// driver tag (Commit 3) reads each render frame to write the
+	// Stage's static STAGEOBJECT_CLINK parameter. Pushed from JS via
+	// set-stage-cameras on every timeline change. In-memory only;
+	// re-pushed on JS save-state if the dialog is reloaded.
+	struct StageCameraEvent { Int32 frame; Int32 objectId; };
+	std::vector<StageCameraEvent> _stageEvents;
 	// Helper-version bookkeeping. Bumped on every save-state write;
 	// EVMSG_CHANGE compares the current helper version against this
 	// cached value to detect when Ctrl+Z / Ctrl+Y rolled the helper

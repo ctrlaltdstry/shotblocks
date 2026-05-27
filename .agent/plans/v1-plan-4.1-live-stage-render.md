@@ -89,40 +89,57 @@ Three commits. Each verifiable in isolation. Each ships building.
 
 **Risk:** low. Mirrors a well-tested pattern (`GetOrCreateV2Helper`).
 
-### Commit 2 — Build / rebuild the camera-link animation track from clip boundaries
+### Commit 2 — Cache per-boundary camera events in C++ (architectural pivot)
 
-**Scope:**
-- `RebuildStageAnimation(doc)` C++ function. Walks the clip JSON the helper Onull stores, computes the top-track-wins camera per clip boundary, builds the `CTrack` on `STAGEOBJECT_CLINK` with one STEP `CKey` per boundary. Flushes any existing keys first.
-- Hook into the existing `save-state` path so every timeline change rebuilds. Rebuild is cheap (one track, ~N keys for N clips).
-- Edge case: clip has objectId 0 (orphan) → insert a key with null link (gap behavior).
-- Edge case: clip ends mid-stream, next clip starts at a different frame → at the gap, insert a null-link key, then the next clip's start frame inserts that clip's camera. Same step-interpolation rule.
-- The Stage's Enable flag stays OFF throughout — the animation is built but dormant.
+**Originally planned:** build a `CTrack` on `STAGEOBJECT_CLINK` with one STEP `CKey` per clip boundary. Three implementation attempts failed silently — keys appeared in the timeline at the right frames but their camera-link fields stayed empty and the render didn't switch:
+
+1. `AutoAlloc<BaseLink> link; link->SetLink(cam); GeData ld; ld.SetBaseLink(*link); k->SetGeData(curve, ld);` — empty link.
+2. `GeData ld; ld.SetBaseList2D(cam); k->SetGeData(curve, ld);` — empty link.
+3. Same as #2 but with `DescID(DescLevel(STAGEOBJECT_CLINK, DTYPE_BASELISTLINK, 0))` to mark the track as `CTRACK_CATEGORY_DATA` (per Maxon CTrack manual + a research agent's findings) — STILL empty link.
+
+After three failed attempts the band-aid rule kicks in. Pivoted to a different mechanism per Plan 4.1's architectural alternatives section.
+
+**New approach:** the Stage doesn't get an animation track at all. Commit 2 just caches the per-boundary event list in a C++ in-memory `std::vector<StageCameraEvent>` on the dialog. Commit 3 (driver tag) reads this cache each render-frame and writes the Stage's STATIC `STAGEOBJECT_CLINK` parameter directly — the same write that works when the user sets the field manually (verified during diagnosis).
+
+**Scope (revised):**
+- `_stageEvents: std::vector<{frame, objectId}>` member on the dialog.
+- `HandleSetStageCameras(body)` parses the JS-sent events array into `_stageEvents`. No track creation, no keyframe writes.
+- The JS-side `computeStageEvents(videoTracks)` helper + `set-stage-cameras` send wire unchanged — same payload, different receiver.
 
 **Files:**
-- `host/shotblocks/source/main.cpp` — new `RebuildStageAnimation` private method, called from save-state handler.
+- `host/shotblocks/source/main.cpp` — `StageCameraEvent` struct + `_stageEvents` member + simplified `HandleSetStageCameras`.
+- `host/shotblocks/web/src/lib/stageCameras.ts` — unchanged from the original commit 2.
+- `host/shotblocks/web/src/usePersistence.ts` — unchanged from the original commit 2.
 
 **Acceptance:**
-- Add a clip on V1 → Stage gets one key at clip.inFrame pointing at the clip's camera, plus one at clip.outFrame with null link.
-- Add a second clip on V2 overlapping V1 → top-track-wins resolver outputs V2's camera for the overlap.
-- Move / trim / delete clips → keys rebuild correctly.
-- Manually toggle Stage Enable ON in the AM → scrub the timeline → viewport switches cameras at the clip boundaries.
-- Render with Stage Enable ON → render output switches cameras at clip boundaries.
+- Add / move / trim / delete clips → C++ side receives `set-stage-cameras` payloads; `_stageEvents` reflects the latest event list. No user-visible behavior change (the cache is consumed in Commit 3).
 
-**Risk:** medium. The rebuild has to handle every clip-edit case correctly. Worth a careful test pass through add / move / trim / split / delete.
+**Risk:** low. Cache is just a vector copy.
 
-### Commit 3 — Render-time toggle via `MSG_MULTI_RENDERNOTIFICATION`
+### Commit 3 — Driver tag: render-time enable toggle + per-frame parameter write
 
-**Scope:**
-- Register a small hidden C++ TagData plugin — "Shotblocks Stage Driver." Single purpose: receive `MSG_MULTI_RENDERNOTIFICATION` and toggle the parent Stage's enable flag. Plugin info flag set so it doesn't appear in the user-facing tag menu (similar to how the existing Python rig tag is registered — but this one is C++ + flagged hidden).
-- Auto-attach this tag to the Stage helper on creation in Commit 1 (refactor Commit 1's `GetOrCreateStageHelper` to also ensure the driver tag exists).
-- Tag's `Message` handler:
-  - On `MSG_MULTI_RENDERNOTIFICATION` with `start = true`: set parent Stage's `ID_BASEOBJECT_GENERATOR_FLAG = true`.
-  - On `MSG_MULTI_RENDERNOTIFICATION` with `start = false`: set parent Stage's `ID_BASEOBJECT_GENERATOR_FLAG = false`.
-- Take-over flow: scan doc for an existing user Stage object that has animation on `STAGEOBJECT_CLINK` AND no Shotblocks marker. If found, present a modal "Shotblocks needs to manage a Stage object for sequence rendering. Take over your existing one?" → confirm: repurpose (add our marker + driver tag, replace its animation track on rebuild); cancel: skip our install, disable whole-sequence rendering until the conflict is resolved.
+**Scope (expanded per the Commit 2 pivot):**
+The driver tag now has TWO render-time responsibilities, not one:
+
+1. **Enable-flag toggle** (original plan, unchanged):
+   - On `MSG_MULTI_RENDERNOTIFICATION` with `start = true`: set parent Stage's `ID_BASEOBJECT_GENERATOR_FLAG = true`. Cache a `_rendering = true` flag on the tag (or the dialog).
+   - On `MSG_MULTI_RENDERNOTIFICATION` with `start = false`: set flag back to false; clear `_rendering`.
+
+2. **Per-frame camera write** (new — replaces the broken keyframe animation):
+   - Tag's per-frame hook (`Execute` callback) — when `_rendering == true`, read the current doc time → resolve which `_stageEvents` entry applies → look up the camera in `_cameraLinks` → write Stage's static `STAGEOBJECT_CLINK` parameter directly to that camera. Same write the user does manually in the AM (which is verified working).
+   - When `_rendering == false`: do nothing (don't fight the live `useActiveClipRouter`).
+
+- Register the tag as a C++ TagData plugin with `PLUGINFLAG_HIDE` so it doesn't appear in user-facing tag menus.
+- Auto-attach to the Stage helper on creation (refactor Commit 1's `GetOrCreateStageHelper` to ensure the driver tag exists too).
+- Take-over flow for existing user Stage objects — unchanged from the original Commit 3 spec.
 
 **Files:**
 - `host/shotblocks/source/main.cpp` — `ShotblocksStageDriverTag` class + registration + take-over handling.
-- New plugin ID for the tag (use the next testing-range ID — 1000001-1000010 per memory, but we're already at the rig tag at 1000001 and v2 command at another; pick the next free one).
+- New plugin ID for the tag (use the next testing-range ID — 1000001 is the Python rig tag, 1000002 is the v2 command/dialog pair; pick 1000003+).
+
+**Risks:**
+- The "per-frame hook" assumes the tag's Execute is called during render-frame evaluation in the right order (before the Stage's camera-link is sampled). C4D tag priority is determined by `TagPluginInfo::flags` and the `EXECUTIONPRIORITY` value returned from `Execute`. Worth a quick instrumentation pass at first run to confirm Execute fires per render frame.
+- If Execute doesn't fire per frame, alternative: subscribe to the doc's frame-change events differently, or use a different tag callback. Falls back to a different but still parameter-writing mechanism — keyframe animation is OFF the table.
 
 **Acceptance:**
 - With Stage helper + driver tag installed: interactive scrub leaves viewport free (Stage dormant).

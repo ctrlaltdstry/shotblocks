@@ -3,6 +3,7 @@ import { useStore, getNextClipId, setNextClipId, LEVEL_DEFAULT_TANGENT, type Tra
 import { TRACK_FLAG_DEFAULTS } from './store/types';
 import { onMessage, send } from './lib/host';
 import { fetchAudio, removeAudio, hasAudio } from './lib/audioStore';
+import { computeStageEvents } from './lib/stageCameras';
 
 /** Per-doc clip persistence. C++ owns the storage (hidden helper
  *  BaseObject inside the C4D document), JS owns serialization. Ports
@@ -492,4 +493,9 @@ function saveToHost() {
   collect(s.audioTracks);
   const json = JSON.stringify(payload);
   void send({ kind: 'save-state', json, objectIds });
+  // Plan 4.1 — push the per-boundary camera event list so C++ can
+  // rebuild the hidden Stage helper's animation track. Same cadence
+  // as save-state (250ms debounce). The Stage stays dormant during
+  // interactive use; the driver tag flips it on for renders.
+  void send({ kind: 'set-stage-cameras', events: computeStageEvents(s.videoTracks) });
 }

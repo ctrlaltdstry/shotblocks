@@ -95,7 +95,13 @@ export type HostOutbound =
   // objectId to a live BaseObject and calls SetActiveObject so the
   // camera appears in OM + AM. objectId=0 is a no-op (used for gap +
   // orphan cases; the OM selection is left untouched, not cleared).
-  | { kind: 'select-in-om'; objectId: number };
+  | { kind: 'select-in-om'; objectId: number }
+  // Plan 4.1 commit 2 — push the per-boundary camera event list to
+  // C++, which rebuilds the hidden Stage helper's animation track.
+  // Events are sorted by frame, deduplicated (no consecutive entries
+  // with the same objectId). objectId === 0 = gap (no camera). C++
+  // translates each event into a STEP CKey on STAGEOBJECT_CLINK.
+  | { kind: 'set-stage-cameras'; events: { frame: number; objectId: number }[] };
 
 type Listener = (msg: HostInbound) => void;
 
