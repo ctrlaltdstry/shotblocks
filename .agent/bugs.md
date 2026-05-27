@@ -10,6 +10,64 @@ work).
 
 ---
 
+## clip minimum size scales with timeline length (small-clip handles break)
+
+**Symptoms.** With a long timeline (e.g. 2000 frames), a clip can
+be shrunk down to a very small pixel width — so small that the edge
+hit zones (trim-left / roll / trim-right thirds) overlap and stop
+working correctly. With a short timeline the same physical pixel
+floor is enforced by the natural frame-to-pixel ratio.
+
+**Root cause (suspected).** Clip width is computed in *frames* then
+converted to pixels via `pxPerFrame = visibleWidth / (vMax - vMin)`.
+The current minimum is enforced in frames (probably 1), so at high
+zoom-out 1 frame = a few pixels and the hit zones collide.
+
+**Fix direction.** Enforce the minimum in *pixels* (the hit zone
+geometry is pixel-defined). Memory `mine-python-for-constants` says
+`EDGE_HIT_PX = 24` in v1; the three modes need ~72px minimum to all
+be reachable. Or convert per-zone widths to fraction-of-clip so all
+three are always reachable proportionally.
+
+---
+
+## new-track spawn ghost: needs a different visual treatment
+
+**Status.** Design tweak. The spawn-ghost dashed outline now sits
+correctly above V<max> (position fix shipped 2026-05-26), but Mike
+still wants a different visual style for it. Specifics TBD; fetch
+Figma when ready to implement.
+
+**Files.** `host/shotblocks/web/src/components/SpawnGhostLane.tsx`
++ its CSS in `App.css` (search `.spawn-ghost-lane`).
+
+---
+
+## inspector help button: launch user manual on click
+
+**Status.** Feature add, blocks Plan 3. A `?` glyph button needs
+to land in the inspector header area. On click it launches the
+user manual document (which Plan 3 will produce). Launch mechanism
+TBD — system browser? HtmlViewer dialog? Coordinate with the
+manual format decision.
+
+**Files.** Inspector component; new IPC command if launching from
+C++ via shell.
+
+---
+
+## new razor + slip icons + razor highlight tweak
+
+**Status.** Asset swap + small CSS tweak. Mike has new SVGs for
+both the razor and slip tool. The razor's hover/active highlight
+also needs adjustment (specifics TBD; fetch the Figma node when
+ready).
+
+**Files.** Tool palette icon SVGs in `host/shotblocks/web/src/
+icons/`; tool palette state CSS for the highlight states.
+
+---
+
 ## ~~.c4d file size bloat from helper persistence~~ FIXED 2026-05-26
 
 **RESOLUTION.** Root cause: `audio-add` and `audio-remove` wrapped
