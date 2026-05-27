@@ -1,121 +1,161 @@
-# Handoff — end of 2026-05-26 session
+# Handoff — end of 2026-05-27 session
 
-Big day. Three blocking bugs fixed, ~10 polish items shipped. Plan 3
-(user manual) is the next milestone but a handful of design tweaks
-still stand between us and that.
+Huge session. **Plan 4 (camera workflow) fully shipped**, **Plan 4.1
+(live Stage render) ~80% done — render-time camera switching still
+broken** despite the Stage having correct keyframes and Enable=ON
+during render.
 
 ## Read these first
 
-1. `CLAUDE.md` (project root) — non-negotiable rules: dev-loop,
-   debugging method (measure before fixing; two failed attempts →
-   instrument, not a third blind try), commit policy, style.
-2. `.agent/router.md` — task-keyed navigation into `.agent/`.
-3. `.agent/bugs.md` — five open items at the top (clip min-size,
-   spawn-ghost visual, help button, razor/slip icons + highlight,
-   plus reference to the new architectural-fix-before-banding meta
-   memory). The two fixed bugs (file bloat + reverse-scrub camera)
-   stay in the file for reference, marked FIXED.
-4. Claude-only memories — three new ones logged this session, all
-   load-bearing for tomorrow's work:
-   - `c4d-setscenecamera-bypasses-cache-invalidation` — the
-     reverse-scrub fix recipe. SetSceneCamera doesn't fire
-     MSG_DESCRIPTION_POSTSETPARAMETER; use SetParameter on
-     BASEDRAW_DATA_CAMERA + dirty cams + ExecutePasses.
-   - `exhaust-creative-options-before-escalating` — two failed
-     fixes ≠ "file a vendor ticket." Look at what working
-     subsystems use, search SDK internals.
-   - `propose-architectural-fix-when-bandaiding` — two failed
-     LOCAL band-aids on the same bug = surface the refactor option
-     explicitly. Mike was livid yesterday because I didn't.
+1. `CLAUDE.md` (project root) — non-negotiable rules. Especially: dev-
+   loop pattern, "measure before fixing", **two failed attempts on
+   the same bug → stop and surface the architectural alternative**.
+   We violated this rule twice today; both times the unstacking led
+   to the actual fix (DescID `creator=Ostage`, BaseDraw pivot away
+   from Stage's STAGEOBJECT_CLINK write).
+2. `.agent/plans/v1-plan-4.1-live-stage-render.md` — full Plan 4.1
+   spec with today's investigation trail and the **next-session queue**.
+   The queue lists what to try in what order; the most likely fix
+   (NBIT_OHIDE removal) is already-typed in the working tree.
+3. `scenes/test stage animation.c4d` — ground-truth reference. Mike's
+   hand-keyed Stage that renders correctly. Open it, render it, then
+   click Dump stage to see what a working Stage's keys look like.
+   Our auto-built Stage matches this structurally (DescID + dtype +
+   key data) — but renders blank. Something other than key structure
+   is the blocker.
 
-## What shipped this session
-
-Three commits today:
+## What shipped today (11 commits + this one)
 
 | Hash | Subject |
 |---|---|
-| `b825da0` | fix(camera): route camera switch via SetParameter so reverse scrub repaints |
-| `b1ad091` | fix(drag): audio body draggable + drop-zone hides when only audio present |
-| `3162f64` | fix(persistence): audio-add/remove no longer snapshots helper BC into undo |
-| `9c63966` | feat: v1 polish — rail layout, audio block redesign, drag refactor |
+| `8dd5325` | fix(clip): NLE-style edge-zone gating + label hide on tiny clips |
+| `87642be` | docs: release roadmap split (v1/v1.5/v2) + Plan 4 spec |
+| `f6e5d4d` | feat(v1-polish): help button placeholder, new razor/slip cursors, thin black cut-line |
+| `e8075b3` | docs(plan-4): R1-R3 research resolved |
+| `fd6f678` | docs(plan-4): R4 (chip Figma) resolved |
+| `6e9f65c` | feat(plan-4 commit 1): Settings → Defaults → camera-type dropdown |
+| `cdc91d9` | feat(plan-4 commit 2): Add Camera button + create-camera handler |
+| `eec0ad5` | feat(plan-4 commit 3): A/V chip UI + targeting state |
+| `6b120f9` | feat(plan-4 commit 4): wire chips into Add Camera + paste |
+| `2114aeb` | feat(plan-4 commit 5): selection-follows-playhead |
+| `81c327a` | docs: Plan 4 shipped, Plan 4.1 (live Stage render) spec drafted |
+| `b7d17bb` | feat(plan-4.1 commit 1): hidden Stage helper, dormant by default |
+| `ef93aa1` | feat(plan-4.1 commit 2): cache per-boundary camera events in C++ |
+| `5fb799f` | feat(plan-4.1 commit 3): Stage Driver tag + render-Enable toggle (WIP, render still broken) |
 
-The big batch (`9c63966`) covers:
+**Plan 4 status:** fully shipped (commits 1–5). All workflow features
+work in production. Plan 4 chips, camera creation, selection-follows-
+playhead are verified.
 
-- **Chrome layout per Figma 150:1348:** default window 1497×594;
-  rail column 64px wide (4 inset + 50 card + 10 gap); 50px-tall
-  utilities + ruler rows; motion library button 50×50; tool palette
-  50×292 fixed with 34px tool hit-boxes + 8px even padding; dB
-  meter 50×144 fixed, anchored to canvas bottom with 4px bottom
-  inset and 10px MIN gap above the palette; range-handle SVG bumped
-  to native 16×50 viewBox.
+**Plan 4.1 status:** structurally complete, render still broken.
 
-- **Audio block redesign:** new green #01904b fill / #016535 border;
-  waveform-toggle button at clip bottom-left (24×24, three states
-  per Figma); per-clip `waveformVisible` flag persisted; new audio
-  clips default to waveform-OFF; waveform fill is now translucent
-  black (rgba(0,0,0,0.30)) so it reads as a darkening; keyframe +
-  bezier accent is now orange #ff9500 (new `--color-audio-kf-accent`
-  var); click in empty canvas now also clears keyframe selection.
+## The Plan 4.1 puzzle (read carefully before touching code)
 
-- **Drag system refactor:** useClipDrag converted from
-  `el.addEventListener('pointerdown')` to a React onPointerDown
-  handler returned by the hook and bound by ShotBlock. Previously
-  the native listener fired BEFORE React dispatched, so
-  LevelCurve's stopPropagation couldn't block the body drag —
-  every keyframe / bezier-handle drag also dragged the clip.
-  Removed three earlier band-aid attempts (hasPointerCapture gate,
-  microtask deferral, duplicated hit-test). With the React handler,
-  propagation order is deterministic. This unblocked a whole class
-  of bugs.
+**Goal:** native C4D render paths (Picture Viewer, Render Queue,
+batch) should honor Shotblocks's camera sequencing without our dialog
+being open. C4D's standard way to do this is a Stage object with a
+keyframed camera link.
 
-- **Scope cleanups + new behaviors:** razor cuts audio only AND
-  no longer shows the cut-line preview on video clips; markers
-  act as snap targets for body drag / trim / roll / ruler scrub
-  (only when markers visible); OM drop centered under cursor;
-  dropping onto a locked V-track redirects upward to the next
-  non-locked track (spawns V<max+1> if none exists); OM hover
-  detection recognizes the spawn band above V<max>; addClip
-  gained spawn-when-toNum=max+1 behavior matching moveClip;
-  spawn ghost positioned directly above outermost video lane
-  (was projecting above the whole video share area).
+**Today's setup:**
+1. Hidden helper Onull at root, holding persistence data (existing).
+2. Hidden helper Ostage at root, holding the keyframed
+   `STAGEOBJECT_CLINK` track that mirrors Shotblocks's clip boundaries.
+3. Hidden TagData driver on the Onull, listening for
+   `MSG_MULTI_RENDERNOTIFICATION` to toggle the Stage's Enable flag
+   ON for the render's duration.
 
-Audio drag, video drag, keyframes, beziers, ghost positioning,
-razor-on-audio, and spawn-on-locked-V1 are all manually verified.
+**What works:**
+- Stage helper auto-created on first save-state. ✓
+- Driver tag auto-attached. ✓
+- JS computes per-boundary events (`lib/stageCameras.ts`), pushes via
+  `set-stage-cameras`. ✓
+- C++ rewrites the Stage's animation track on every save with **correct
+  DescID** (`DescLevel(STAGEOBJECT_CLINK, DTYPE_BASELISTLINK, Ostage)`
+  — the `Ostage` creator is critical; without it keyframes silently
+  ignore link writes). ✓
+- Keys appear in the dope sheet, correct frames, correct camera links.
+  Dump matches reference structurally. ✓
+- During render, Message handler fires `MSG_MULTI_RENDERNOTIFICATION
+  start=true` → Stage Enable flips ON. `SetParameter ok=1
+  readback=1`. ✓
+- After render, Enable flips back OFF. ✓
 
-## What's outstanding (in .agent/bugs.md)
+**What doesn't work:**
+- Render output does NOT switch cameras despite everything above. ❌
 
-1. **Clip minimum size scales with timeline length.** At very
-   high zoom-out, clip width gets so small the edge-hit-zones
-   collide and trim/roll stop working. Fix: enforce minimum in
-   pixels (not frames). v1 used `EDGE_HIT_PX = 24`, so ~72px min
-   clip width keeps all three zones reachable.
-2. **New-track spawn ghost: different visual treatment.** Ghost
-   is positioned correctly now; Mike wants a fresh visual.
-   Specifics TBD — fetch Figma when ready.
-3. **Help button in inspector** (`?` glyph) — blocks Plan 3.
-   On click, launches the user manual. Launch mechanism TBD.
-4. **New razor + slip icons + razor highlight tweak.** Mike has
-   new SVGs; razor highlight design needs adjustment.
+**Why this is surprising:** Mike's reference scene
+(`scenes/test stage animation.c4d`) has a hand-built Stage with
+camera keyframes — same DescID, same dtype, same link data — and it
+renders cameras switching correctly. Same C4D version, same render
+path.
+
+## The known difference
+
+| | Reference (works) | Our auto-built (broken) |
+|---|---|---|
+| Stage name | `Stage` | `_shotblocks_stage` |
+| **NBIT_OHIDE** | **not set (visible)** | **set (hidden)** |
+| Key interp | LINEAR (2) | STEP (3) |
+| Everything else | matches | matches |
+
+The strong suspect is **NBIT_OHIDE excluding the Stage from render
+evaluation entirely**. Hidden objects may be skipped by the render
+scene walk regardless of their Enable flag. Easy to test (5 min);
+already-staged uncommitted change has the OHIDE removal queued — see
+the working tree at end-of-day.
+
+## What to try first tomorrow (don't skip)
+
+The next-session queue is in
+`.agent/plans/v1-plan-4.1-live-stage-render.md`. Top of the queue:
+
+**1. Test the NBIT_OHIDE hypothesis.** In
+`GetOrCreateStageHelper` (`host/shotblocks/source/main.cpp`), comment
+out the `stage->ChangeNBit(NBIT::OHIDE, NBITCONTROL::SET);` line.
+Build, deploy, fresh scene, add 2 cameras, render. If cameras switch
+in the output: NBIT_OHIDE was the blocker. Then decide UX (leave
+Stage visible OR find a different hide mechanism).
+
+**2-5: Other ordered hypotheses** in the plan doc.
+
+## Don't repeat what we already know
+
+- ✗ DescID needs `creator=Ostage` (5136). We know. Don't try `creator=0`.
+- ✗ `SetGeData(curve, ld)` with `ld.SetBaseList2D(cam)` works for
+  keyframes. We know.
+- ✗ `MSG_MULTI_RENDERNOTIFICATION` reaches the driver tag and the
+  Enable-flag write succeeds. We know.
+- ✗ Per-frame `SetParameter` on the Stage from a tag's Execute doesn't
+  persist. We know. (Doesn't matter — keyframes work now.)
+- ✗ Per-frame `BaseDraw::SetSceneCamera` from a tag's Execute works
+  for interactive native scrub BUT forces the viewport onto the
+  Shotblocks-active camera at all times — Mike pulled this. The
+  Execute body is now an intentional no-op; leave it that way.
+
+## Diagnostics that helped (and stay around)
+
+- **Dump stage button** (next to Add camera, bottom-right). Calls
+  `HandleDumpStage` which logs every Ostage's CTrack/CKey structure
+  to the C4D Console. Use this to compare our auto-built Stage to
+  any reference Stage. Output format documented in main.cpp.
+- **Reference scene** (`scenes/test stage animation.c4d`). Open this
+  to validate "is the render path itself working in this C4D session"
+  before assuming our code is broken.
 
 ## What this session DID NOT do
 
-- **Audio waveform render quality.** Toggle works, off-by-default
-  shipped, color updated — but nobody scrutinized the actual
-  rendered envelope shape against Figma. If the user-confirmed
-  shape isn't what they want once they turn it on, that's a new
-  ticket against `host/shotblocks/web/src/components/WaveformCanvas.tsx`.
-- **Plan 3 (user manual).** Not started; help button is its
-  prerequisite (#3 above).
-- **`dev-test.c4d` file.** Got modified by C4D throughout the
-  session (autosaves on every launch); kept out of commits. It
-  has a couple of test clips on it. Leave as-is or curate later.
-- **CDP port (9222) flakiness.** Earlier in the session I added
-  a fix to `dev-loop.ps1` using `ProcessStartInfo` instead of
-  `$env: + Start-Process` for the env var. Then a `git reset` at
-  some point reverted it. CDP works inconsistently as a result.
-  If you need CDP tomorrow, re-apply that fix to dev-loop.ps1.
-  (Not blocking — most diag now goes through the on-page debug-log
-  overlay, which is always available via backtick.)
+- **No Plan 4.1 finish.** Render still doesn't switch. Plan 4.1
+  shouldn't ship until it does.
+- **No Plan 5** (user manual + help button wiring). Help button is
+  there as a placeholder (alerts "User manual coming in v1").
+- **No fix for the C4D Timeline collapse-button quirk** (closing/
+  reopening tabs with anything docked breaks C4D's collapse button
+  until restart). Researched — undocumented public bug. Not ours
+  to fix. File as Maxon support ticket later.
+- **No fix for the rig tag freezing renders.** Cameras using the
+  Shotblocks rig tag render as a single frozen frame (spring-damper
+  state isn't initialized cold). Related to v2 motion-layers Plan 10
+  bake-to-keyframes scope. Filed but deferred.
 
 ## Hard rules (re-stated)
 
@@ -124,24 +164,34 @@ razor-on-audio, and spawn-on-locked-V1 are all manually verified.
   must `cmake --build c:/Dev/c4d_sdk_2026/build-win64 --target shotblocks --config Release`
   first.
 - **Run dev-loop backgrounded** if you don't need to block on it —
-  it takes ~10s and the foreground call freezes the agent.
+  it takes ~10s.
 - Commit only when explicitly asked. Verify visual / behavioral
   changes in the live app before committing.
-- Read every Figma property via `get_design_context`; never guess.
-  If get_design_context returns a flattened raster, read the SVG
-  path data directly.
 - **Don't band-aid.** Two failed local fixes on the same bug → stop,
-  and surface the architectural-refactor option explicitly. Mike
-  has said this directly. See the memory.
+  surface the architectural option explicitly. We violated this rule
+  in the keyframe-write chase today and it cost ~2 hours. The rule
+  works.
 
 ## Commit message style
 
-Match the existing v1 Plan 2.5 / today's commits. `feat(ui): …`,
-`feat(audio): …`, `fix(drag): …`, etc. Subject is one imperative
-sentence; body explains WHY. Co-author trailer if Claude:
+Match the existing today's commits. `feat(plan-N commit M): ...`
+for plan work. Subject is one imperative sentence; body explains WHY.
+Co-author trailer if Claude:
 
 ```
 Co-Authored-By: Claude Opus 4.7 (1M context) <noreply@anthropic.com>
+```
+
+## Files left dirty in the working tree
+
+```
+host/shotblocks/source/main.cpp                  (Plan 4.1 commit 3 work — committed)
+host/shotblocks/web/src/components/AddCameraButton.tsx  (committed)
+host/shotblocks/web/src/lib/host.ts              (committed)
+scenes/test stage animation.c4d                  (reference — committed)
+scenes/dev-test.c4d                              (autosave noise — don't commit)
+scenes/dewhfwhefbbvw.c4d  scenes/dwfweffefw.c4d  scenes/uihrdgiuhurgsd'.c4d  (test scene garbage — delete)
+.claude/  HANDOFF-CLAUDE-SCRUB-BUG-2026-05-26.md  HANDOFF-CODEX-SCRUB-BUG.md  (session artifacts — not tracked)
 ```
 
 Good luck.

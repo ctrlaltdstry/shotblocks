@@ -116,39 +116,84 @@ After three failed attempts the band-aid rule kicks in. Pivoted to a different m
 
 **Risk:** low. Cache is just a vector copy.
 
-### Commit 3 — Driver tag: render-time enable toggle + per-frame parameter write
+### Commit 3 — Driver tag: render-time Enable toggle (WIP, render still broken)
 
-**Scope (expanded per the Commit 2 pivot):**
-The driver tag now has TWO render-time responsibilities, not one:
+**Shipped (`5fb799f`):**
+- `ShotblocksStageDriverTag` (`g_shotblocks_stage_driver_id = 1000008`) — hidden TagData plugin with `PLUGINFLAG_HIDE | PLUGINFLAG_HIDEPLUGINMENU | TAG_EXPRESSION`.
+- Auto-attached to the helper Onull in `GetOrCreateV2Helper` (idempotent).
+- Message handler toggles `_shotblocks_stage`'s `ID_BASEOBJECT_GENERATOR_FLAG` on `MSG_MULTI_RENDERNOTIFICATION`. Verified via SetParameter readback: ok=1, readback=1 during render, readback=0 after.
+- Execute is intentionally a no-op (was per-frame BaseDraw write — pulled by user request because it forced the viewport onto the Shotblocks-active camera and prevented manual camera selection).
+- HandleSetStageCameras rewrites the Stage's animation track on every save-state with the **correct DescID** (creator=Ostage). The Stage's keyframes accurately reflect the timeline.
 
-1. **Enable-flag toggle** (original plan, unchanged):
-   - On `MSG_MULTI_RENDERNOTIFICATION` with `start = true`: set parent Stage's `ID_BASEOBJECT_GENERATOR_FLAG = true`. Cache a `_rendering = true` flag on the tag (or the dialog).
-   - On `MSG_MULTI_RENDERNOTIFICATION` with `start = false`: set flag back to false; clear `_rendering`.
+**Render still doesn't switch cameras despite:**
+- Stage Enable=ON during render (logged + readback-confirmed)
+- Keyframes present with correct DescID, types, and link resolution (Dump matches working hand-keyed reference structurally)
+- User-built reference scene (`scenes/test stage animation.c4d`) renders correctly with cameras switching → confirms Stage CAN render-switch in this C4D 2026 install; it's not a Maxon-side breakage.
 
-2. **Per-frame camera write** (new — replaces the broken keyframe animation):
-   - Tag's per-frame hook (`Execute` callback) — when `_rendering == true`, read the current doc time → resolve which `_stageEvents` entry applies → look up the camera in `_cameraLinks` → write Stage's static `STAGEOBJECT_CLINK` parameter directly to that camera. Same write the user does manually in the AM (which is verified working).
-   - When `_rendering == false`: do nothing (don't fight the live `useActiveClipRouter`).
+**Investigation trail (today, all dead ends):**
 
-- Register the tag as a C++ TagData plugin with `PLUGINFLAG_HIDE` so it doesn't appear in user-facing tag menus.
-- Auto-attach to the Stage helper on creation (refactor Commit 1's `GetOrCreateStageHelper` to ensure the driver tag exists too).
-- Take-over flow for existing user Stage objects — unchanged from the original Commit 3 spec.
+1. **Keyframe write — three failed attempts** all produced visually-valid keys with empty link fields:
+   - `AutoAlloc<BaseLink> + SetBaseLink(*link)` → empty
+   - `SetBaseList2D(cam)` → empty
+   - Both above with `DescID(DescLevel(STAGEOBJECT_CLINK, DTYPE_BASELISTLINK, 0))` → still empty
 
-**Files:**
-- `host/shotblocks/source/main.cpp` — `ShotblocksStageDriverTag` class + registration + take-over handling.
-- New plugin ID for the tag (use the next testing-range ID — 1000001 is the Python rig tag, 1000002 is the v2 command/dialog pair; pick 1000003+).
+   Root cause found by dumping a working hand-keyed Stage: **DescID needed `creator=Ostage` (5136), not `creator=0`**. With the corrected DescID, the keyframes now write with correct link data.
 
-**Risks:**
-- The "per-frame hook" assumes the tag's Execute is called during render-frame evaluation in the right order (before the Stage's camera-link is sampled). C4D tag priority is determined by `TagPluginInfo::flags` and the `EXECUTIONPRIORITY` value returned from `Execute`. Worth a quick instrumentation pass at first run to confirm Execute fires per render frame.
-- If Execute doesn't fire per frame, alternative: subscribe to the doc's frame-change events differently, or use a different tag callback. Falls back to a different but still parameter-writing mechanism — keyframe animation is OFF the table.
+2. **Per-frame parameter write from tag's Execute** (alternative when keyframes seemed dead): `SetParameter(STAGEOBJECT_CLINK)` returned ok=1, but readback showed null. Per-frame writes don't persist on the Stage from a tag context. (Doesn't matter anymore now that keyframes work; documenting for posterity.)
 
-**Acceptance:**
-- With Stage helper + driver tag installed: interactive scrub leaves viewport free (Stage dormant).
-- Render to Picture Viewer → Console log confirms the driver tag received `MSG_MULTI_RENDERNOTIFICATION start=true` → Stage Enable flips ON → render switches cameras → after render, driver receives `start=false` → Stage Enable flips OFF → viewport free again.
-- Render via Add to Queue → C4D Render Queue → same behavior.
-- User opens a scene with their own pre-existing Stage → modal appears → take-over flow works.
-- After take-over: user can still see (the now-hidden) Shotblocks-owned Stage exists if they unhide it manually; behavior is identical to a fresh install.
+3. **`BaseDraw::SetSceneCamera` per frame from tag's Execute** (pivot 2): worked for interactive native scrub — viewport switched cameras with our dialog closed. But pulled because it also forced the viewport onto Shotblocks's camera at all times, preventing manual camera selection.
 
-**Risk:** medium. The C++ TagData registration is new territory in this plugin. The take-over flow needs careful UX (one prompt per session, not every doc reload).
+4. **Render with Stage Enable=ON + correct keyframes still doesn't switch.** Even though Mike's reference scene renders correctly, our auto-built Stage doesn't. We've ruled out keyframe correctness and Enable state.
+
+**Open question for next session — what's different between ours and the working reference?**
+
+| | Working reference | Our auto-built |
+|---|---|---|
+| Stage name | `Stage` | `_shotblocks_stage` |
+| Visibility | Visible in OM | `NBIT_OHIDE` (hidden) |
+| Position in OM | Root | Root |
+| Enable during render | ON | ON (confirmed) |
+| Track DescID | depth=1, id=1100, dtype=133, creator=5136 | depth=1, id=1100, dtype=133, creator=5136 (matches) |
+| Key dtype | 133 | 133 (matches) |
+| Key interp | 2 (LINEAR — auto-key default) | 3 (STEP) |
+| Key links resolve | yes | yes |
+| Render-switches? | YES | NO |
+
+**Top suspects (in order of likelihood):**
+
+1. **`NBIT_OHIDE` excludes the Stage from render evaluation entirely.** Most plausible. Hidden objects might be skipped by the render scene walk. Easy to test — temporarily skip the OHIDE flag and re-render.
+2. **The `MSG_MULTI_RENDERNOTIFICATION` Enable=ON write happens too late.** The renderer snapshots scene state at render-start; if Enable was OFF at snapshot time and we flip it after, the render uses the snapshot. Easy to test — check if Enable=ON BEFORE render starts (e.g., set it persistently OR via JS pre-render hook).
+3. **Some other parameter difference** between visible-Stage and our hidden-Stage that affects renderer participation (the OM has small icons that probably correspond to flags — `OBJECT_VISIBILITY_RENDER`, `OBJECT_VISIBILITY_EDITOR`, etc.).
+4. **Animation eval ordering** — our keys may have a different evaluation order than Maxon's recorded keys. Long shot.
+
+**Files modified this commit (`5fb799f`):**
+- `host/shotblocks/source/main.cpp` — Stage Driver tag class + registration + Message handler + Execute no-op
+- `host/shotblocks/web/src/components/AddCameraButton.tsx` — Dump stage button (spike, kept for next session)
+- `host/shotblocks/web/src/lib/host.ts` — `dump-stage` outbound type
+- `scenes/test stage animation.c4d` — ground-truth reference for what a working Stage looks like
+
+---
+
+### Next-session queue
+
+In order of recommended attempt:
+
+1. **Test the `NBIT_OHIDE` hypothesis** — temporarily skip the OHIDE bit in `GetOrCreateStageHelper`, render, see if cameras switch. ~5 min. Already had the diff queued in working tree when we stopped.
+2. **If unhiding works:** decide UX. Option A — leave Stage visible (1 extra row in OM, but functional). Option B — find a different hide mechanism that doesn't exclude from render (try `OBJECT_VISIBILITY_RENDER=OBJECT_ON` + display-off via Layer system).
+3. **If unhiding doesn't work:** test whether Enable=ON BEFORE render makes a difference. Add a pre-render hook in JS (Inspector "Render to Picture Viewer" button that pre-toggles, OR a Timer-based check that flips Enable when it detects render about to start).
+4. **If neither works:** A/B test interp value — change our writes from STEP to LINEAR (match the reference). Less likely but cheap.
+5. **Last resort:** rebuild from scratch instead of finding-or-creating the Stage. Maybe there's stale state on a Stage created during earlier failed attempts that survives across sessions. (We tested fresh-scene many times — unlikely.)
+
+**Don't repeat what we already know:**
+- Keyframe writes work (with correct DescID). Don't go back to debugging CKey writes.
+- Stage Enable toggle from Message works (readback verified). Don't re-instrument that.
+- The reference scene renders correctly in this C4D install. Don't go down the "maybe Maxon broke Stage rendering" path again.
+
+**Validation method going forward:**
+- After every code change, render a 2-camera scene and visually confirm output switches cameras.
+- If unsure whether keys are correct, click Dump stage and compare to the reference (both should have identical DescID + key structure).
+
+**Don't deploy `NBIT_OHIDE` removal as final** — even if it fixes render, the unhidden Stage clutters the OM. Need a UX-acceptable hiding mechanism.
 
 ---
 
