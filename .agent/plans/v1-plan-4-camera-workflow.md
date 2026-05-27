@@ -28,44 +28,119 @@ Three tightly-related camera-workflow features that ship in one plan because the
 
 These are real unknowns. Don't draft commit bodies until they're answered. Each is small enough for a ~30min spike.
 
-### R1. Camera type plugin IDs
+### R1. Camera type plugin IDs — RESOLVED (2026-05-27)
 
-We need to enumerate which camera object types are installed and present them in the Settings dropdown. Known unknowns:
+**Result: hardcoded IDs from Maxon SDK headers. Runtime enumeration not needed.**
 
-- `Ocamera` (Standard) — `c4d_objectinfo.h` constant, always available.
-- Physical camera — is it a separate object type ID, or just a render flag on `Ocamera`? Need to check.
-- Redshift camera — vendor-defined type ID. Either find the documented constant (RS SDK header) or detect at runtime via `FindPlugin(id, PLUGINTYPE_OBJECT)`. Probably easier: scan registered plugins for ones whose name matches `*camera*` or check a few known IDs.
-- Octane camera — same shape as Redshift.
+Both interesting IDs are documented constants in `frameworks/cinema.framework/source/ge_prepass.h`:
 
-**Spike:** in C++, walk `FilterPluginList(PLUGINTYPE_OBJECT, true)` (or equivalent), filter by name containing "camera", log the IDs. Test with Redshift installed and not installed.
+```cpp
+#define Ocamera       5103       // Standard camera (CameraObject)
+#define Orscamera     1057516    // Redshift "New Camera Object"
+```
 
-**Output:** decide between hardcoded ID list with fallback vs runtime detection. Document the answer in `.agent/context/c4d-plugin-development.md`.
+Verified via spike: `FindPlugin(id, PLUGINTYPE::OBJECT)` resolves both (when Redshift is loaded). `BaseObject::Alloc(id)` returns the correctly-typed object — `GetName()` on the allocated object returns "Camera" / "RS Camera" (the localized UI strings, matching the OM display).
 
-### R2. Timeline-dialog focus state
+**Note on naming:** earlier enumeration via `FilterPluginList(OBJECT, true)` showed 493 plugins, zero matched "camera" via `BasePlugin::GetName()`. That suggests `BasePlugin::GetName()` returns the symbolic / internal name, not the localized UI label. The same plugins return the right localized name from `BaseObject::Alloc(id)->GetName()`. Doesn't matter for our purposes since we work from known IDs.
 
-The OM-select-on-stop behavior is gated on "user is actively in the timeline." Definitions in tension:
+**Physical camera is NOT a separate object type.** The "Physical" branding in C4D is a render-side concept; physical params live on `Ocamera` and activate when the Physical renderer is selected. So our dropdown has Standard, Redshift, and (later) other vendor types — no Physical entry.
 
-- C4D dialog focus (`GeDialog::Activated` / `Deactivated`)
-- WebView2 document focus (DOM focus inside the HtmlViewer)
-- Window-manager mouse hover
+**Octane / Arnold / other vendors:** not shipped with C4D, so no SDK constant. Add IDs as they become known; one new entry per vendor in the candidates array.
 
-These behave differently and can be out of sync (dialog focused but user clicked into the OM is the failure case we care about).
+**Implementation for commit 1:**
 
-**Spike:** add temporary `GePrint` logging on every `GeDialog::Message` ID and every WebView2 focus event. Reproduce: user opens Shotblocks, then clicks the OM. What fires? Then clicks back to the timeline. What fires? Then scrubs while the OM is focused. What fires?
+1. C++ defines a candidates array:
+   ```cpp
+   struct CameraType { Int32 id; const char* defaultLabel; };
+   constexpr CameraType kCameraCandidates[] = {
+     { 5103,    "Camera" },        // Standard — always present
+     { 1057516, "RS Camera" },     // Redshift — present if loaded
+   };
+   ```
+2. On `C4DPL_PROGRAM_STARTED`, walk the array. For each, `FindPlugin(id, PLUGINTYPE::OBJECT)`; if non-null, add to an available-types list (with the label from the actual `BasePlugin::GetName()` if non-empty, else the default).
+3. New handler `get-camera-types` returns the list to JS on Settings panel open.
+4. Settings dropdown populates from that list. Default = first entry (always Standard).
+5. Persisted setting stores the camera-type ID, not the label.
+6. On scene load, if persisted ID is no longer available (e.g. user uninstalled Redshift), fall back to Standard and toast/log it.
 
-**Output:** pick one signal as canonical. My prior: WebView2 document focus (since dialog focus is too permissive — a focused dialog with the user clicking through to the OM still reports focused). Confirm or revise based on the data.
+### R2. Timeline-dialog focus state — RESOLVED (2026-05-27)
 
-### R3. Atomic undo for camera-create + clip-add
+**Result: focus detection is trivial; pure JS-side gate.**
 
-`StartUndo` / `EndUndo` wraps must include every state change for the undo to be atomic. Open questions:
+Spike instrumented both C++ `Message` (BFM_GOTFOCUS / BFM_LOSTFOCUS / BFM_ACTIVATE_WINDOW) and JS (`window.focus`, `window.blur`, `document.hasFocus()`). Ran 8-step repro: Shotblocks click ↔ OM click ↔ Attribute Manager click ↔ scrub while unfocused.
 
-- Does `SetActiveObject` (OM selection) participate in undo? Or is selection state outside the undo system?
-- Does `SetSceneCamera` (viewport routing) need undo? Probably not (it's view state, not doc state) but worth confirming.
-- The clip-add side currently goes through the `save-state` HTTP handler which has its own AddUndo on the clip JSON. Camera-create needs to land BEFORE the clip-add so the AddUndo sequence is: NEWOBJ (camera) → CHANGE_SMALL (helper BC for clip). Verify the order works correctly under undo+redo.
+**Findings:**
+- `BFM_GOTFOCUS` / `BFM_LOSTFOCUS` fire in lockstep with JS `window` focus / blur. Neither layer leads or lags. No missed events, no bursts.
+- `document.hasFocus()` is reliable and canonical: `true` iff the user has clicked into the Shotblocks dialog and hasn't clicked into another C4D panel since.
+- Once the user clicks into another C4D panel, `hasFocus` stays `false` across subsequent scrubs / interactions until they click back to Shotblocks. Exactly the gate we need.
+- No flicker. No edge cases.
 
-**Spike:** prototype the create-camera handler with a TODO clip-add stub, do create + ⌘Z and see if both pieces revert atomically. If selection doesn't revert that's a problem (the AM will show the dead camera's params).
+**Implementation:**
+- Plan 4 commit 5's focus gate is one line: `if (document.hasFocus()) { send({ kind: 'select-in-om', objectId }) }`.
+- No C++ dialog hook needed for focus. C++ side gets only the `select-in-om` handler that does `SetActiveObject + EventAdd`.
+- Listen to `window.focus`/`window.blur` only if we need to react TO focus changes (we don't — we sample `hasFocus()` at the trigger moment).
 
-**Output:** confirm the right `AddUndo` calls, document in the v1 cross-plan decisions block.
+### R3. Atomic undo for camera-create + clip-add — RESOLVED (2026-05-27)
+
+**Result: two-undo-step approach (option A). One Cmd-Z reverts the clip; second Cmd-Z reverts the camera.**
+
+Answered from SDK documentation alone — no live spike needed. Findings:
+
+**1. Canonical SDK pattern for object creation** (`example.main/source/microsdk/user_interface.cpp:63-69`):
+```cpp
+doc->StartUndo();
+doc->InsertObject(cube, nullptr, nullptr);
+doc->AddUndo(UNDOTYPE::NEWOBJ, cube);
+doc->EndUndo();
+EventAdd();
+```
+Note: `AddUndo(NEWOBJ)` is called AFTER `InsertObject`, unlike other undo types (`c4d_basedocument.h:1107-1114` documents this exception).
+
+**2. `SetActiveObject` participates in undo automatically.** Per `c4d_basedocument.h:1109`: *"In the case of the creation of a new object the call is done afterwards, after insertion into the document/object/track/sequence but before calling subsequent functions like SetActiveObject() **which creates another undo**."* Inside the same StartUndo/EndUndo block, this means OM selection state reverts atomically with the camera creation — exactly the behavior we want for "Cmd-Z undoes the Add Camera click."
+
+**3. `SetSceneCamera` (viewport routing) does NOT need undo wrapping.** It's view state, not document state. After Cmd-Z reverts the camera object, the playhead-router will re-resolve naturally on the next tick.
+
+**4. Atomic undo across camera-create + JS-side clip-add: NOT achievable cheaply.** The clip-add side flows through the existing `save-state` HTTP handler which has its own `AddUndo(CHANGE_SMALL, helper)` on the helper-BC clip JSON. Each `StartUndo`/`EndUndo` pair = one user-visible undo step. So: camera-create = one undo step, clip-add = a second undo step. Cmd-Z to undo a "click Add Camera" is two presses, not one.
+
+The architectural alternative (move clip-add into C++ to share the same StartUndo block) breaks the current "JS owns clip data, C++ is a passthrough" model and isn't worth the complexity for v1.
+
+**Implementation sequence for Plan 4 commit 2:**
+
+```cpp
+// Inside HandleCreateCamera (HTTP body has typeId + cameraIndex if any):
+doc->StartUndo();
+BaseObject* cam = BaseObject::Alloc(typeId);     // 5103 (Std) or 1057516 (RS)
+// Copy pose + lens params from the editor camera:
+BaseDraw* bd = doc->GetActiveBaseDraw();
+CameraObject* editor = bd ? bd->GetEditorCamera() : nullptr;
+if (editor) {
+  cam->SetMl(editor->GetMl());
+  // Copy lens params (focal length, film offset, sensor size, etc.)
+  // via BaseContainer Get/SetData on documented camera params.
+}
+doc->InsertObject(cam, nullptr, nullptr);        // OM root, top
+doc->AddUndo(UNDOTYPE::NEWOBJ, cam);
+doc->SetActiveObject(cam, SELECTION_NEW);        // own undo entry, inside block — reverts atomically
+doc->EndUndo();
+
+// View state — no undo wrapping:
+bd->SetParameter(DescID(BASEDRAW_DATA_CAMERA), GeData(cam, false), DESCFLAGS_SET::NONE);
+// + the cache-invalidation recipe from memory c4d-setscenecamera-bypasses-cache-invalidation
+
+EventAdd(EVENT::ANIMATIONFLAGS);
+
+// Respond to JS with { ok: true, objectId, sourceName, sourceType }
+// JS then calls existing addClip() which fires save-state → C++ save-state
+// handler does its own StartUndo/AddUndo(CHANGE_SMALL, helper)/EndUndo on
+// the clip JSON. Second undo step.
+```
+
+**Cmd-Z UX:**
+- 1× Cmd-Z → clip disappears from timeline (helper BC clip JSON reverts)
+- 2× Cmd-Z → camera disappears from OM, AM selection reverts, viewport returns to previous camera (router re-resolves on next tick now that the clip is gone)
+- Cmd-Shift-Z does the reverse in two steps
+
+If user feedback says "two undos feels wrong, want one" post-ship, the architectural change (clip-add atop the camera-create's StartUndo block via a new combined handler) is a separate ticket. Not in v1.
 
 ### R4. Chip visual design
 
@@ -133,9 +208,10 @@ Edge handling:
 **Acceptance:**
 - Empty timeline → empty-state CTA visible. Click → camera appears in OM, new clip on V1 at frame 0, viewport switches to new camera (nothing visually changes because the new camera inherited the editor view).
 - Timeline with clips → persistent bottom-right button visible. Click at frame 100 → new camera in OM, new clip at 100-172 on V1, viewport switches.
-- Cmd-Z reverts everything: clip disappears, camera disappears from OM, viewport returns to previous camera. Cmd-Shift-Z re-does atomically.
+- Cmd-Z reverts in two steps (per R3): 1× Cmd-Z removes the clip; 2× Cmd-Z removes the camera + reverts OM selection + viewport returns to previous camera. Cmd-Shift-Z re-does in two steps.
 - Repeated clicks create "Camera", "Camera.1", "Camera.2" (C4D's name-uniquifier handles this for free).
-- Settings dropdown set to "Redshift" → new camera is a Redshift camera (verified in OM as `RScamera` icon).
+- Settings dropdown set to "RS Camera" (id 1057516) → new camera is a Redshift camera (verified in OM as RS-icon). Dropdown only shows "RS Camera" when Redshift is loaded.
+- Save scene → reopen → if previously-selected camera type is no longer available (e.g. Redshift uninstalled), Settings falls back to Standard with a toast/log.
 
 **Risk:** medium. Camera-side is well-tested SDK territory. The lens-param copy is the most likely source of off-by-one bugs (some params live on the camera object, some on a sub-tag). The reverse-scrub fix recipe must be applied correctly.
 
