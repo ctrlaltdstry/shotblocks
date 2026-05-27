@@ -142,17 +142,42 @@ EventAdd(EVENT::ANIMATIONFLAGS);
 
 If user feedback says "two undos feels wrong, want one" post-ship, the architectural change (clip-add atop the camera-create's StartUndo block via a new combined handler) is a separate ticket. Not in v1.
 
-### R4. Chip visual design
+### R4. Chip visual design — RESOLVED (2026-05-27)
 
-There is no Python precedent (Python had no chips). Design is genuinely new. Needs Figma exploration:
+**Result: minimal flat pill in the existing track header, two-token swap on activation.**
 
-- Where does the chip live? Track header? Above the lane? Inside the lane gutter? My read: inline with the track header on the left, so it reads as "this track is the target."
-- Active vs inactive visual: highlight color? Underline? Pill fill swap?
-- Click behavior: click chip = activate. Click active chip = no-op? Toggle off? My read: clicking the already-active chip is a no-op (active state has nowhere else to go — exactly one chip is always active per side).
+Mike provided Figma frames:
+- Inactive chip — node `478:3133` (full row node `357:1045`)
+- Active chip — node `478:3144` (full row node `478:3140`)
 
-**Spike:** Mike provides Figma. Before Figma, sketch options to discuss.
+**Chip spec:**
+- 36×63, 4px radius, no border / shadow / glow
+- Inactive: `bg: var(--color-grey-16)` (`#292929`), `text: var(--color-grey-24)` (`#3d3d3d`) — sits nearly invisible against the row's grey-12 background; reads as a faint plate
+- Active: `bg: var(--color-timeline-primary-highlight)` (`#007aff` Maxon blue), `text: white`
+- Text: Inter Semi-Bold 10px, -0.1px letter-spacing, centered both axes
+- Content: track ID short form — `V1`, `V2`, `A1`, `A2`, …
+- **Only two CSS tokens swap on activation** (background-color + color). No size, radius, border, shadow, or position change.
 
-**Output:** Figma node ID + design lock-in, captured in v1 cross-plan decisions.
+**Placement (per the captured row design):**
+- Inside `.track-header__row`, between the lock button (left) and the eye/MS controls (right).
+- Current `TrackHeader.tsx` already has the lock + eye/MS + label layout; chip is a new element inserted as the lock's right-sibling.
+
+**Default state — implicit V1/A1 active:**
+- V1 and A1 always render as ACTIVE on first scene load.
+- There is no "no chip selected" empty state. Inactive means "this track isn't the current target," not "nothing is targeted."
+- Effect: as soon as the user opens a scene with at least one V track and one A track, exactly one V chip and one A chip are blue.
+
+**Click behavior:**
+- Click an inactive chip → it becomes active for its side; the previously-active chip on that side becomes inactive.
+- Click the already-active chip → no-op (exactly one chip is always active per side; nowhere for the state to go).
+- Hover state: not specified in the Figma — recommend a subtle background brightening (`grey-16` → `grey-24` for inactive chips on hover) to give a click affordance. Locked in at implementation if Mike doesn't object.
+
+**Surrounding row context (informational, no changes needed):**
+- Row container: `bg: grey-12`, `border: 0.5px grey-16`, 4px radius, 8px horizontal padding, height 65px.
+- Items left-to-right inside the row: lock icon (19×20) — **chip (36×63)** — eye (28×30) — label "Video N" / "Audio N" right-aligned, Inter 400 12px in grey-50.
+- All matches the existing `TrackHeader.tsx` except for the chip insertion.
+
+**SVG assets:** none needed for the chip. It's a flat colored rect with text. (The lock/eye SVGs in the row are unchanged.)
 
 ---
 
