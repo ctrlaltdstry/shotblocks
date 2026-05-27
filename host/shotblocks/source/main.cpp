@@ -1547,6 +1547,7 @@ private:
 		}
 		if (body.find("\"kind\":\"get-camera-types\"") != std::string::npos) return HandleGetCameraTypes();
 		if (body.find("\"kind\":\"create-camera\"") != std::string::npos) return HandleCreateCamera(body);
+		if (body.find("\"kind\":\"select-in-om\"") != std::string::npos) return HandleSelectInOm(body);
 		if (body.find("\"kind\":\"audio-add\"") != std::string::npos)
 		{
 			// JS pushes the original audio bytes (base64) once at drop
@@ -2087,6 +2088,28 @@ private:
 		}
 		out += "\"}";
 		return out;
+	}
+
+	// Plan 4 commit 5 — selection-follows-playhead. JS resolves the
+	// active clip at the playhead on scrub-end / playback-stop AND
+	// document.hasFocus() is true; sends the clip's objectId here so
+	// the camera appears in the OM (and its params populate the AM).
+	// objectId of 0 means "no selection change" — JS uses that for
+	// orphan clips (no live camera to select) and gap cases.
+	std::string HandleSelectInOm(const std::string& body)
+	{
+		Int32 objectId = ParseIntField(body, "objectId");
+		if (objectId <= 0) return "{\"ok\":true,\"kind\":\"select-in-om-ack\",\"selected\":false}";
+		BaseDocument* doc = GetActiveDocument();
+		if (!doc) return "{\"ok\":false,\"error\":\"no doc\"}";
+		auto it = _cameraLinks.find(objectId);
+		if (it == _cameraLinks.end() || !it->second)
+			return "{\"ok\":true,\"kind\":\"select-in-om-ack\",\"selected\":false}";
+		BaseObject* cam = static_cast<BaseObject*>(it->second->GetLink(doc));
+		if (!cam) return "{\"ok\":true,\"kind\":\"select-in-om-ack\",\"selected\":false}";
+		doc->SetActiveObject(cam, SELECTION_NEW);
+		EventAdd();
+		return "{\"ok\":true,\"kind\":\"select-in-om-ack\",\"selected\":true}";
 	}
 
 	// Individual-shots branch of add-to-queue.

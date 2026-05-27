@@ -8,7 +8,7 @@ import { send } from './lib/host';
  *  (sb_shot_model.py:109).
  *
  *  Returns null when no clip covers the frame (gap). */
-function activeClipAt(
+export function activeClipAt(
   frame: number,
   videoTracks: { id: number; clips: Clip[]; visible: boolean }[],
 ): { clip: Clip; trackId: number } | null {

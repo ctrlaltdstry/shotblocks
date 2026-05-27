@@ -89,7 +89,13 @@ export type HostOutbound =
   // those to addClip at the playhead. typeId in the ack reflects what
   // was actually used (may differ from request if the requested type
   // is no longer loaded; C++ falls back to Standard).
-  | { kind: 'create-camera'; typeId: number };
+  | { kind: 'create-camera'; typeId: number }
+  // Selection-follows-playhead (plan-4 commit 5). JS fires on scrub-
+  // end / playback-stop AND document.hasFocus(). C++ resolves the
+  // objectId to a live BaseObject and calls SetActiveObject so the
+  // camera appears in OM + AM. objectId=0 is a no-op (used for gap +
+  // orphan cases; the OM selection is left untouched, not cleared).
+  | { kind: 'select-in-om'; objectId: number };
 
 type Listener = (msg: HostInbound) => void;
 
