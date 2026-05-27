@@ -36,9 +36,11 @@ export function useAddCamera(): () => Promise<void> {
     }
     if (!ack || !ack.ok || !ack.objectId || !ack.name) return;
 
-    // Hardcoded V1 target for commit 2. Commit 4 will read the active
-    // V-chip from the store and pass that trackId here.
-    const targetTrackId = 'V1';
+    // Target = the active V chip. Default V1 on fresh docs; user can
+    // click another V chip to retarget. Chip is reconciled against
+    // existing tracks on delete + load, so it always points at a real
+    // track. (Plan-4 commit 4 wired this — commit 2 hardcoded V1.)
+    const targetTrackId = s.activeVChip;
 
     // Append at the end of the target track — the rightmost edge of the
     // last clip, or frame 0 if the track is empty. Ignores the playhead

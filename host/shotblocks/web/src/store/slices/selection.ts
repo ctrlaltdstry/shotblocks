@@ -120,16 +120,17 @@ export const createSelectionSlice: StateCreator<State, [], [], SelectionSlice> =
     const delta = playhead - anchor;
     const newIds: number[] = [];
 
-    // Group clipboard entries by destination track, falling back to
-    // V1/A1 when the source track no longer exists.
+    // Group clipboard entries by destination track. The active V/A
+    // chip is the write target for paste (plan-4 commit 4), so every
+    // entry routes to activeVChip / activeAChip based on its side
+    // regardless of where it was copied from. The chip is guaranteed
+    // to point at an existing track (deleteTrack reconciles it), so
+    // no further fallback needed.
     type Pending = { trackId: string; clip: Clip };
     const pending: Pending[] = [];
     for (const e of s.clipboard) {
       const side = e.trackId.startsWith('V') ? 'video' : 'audio';
-      const tracks = side === 'video' ? s.videoTracks : s.audioTracks;
-      const sourceNum = parseInt(e.trackId.slice(1), 10);
-      const exists = tracks.some((t) => t.id === sourceNum);
-      const destTrackId = exists ? e.trackId : (side === 'video' ? 'V1' : 'A1');
+      const destTrackId = side === 'video' ? s.activeVChip : s.activeAChip;
       const id = mintId();
       newIds.push(id);
       pending.push({
