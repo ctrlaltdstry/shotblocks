@@ -31,18 +31,6 @@ three are always reachable proportionally.
 
 ---
 
-## new-track spawn ghost: needs a different visual treatment
-
-**Status.** Design tweak. The spawn-ghost dashed outline now sits
-correctly above V<max> (position fix shipped 2026-05-26), but Mike
-still wants a different visual style for it. Specifics TBD; fetch
-Figma when ready to implement.
-
-**Files.** `host/shotblocks/web/src/components/SpawnGhostLane.tsx`
-+ its CSS in `App.css` (search `.spawn-ghost-lane`).
-
----
-
 ## inspector help button: launch user manual on click
 
 **Status.** Feature add, blocks Plan 3. A `?` glyph button needs
