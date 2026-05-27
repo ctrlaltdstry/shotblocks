@@ -192,6 +192,21 @@ static const Int32 BCKEY_AUDIO_BASE    = 3100;
 static const char  HELPER_MARKER_VALUE[]  = "shotblocks_helper";
 static const char  HELPER_NULL_NAME[]     = "_shotblocks";
 
+// Plan 4.1 — hidden Stage object that drives multi-camera switching
+// during render. Lives in the doc as a sibling of the persistence
+// helper; hidden via NBIT_OHIDE so the user never sees it. Marked via
+// the same BCKEY but with a distinct value so FindV2Helper /
+// FindStageHelper don't confuse the two.
+//
+// During interactive use, the Stage's enable flag
+// (ID_BASEOBJECT_GENERATOR_FLAG) stays FALSE — viewport routing is
+// owned by JS's useActiveClipRouter via set-active-camera. A driver
+// tag attached to the Stage (Commit 3) will flip the enable flag
+// during MSG_MULTI_RENDERNOTIFICATION so any C4D render path (Picture
+// Viewer, Render Queue, network render) honors Shotblocks sequencing.
+static const char  STAGE_HELPER_MARKER_VALUE[] = "shotblocks_stage_helper";
+static const char  STAGE_HELPER_NAME[]         = "_shotblocks_stage";
+
 // Find the existing v2 helper in `doc`, or nullptr.
 static BaseObject* FindV2Helper(BaseDocument* doc)
 {
@@ -223,6 +238,48 @@ static BaseObject* GetOrCreateV2Helper(BaseDocument* doc)
 	doc->InsertObject(helper, nullptr, nullptr);
 	GePrint("[Shotblocks/v2] created persistence helper"_s);
 	return helper;
+}
+
+// Plan 4.1 — find the existing hidden Stage helper in `doc`, or nullptr.
+// Distinct from the persistence helper Onull (different marker value).
+static BaseObject* FindStageHelper(BaseDocument* doc)
+{
+	if (!doc) return nullptr;
+	for (BaseObject* op = doc->GetFirstObject(); op; op = op->GetNext())
+	{
+		if (op->GetType() != Ostage) continue;
+		BaseContainer* bc = op->GetDataInstance();
+		if (!bc) continue;
+		if (bc->GetString(BCKEY_HELPER_MARKER) == maxon::String(STAGE_HELPER_MARKER_VALUE))
+			return op;
+	}
+	return nullptr;
+}
+
+// Plan 4.1 — find or create the hidden Stage helper. Dormant on
+// creation (ID_BASEOBJECT_GENERATOR_FLAG = false) so it doesn't
+// interfere with interactive camera selection. The render-time toggle
+// (Commit 3) will flip it on for the duration of a render. Hidden via
+// NBIT::OHIDE so it doesn't appear in the OM.
+static BaseObject* GetOrCreateStageHelper(BaseDocument* doc)
+{
+	if (!doc) return nullptr;
+	BaseObject* stage = FindStageHelper(doc);
+	if (stage) return stage;
+	stage = BaseObject::Alloc(Ostage);
+	if (!stage) return nullptr;
+	stage->SetName(maxon::String(STAGE_HELPER_NAME));
+	BaseContainer* bc = stage->GetDataInstance();
+	if (bc)
+		bc->SetString(BCKEY_HELPER_MARKER, maxon::String(STAGE_HELPER_MARKER_VALUE));
+	// Dormant by default. Driver tag (Commit 3) toggles ON for renders.
+	stage->SetParameter(
+		ConstDescIDLevel(ID_BASEOBJECT_GENERATOR_FLAG),
+		GeData(false), DESCFLAGS_SET::NONE);
+	stage->ChangeNBit(NBIT::OHIDE, NBITCONTROL::SET);
+	doc->InsertObject(stage, nullptr, nullptr);
+	GePrint("[Shotblocks/v2] created hidden Stage helper (dormant)"_s);
+	return stage;
 }
 
 
@@ -1341,6 +1398,11 @@ private:
 			if (!helper) return "{\"ok\":false,\"error\":\"helper alloc failed\"}";
 			BaseContainer* bc = helper->GetDataInstance();
 			if (!bc) return "{\"ok\":false,\"error\":\"helper bc missing\"}";
+
+			// Plan 4.1 — also ensure the hidden Stage helper exists.
+			// Idempotent: returns the existing one on subsequent calls.
+			// Animation rebuild + render-time toggle land in commits 2+3.
+			GetOrCreateStageHelper(doc);
 
 			doc->StartUndo();
 			doc->AddUndo(UNDOTYPE::CHANGE_SMALL, helper);
