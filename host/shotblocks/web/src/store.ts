@@ -135,6 +135,16 @@ export interface State {
   // sync with C4D either way; this gates AUDIO only.
   c4dAudioFollows: boolean;
 
+  // Available camera types in this C4D session — populated by C++'s
+  // get-camera-types handler on first Settings open. Only camera
+  // plugins that resolve at runtime appear here (RS Camera hidden
+  // when Redshift isn't loaded). See plan-4 R1.
+  availableCameraTypes: { id: number; label: string }[];
+  // User-preferred default camera type for the in-timeline Add Camera
+  // button — plugin ID (5103 = Standard Ocamera, 1057516 = Redshift
+  // Orscamera). Persisted in the helper-BC JSON. Defaults to Standard.
+  defaultCameraType: number;
+
   // Snap-to-edge toggle (utilities strip "Snap" button). When OFF,
   // body/trim/roll drags are free of magnetic pull. When ON, they
   // snap to nearby edit points within SNAP_PIXEL_RADIUS px. Shift
@@ -333,6 +343,8 @@ export interface State {
   setHeadersWidth: (w: number) => void;
   setActiveTool: (tool: ToolId) => void;
   setC4dAudioFollows: (on: boolean) => void;
+  setAvailableCameraTypes: (types: { id: number; label: string }[]) => void;
+  setDefaultCameraType: (id: number) => void;
   setAudioScrub: (on: boolean) => void;
   setSettingsOpen: (open: boolean) => void;
   setSnapEnabled: (on: boolean) => void;

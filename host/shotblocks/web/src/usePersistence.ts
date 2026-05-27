@@ -88,6 +88,10 @@ interface SavedState {
   /** Render workflow mode. Optional so older docs default to
    *  'individual-shots'. */
   renderMode?: 'whole-sequence' | 'individual-shots';
+  /** Default camera type for the in-timeline Add Camera button —
+   *  plugin ID. Optional so older docs default to 5103 (Standard
+   *  Ocamera). See plan-4 commit 1. */
+  defaultCameraType?: number;
 }
 
 /** Resolve a saved track's per-track flags, defaulting any the doc
@@ -181,7 +185,8 @@ export function usePersistence(): void {
           && s.audioTracks === prev.audioTracks
           && s.markers === prev.markers
           && s.markersVisible === prev.markersVisible
-          && s.renderMode === prev.renderMode) return;
+          && s.renderMode === prev.renderMode
+          && s.defaultCameraType === prev.defaultCameraType) return;
 
       // Detect audio MEDIA that is no longer referenced by any clip,
       // and free the persisted bytes. Audio lives in C++'s helper
@@ -337,12 +342,22 @@ async function loadFromHost(skipNextSave: React.MutableRefObject<boolean>) {
     const renderMode = parsed.renderMode === 'whole-sequence'
       ? 'whole-sequence' as const
       : 'individual-shots' as const;
+    // Default camera type — plugin ID for the in-timeline Add Camera
+    // button (plan-4 commit 2). Fall back to Standard (5103) if missing
+    // or not a positive integer. If the saved value points at a plugin
+    // that isn't loaded in this session (e.g. user uninstalled Redshift
+    // since save), the Settings UI will reconcile it against the live
+    // availableCameraTypes list on its first open.
+    const savedCamType = Number.isInteger(parsed.defaultCameraType) && (parsed.defaultCameraType as number) > 0
+      ? (parsed.defaultCameraType as number)
+      : 5103;
     useStore.setState({
       videoTracks: safeVideoTracks,
       audioTracks: safeAudioTracks,
       markers,
       markersVisible,
       renderMode,
+      defaultCameraType: savedCamType,
       isHydrated: true,
     });
 
@@ -440,6 +455,7 @@ function saveToHost() {
     markers: s.markers,
     markersVisible: s.markersVisible,
     renderMode: s.renderMode,
+    defaultCameraType: s.defaultCameraType,
   };
   // Object ids list — every objectId currently referenced by a clip.
   // C++ uses this to prune stale BaseLinks from the helper.

@@ -6,6 +6,15 @@ import type { DragPreview, ToolId } from '../types';
  *  from the timeline data and from the playback transport. Includes
  *  the active tool, modal panel visibility, transient drag/hover
  *  state, and the right-click menu. */
+/** One row in the camera-type dropdown. Populated by C++'s
+ *  get-camera-types handler — only types whose plugin actually
+ *  resolves at this C4D session appear (so RS Camera only shows when
+ *  Redshift is loaded). See plan-4 R1. */
+export interface CameraTypeOption {
+  id: number;     // plugin ID, e.g. 5103 (Standard), 1057516 (Redshift)
+  label: string;  // localized UI label, e.g. "Camera", "RS Camera"
+}
+
 export interface UiSlice {
   activeTool: ToolId;
   audioScrub: boolean;
@@ -16,6 +25,17 @@ export interface UiSlice {
   beatGridVisible: boolean;
   altHeld: boolean;
   altRmbZooming: boolean;
+
+  /** Available camera types in this C4D session (renderer-aware).
+   *  Populated on first Settings open via send('get-camera-types').
+   *  Empty until then; SettingsPanel triggers the fetch. */
+  availableCameraTypes: CameraTypeOption[];
+  /** User's preferred camera type — plugin ID. Used by the camera-
+   *  create handler (plan-4 commit 2). Persisted in the helper-BC
+   *  JSON blob (alongside renderMode etc.). Default 5103 = Standard
+   *  Ocamera. If a saved value is no longer available (e.g. user
+   *  uninstalled Redshift), fall back to the first available type. */
+  defaultCameraType: number;
 
   dragPreview: DragPreview | null;
   /** True from the first om-hover until om-cancel / om-drop. Unlike
@@ -56,6 +76,8 @@ export interface UiSlice {
   setActiveTool: (tool: ToolId) => void;
   setAudioScrub: (on: boolean) => void;
   setSettingsOpen: (open: boolean) => void;
+  setAvailableCameraTypes: (types: CameraTypeOption[]) => void;
+  setDefaultCameraType: (id: number) => void;
   setSnapEnabled: (on: boolean) => void;
   setSnapIndicatorFrames: (frames: number[]) => void;
   setDetectingBeats: (on: boolean) => void;
@@ -93,6 +115,9 @@ export const createUiSlice: StateCreator<State, [], [], UiSlice> = (set) => ({
   altHeld: false,
   altRmbZooming: false,
 
+  availableCameraTypes: [],
+  defaultCameraType: 5103,  // Ocamera (Standard) — always available
+
   dragPreview: null,
   omDragging: false,
   isHydrated: false,
@@ -109,6 +134,8 @@ export const createUiSlice: StateCreator<State, [], [], UiSlice> = (set) => ({
   setActiveTool: (tool) => set({ activeTool: tool }),
   setAudioScrub: (on) => set({ audioScrub: on }),
   setSettingsOpen: (open) => set({ settingsOpen: open }),
+  setAvailableCameraTypes: (types) => set({ availableCameraTypes: types }),
+  setDefaultCameraType: (id) => set({ defaultCameraType: id }),
   setSnapEnabled: (on) => set({ snapEnabled: on }),
   setSnapIndicatorFrames: (frames) => set((s) => {
     // Reference-equality skip — pointermove fires every frame at a

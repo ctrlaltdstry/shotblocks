@@ -77,7 +77,12 @@ export type HostOutbound =
       // filters orphans (objectId not in _cameraLinks / link resolves
       // null) defensively; JS pre-filters by skipping objectId === 0.
       shots: { clipId: number; name: string; inFrame: number; outFrame: number; objectId: number }[];
-    };
+    }
+  // Settings → Defaults → camera-type dropdown. JS asks at Settings
+  // panel open; C++ walks the known camera plugin IDs (Ocamera 5103,
+  // Orscamera 1057516, …) and returns the ones that resolve, with
+  // their localized labels. See plan-4 R1.
+  | { kind: 'get-camera-types' };
 
 type Listener = (msg: HostInbound) => void;
 

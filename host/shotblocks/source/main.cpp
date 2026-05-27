@@ -165,6 +165,24 @@ static const Int32 BCKEY_HELPER_MARKER = 1100;   // String: identifies the helpe
 static const Int32 BCKEY_CLIPS_JSON    = 1101;   // String: JSON tracks + nextClipId
 static const Int32 BCKEY_VERSION       = 1102;   // Int32: monotonic save version
 static const Int32 BCKEY_CAM_LINK_BASE = 2100;   // BaseLink at BASE + objectId
+
+// Known camera object plugin IDs. Add a new entry per renderer as their
+// IDs become known. Standard and Redshift are documented in
+// ge_prepass.h (Ocamera=5103, Orscamera=1057516). Octane / Arnold are
+// not shipped with C4D — their IDs can be added here when verified on
+// a machine that has them.
+// See .agent/plans/v1-plan-4-camera-workflow.md (R1) for the research
+// trail.
+struct CameraTypeCandidate {
+	Int32        id;
+	const char*  defaultLabel; // shown only if BasePlugin::GetName returns empty
+};
+static const CameraTypeCandidate kCameraCandidates[] = {
+	{ 5103,    "Standard Camera" },  // Ocamera — always available
+	{ 1057516, "RS Camera"       },  // Orscamera — Redshift "New Camera Object"
+};
+static constexpr Int kCameraCandidateCount =
+	sizeof(kCameraCandidates) / sizeof(kCameraCandidates[0]);
 // Audio bytes per clip — base64-encoded original-format bytes (WAV /
 // MP3) keyed by BCKEY_AUDIO_BASE + clipId. Written once on drop
 // (audio-add), read on demand from JS (audio-fetch), removed on clip
@@ -1527,6 +1545,7 @@ private:
 			_v2LoopEnabled = body.find("\"enabled\":true") != std::string::npos;
 			return "{\"ok\":true,\"kind\":\"set-loop-ack\"}";
 		}
+		if (body.find("\"kind\":\"get-camera-types\"") != std::string::npos) return HandleGetCameraTypes();
 		if (body.find("\"kind\":\"audio-add\"") != std::string::npos)
 		{
 			// JS pushes the original audio bytes (base64) once at drop
@@ -1921,6 +1940,41 @@ private:
 
 		br->Open();
 		return "{\"ok\":true,\"kind\":\"add-to-queue-ack\",\"status\":\"Added scene to Render Queue\"}";
+	}
+
+	// Settings → Defaults → Default camera type. Walks the known camera
+	// plugin IDs (kCameraCandidates) and returns the subset that actually
+	// resolves in this C4D session — RS Camera only shows when Redshift
+	// is loaded. See plan-4 R1.
+	//
+	// Label policy: use the candidate's hardcoded defaultLabel rather
+	// than BasePlugin::GetName(). C4D's GetName returns "Camera" for
+	// Ocamera which is ambiguous in a settings dropdown alongside other
+	// camera types — "Standard Camera" reads more clearly. The cost is
+	// English-only dropdown labels (no localization), acceptable for
+	// plugin-config UI.
+	std::string HandleGetCameraTypes()
+	{
+		std::string out = "{\"ok\":true,\"kind\":\"camera-types-ack\",\"types\":[";
+		bool first = true;
+		for (Int i = 0; i < kCameraCandidateCount; ++i)
+		{
+			const CameraTypeCandidate& c = kCameraCandidates[i];
+			if (!FindPlugin(c.id, PLUGINTYPE::OBJECT)) continue;
+			if (!first) out += ',';
+			first = false;
+			out += "{\"id\":";
+			out += std::to_string(c.id);
+			out += ",\"label\":\"";
+			for (const char* p = c.defaultLabel; *p; ++p)
+			{
+				if (*p == '"' || *p == '\\') out += '\\';
+				out += *p;
+			}
+			out += "\"}";
+		}
+		out += "]}";
+		return out;
 	}
 
 	// Individual-shots branch of add-to-queue.
