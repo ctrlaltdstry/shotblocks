@@ -37,6 +37,14 @@ export interface UiSlice {
    *  uninstalled Redshift), fall back to the first available type. */
   defaultCameraType: number;
 
+  /** A/V chip "write target" — the track that receives cursorless
+   *  inserts (Add Camera button, paste). One active chip per side.
+   *  Default 'V1' / 'A1' on fresh docs. Click a chip to activate
+   *  (deactivates the previously-active one on that side). Persisted
+   *  alongside renderMode etc. in the helper-BC JSON. */
+  activeVChip: string;
+  activeAChip: string;
+
   dragPreview: DragPreview | null;
   /** True from the first om-hover until om-cancel / om-drop. Unlike
    *  dragPreview (which goes null whenever the cursor is off a valid
@@ -78,6 +86,10 @@ export interface UiSlice {
   setSettingsOpen: (open: boolean) => void;
   setAvailableCameraTypes: (types: CameraTypeOption[]) => void;
   setDefaultCameraType: (id: number) => void;
+  /** Set the active V or A chip — auto-routes based on the trackId
+   *  prefix (V* → activeVChip, A* → activeAChip). No-op if the chip
+   *  is already active. */
+  setActiveChip: (trackId: string) => void;
   setSnapEnabled: (on: boolean) => void;
   setSnapIndicatorFrames: (frames: number[]) => void;
   setDetectingBeats: (on: boolean) => void;
@@ -117,6 +129,8 @@ export const createUiSlice: StateCreator<State, [], [], UiSlice> = (set) => ({
 
   availableCameraTypes: [],
   defaultCameraType: 5103,  // Ocamera (Standard) — always available
+  activeVChip: 'V1',
+  activeAChip: 'A1',
 
   dragPreview: null,
   omDragging: false,
@@ -136,6 +150,15 @@ export const createUiSlice: StateCreator<State, [], [], UiSlice> = (set) => ({
   setSettingsOpen: (open) => set({ settingsOpen: open }),
   setAvailableCameraTypes: (types) => set({ availableCameraTypes: types }),
   setDefaultCameraType: (id) => set({ defaultCameraType: id }),
+  setActiveChip: (trackId) => set((s) => {
+    if (trackId.startsWith('V')) {
+      return s.activeVChip === trackId ? s : { activeVChip: trackId };
+    }
+    if (trackId.startsWith('A')) {
+      return s.activeAChip === trackId ? s : { activeAChip: trackId };
+    }
+    return s;
+  }),
   setSnapEnabled: (on) => set({ snapEnabled: on }),
   setSnapIndicatorFrames: (frames) => set((s) => {
     // Reference-equality skip — pointermove fires every frame at a

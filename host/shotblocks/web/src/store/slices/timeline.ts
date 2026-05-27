@@ -670,10 +670,23 @@ export const createTimelineSlice: StateCreator<State, [], [], TimelineSlice> = (
           name: t.nameIsCustom ? t.name : namePrefix + (i + 1),
         }));
       }
+      // Reconcile the active chip on this side. After renumber the
+      // saved chip's trackId may point at a track that no longer
+      // exists (either because it was deleted or because IDs shifted).
+      // If so, fall back to the first track on this side (always V1/A1
+      // since the side is guaranteed to have at least one track).
+      const newTrackIds = new Set(next.map((t) => (side === 'video' ? 'V' : 'A') + t.id));
+      const chipKey = side === 'video' ? 'activeVChip' : 'activeAChip';
+      const currentChip = side === 'video' ? s.activeVChip : s.activeAChip;
+      const chipPatch = newTrackIds.has(currentChip)
+        ? {}
+        : { [chipKey]: (side === 'video' ? 'V' : 'A') + next[0].id };
+
       ok = true;
       return {
         ...(side === 'video' ? { videoTracks: next } : { audioTracks: next }),
         selectedClipIds: newSel,
+        ...chipPatch,
       };
     });
     return ok;
@@ -720,7 +733,18 @@ export const createTimelineSlice: StateCreator<State, [], [], TimelineSlice> = (
       }
       removed = tracks.length - next.length;
       if (removed === 0) return s;
-      return side === 'video' ? { videoTracks: next } : { audioTracks: next };
+      // Same chip reconciliation as deleteTrack — fall back to V1/A1
+      // if the active chip's track no longer exists after renumber.
+      const newTrackIds = new Set(next.map((t) => (side === 'video' ? 'V' : 'A') + t.id));
+      const chipKey = side === 'video' ? 'activeVChip' : 'activeAChip';
+      const currentChip = side === 'video' ? s.activeVChip : s.activeAChip;
+      const chipPatch = newTrackIds.has(currentChip)
+        ? {}
+        : { [chipKey]: (side === 'video' ? 'V' : 'A') + next[0].id };
+      return {
+        ...(side === 'video' ? { videoTracks: next } : { audioTracks: next }),
+        ...chipPatch,
+      };
     });
     return removed;
   },

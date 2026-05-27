@@ -1,6 +1,37 @@
 import { useEffect, useRef, useState, type CSSProperties, type MouseEvent } from 'react';
 import { useStore, type Track } from '../store';
 
+/** Per-track "chip" — the active chip on a side marks that track as
+ *  the write target for cursorless inserts (Add Camera button, paste).
+ *  One active per side; default V1/A1. See plan-4 commit 3 + R4.
+ *
+ *  Visual (Figma 478:3133 inactive / 478:3144 active):
+ *   - 36x63 flat rect, 4px radius, no border/shadow
+ *   - Inactive: grey-16 bg + grey-24 text (faint plate)
+ *   - Active:   primary-highlight bg + white text
+ *   - Text:     track id ("V1", "A2", ...) Inter Semi-Bold 10px
+ *  Click an inactive chip to activate it. Click an active chip = no-op
+ *  (setActiveChip in the store short-circuits).  */
+function ChipButton({ trackId }: { trackId: string }) {
+  const active = useStore((s) =>
+    trackId.startsWith('V') ? s.activeVChip === trackId
+    : trackId.startsWith('A') ? s.activeAChip === trackId
+    : false);
+  return (
+    <button
+      type="button"
+      className={'track-header__chip' + (active ? ' is-active' : '')}
+      onMouseDown={(e) => e.preventDefault()}
+      onClick={(e) => {
+        e.stopPropagation();
+        useStore.getState().setActiveChip(trackId);
+      }}
+    >
+      {trackId}
+    </button>
+  );
+}
+
 /** Track header rendered inside the headers column. Layout matches the
  *  Figma track-header components (nodes 120:431 video / 120:697 audio):
  *  a 65px row with a lock toggle, a per-side control (eye for video,
@@ -93,6 +124,7 @@ export function TrackHeader({ track, side }: { track: Track; side: 'video' | 'au
             style={{ '--icon-w': '12px', '--icon-h': '13.2px' } as CSSProperties}
           />
         </button>
+        <ChipButton trackId={trackId} />
         {isVideo ? (
           <button
             type="button"

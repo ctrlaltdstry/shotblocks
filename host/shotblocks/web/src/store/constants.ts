@@ -8,7 +8,7 @@ export const SNAP_PIXEL_RADIUS = 8;
 /** Track-headers column width bounds (px). The minimum is the
  *  original fixed width — the column can be widened, never narrowed
  *  below it. */
-export const HEADERS_MIN_W = 200;
+export const HEADERS_MIN_W = 250;
 export const HEADERS_MAX_W = 600;
 
 /** Natural / floor lane heights (px). Video tracks render at the

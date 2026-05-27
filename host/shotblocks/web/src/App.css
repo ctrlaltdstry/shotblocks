@@ -137,7 +137,7 @@ body.is-resizing-headers .body { transition: none; }
   border-left: 1px solid var(--color-grey-16);
   border-radius: 6px 0 0 6px;
   box-sizing: border-box;
-  display: flex; align-items: center;
+  display: flex; align-items: center; justify-content: space-around;
   color: var(--color-grey-50);
   font-size: 11px;
 }
@@ -628,19 +628,50 @@ body.is-resizing-headers .body { transition: none; }
 .track-header.is-audio,
 .stack__audios .lane { flex-basis: var(--audio-track-h); }
 
-/* Track-header inner layout — [lock + eye/MS] | label, based on the
-   Figma track-header components (nodes 120:431 / 120:697). The lock
-   and the per-side control live in a fixed-width controls group
-   (space-between, so they sit at its two ends with even spacing);
-   the label column takes all remaining width, so a wider headers
-   column grows the label while the icons stay put + aligned. */
+/* Track-header inner layout — lock | chip | eye/MS | label, distributed
+   evenly across the row so a narrow header doesn't crowd the controls
+   together. The label takes the remaining space at the end and stays
+   right-aligned. Based on Figma track-header components (nodes 120:431
+   / 120:697 + chip 478:3133/478:3144). */
 .track-header__row {
   flex: 1 1 0; min-width: 0;
   display: flex; align-items: center;
 }
 .track-header__controls {
-  flex: 0 0 96px;
-  display: flex; align-items: center; justify-content: space-between;
+  /* Lock + chip + per-side control distributed evenly. Width grows
+     as the header column gets wider so the controls breathe. Capped
+     so an over-wide header doesn't strand controls far from the label. */
+  flex: 1 1 auto;
+  max-width: 200px;
+  display: flex; align-items: center; justify-content: space-around;
+}
+
+/* Track chip — Figma 478:3133 (inactive) / 478:3144 (active). 36x63
+   flat pill that marks this track as the write target for cursorless
+   inserts (Add Camera button, paste) when active. One active per side.
+   Pure two-token swap on activation (bg + text color); no size, border,
+   or shadow change. See plan-4 commit 3 + R4. */
+.track-header__chip {
+  flex: 0 0 36px;
+  width: 36px;
+  height: 63px;
+  padding: 0;
+  border: 0;
+  border-radius: 4px;
+  background: var(--color-grey-16);
+  color: var(--color-grey-24);
+  font-family: Inter, sans-serif;
+  font-weight: 600;
+  font-size: 10px;
+  letter-spacing: -0.1px;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+.track-header__chip.is-active {
+  background: var(--color-timeline-primary-highlight);
+  color: var(--color-grey-white);
 }
 
 /* Bare-button reset for the clickable header controls (lock, eye,

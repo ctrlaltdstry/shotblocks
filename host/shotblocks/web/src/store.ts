@@ -145,6 +145,16 @@ export interface State {
   // Orscamera). Persisted in the helper-BC JSON. Defaults to Standard.
   defaultCameraType: number;
 
+  // A/V chip "write target" — the track that receives cursorless
+  // inserts (Add Camera button, paste). One active chip per side.
+  // Default 'V1' / 'A1' on fresh docs; persisted. Click any chip to
+  // activate (deactivates the previously-active one on that side).
+  // Click the already-active chip = no-op. New auto-spawned tracks
+  // do NOT become the active target — user clicks explicitly. See
+  // plan-4 commit 3 + R4.
+  activeVChip: string;
+  activeAChip: string;
+
   // Snap-to-edge toggle (utilities strip "Snap" button). When OFF,
   // body/trim/roll drags are free of magnetic pull. When ON, they
   // snap to nearby edit points within SNAP_PIXEL_RADIUS px. Shift
@@ -345,6 +355,7 @@ export interface State {
   setC4dAudioFollows: (on: boolean) => void;
   setAvailableCameraTypes: (types: { id: number; label: string }[]) => void;
   setDefaultCameraType: (id: number) => void;
+  setActiveChip: (trackId: string) => void;
   setAudioScrub: (on: boolean) => void;
   setSettingsOpen: (open: boolean) => void;
   setSnapEnabled: (on: boolean) => void;

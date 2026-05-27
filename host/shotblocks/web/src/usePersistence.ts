@@ -92,6 +92,11 @@ interface SavedState {
    *  plugin ID. Optional so older docs default to 5103 (Standard
    *  Ocamera). See plan-4 commit 1. */
   defaultCameraType?: number;
+  /** A/V chip "write target" — the trackId that receives cursorless
+   *  inserts. One per side. Optional so older docs default to V1/A1.
+   *  See plan-4 commit 3. */
+  activeVChip?: string;
+  activeAChip?: string;
 }
 
 /** Resolve a saved track's per-track flags, defaulting any the doc
@@ -186,7 +191,9 @@ export function usePersistence(): void {
           && s.markers === prev.markers
           && s.markersVisible === prev.markersVisible
           && s.renderMode === prev.renderMode
-          && s.defaultCameraType === prev.defaultCameraType) return;
+          && s.defaultCameraType === prev.defaultCameraType
+          && s.activeVChip === prev.activeVChip
+          && s.activeAChip === prev.activeAChip) return;
 
       // Detect audio MEDIA that is no longer referenced by any clip,
       // and free the persisted bytes. Audio lives in C++'s helper
@@ -351,6 +358,16 @@ async function loadFromHost(skipNextSave: React.MutableRefObject<boolean>) {
     const savedCamType = Number.isInteger(parsed.defaultCameraType) && (parsed.defaultCameraType as number) > 0
       ? (parsed.defaultCameraType as number)
       : 5103;
+    // A/V chip targets — reconcile against the loaded tracks. If a
+    // saved chip points at a track that no longer exists (e.g. someone
+    // hand-edited the doc or the trackId convention changed), fall
+    // back to the first track on that side (V1 / A1 after backfill).
+    const vChipSaved = typeof parsed.activeVChip === 'string' ? parsed.activeVChip : 'V1';
+    const aChipSaved = typeof parsed.activeAChip === 'string' ? parsed.activeAChip : 'A1';
+    const vTrackIds = new Set(safeVideoTracks.map((t) => 'V' + t.id));
+    const aTrackIds = new Set(safeAudioTracks.map((t) => 'A' + t.id));
+    const activeVChip = vTrackIds.has(vChipSaved) ? vChipSaved : ('V' + safeVideoTracks[0].id);
+    const activeAChip = aTrackIds.has(aChipSaved) ? aChipSaved : ('A' + safeAudioTracks[0].id);
     useStore.setState({
       videoTracks: safeVideoTracks,
       audioTracks: safeAudioTracks,
@@ -358,6 +375,8 @@ async function loadFromHost(skipNextSave: React.MutableRefObject<boolean>) {
       markersVisible,
       renderMode,
       defaultCameraType: savedCamType,
+      activeVChip,
+      activeAChip,
       isHydrated: true,
     });
 
@@ -456,6 +475,8 @@ function saveToHost() {
     markersVisible: s.markersVisible,
     renderMode: s.renderMode,
     defaultCameraType: s.defaultCameraType,
+    activeVChip: s.activeVChip,
+    activeAChip: s.activeAChip,
   };
   // Object ids list — every objectId currently referenced by a clip.
   // C++ uses this to prune stale BaseLinks from the helper.
