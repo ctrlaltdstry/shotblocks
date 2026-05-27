@@ -1,4 +1,5 @@
 import { useAddCamera } from '../useAddCamera';
+import { send } from '../lib/host';
 
 /** Persistent "Add camera" button — Figma node 468:3084.
  *
@@ -13,18 +14,30 @@ import { useAddCamera } from '../useAddCamera';
 export function AddCameraButton() {
   const addCamera = useAddCamera();
   return (
-    <button
-      type="button"
-      className="add-camera-button"
-      // Same focus-blur pattern as TrackHeader buttons + DebugOverlay
-      // Copy/Clear. Without this, the button retains keyboard focus
-      // after click — Tab then cycles through the page, and a
-      // subsequent Delete (to remove the just-created clip) targets
-      // the button instead of reaching the timeline.
-      onMouseDown={(e) => e.preventDefault()}
-      onClick={(e) => { e.stopPropagation(); void addCamera(); }}
-    >
-      Add camera
-    </button>
+    <>
+      <button
+        type="button"
+        className="add-camera-button"
+        // Same focus-blur pattern as TrackHeader buttons + DebugOverlay
+        // Copy/Clear. Without this, the button retains keyboard focus
+        // after click — Tab then cycles through the page, and a
+        // subsequent Delete (to remove the just-created clip) targets
+        // the button instead of reaching the timeline.
+        onMouseDown={(e) => e.preventDefault()}
+        onClick={(e) => { e.stopPropagation(); void addCamera(); }}
+      >
+        Add camera
+      </button>
+      {/* SPIKE (plan-4.1) — dumps Stage CTrack structure to Console. */}
+      <button
+        type="button"
+        className="add-camera-button"
+        style={{ right: 410 }}
+        onMouseDown={(e) => e.preventDefault()}
+        onClick={(e) => { e.stopPropagation(); void send({ kind: 'dump-stage' }); }}
+      >
+        Dump stage
+      </button>
+    </>
   );
 }

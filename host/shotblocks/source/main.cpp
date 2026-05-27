@@ -76,6 +76,12 @@ using namespace cinema;
 
 static const Int32 g_shotblocks_cmd_id = 1000007;
 
+// Plan 4.1 commit 3 — Stage Driver tag plugin id. Hidden tag attached
+// to the hidden Stage helper; receives MSG_MULTI_RENDERNOTIFICATION
+// to toggle the Stage's enable flag around renders + writes the
+// Stage's static STAGEOBJECT_CLINK per render-frame.
+static const Int32 g_shotblocks_stage_driver_id = 1000008;
+
 // Custom CoreMessage id the HTTP worker uses to wake the main thread.
 // We piggyback the plugin id so dialog instances filter their own work.
 static const Int32 g_sb_msg_http_request = g_shotblocks_cmd_id;
@@ -227,16 +233,28 @@ static BaseObject* GetOrCreateV2Helper(BaseDocument* doc)
 {
 	if (!doc) return nullptr;
 	BaseObject* helper = FindV2Helper(doc);
-	if (helper) return helper;
-	helper = BaseObject::Alloc(Onull);
-	if (!helper) return nullptr;
-	helper->SetName(maxon::String(HELPER_NULL_NAME));
-	BaseContainer* bc = helper->GetDataInstance();
-	if (bc)
-		bc->SetString(BCKEY_HELPER_MARKER, maxon::String(HELPER_MARKER_VALUE));
-	helper->ChangeNBit(NBIT::OHIDE, NBITCONTROL::SET);
-	doc->InsertObject(helper, nullptr, nullptr);
-	GePrint("[Shotblocks/v2] created persistence helper"_s);
+	if (!helper)
+	{
+		helper = BaseObject::Alloc(Onull);
+		if (!helper) return nullptr;
+		helper->SetName(maxon::String(HELPER_NULL_NAME));
+		BaseContainer* bc = helper->GetDataInstance();
+		if (bc)
+			bc->SetString(BCKEY_HELPER_MARKER, maxon::String(HELPER_MARKER_VALUE));
+		helper->ChangeNBit(NBIT::OHIDE, NBITCONTROL::SET);
+		doc->InsertObject(helper, nullptr, nullptr);
+		GePrint("[Shotblocks/v2] created persistence helper"_s);
+	}
+	// Plan 4.1 commit 3 — ensure the camera-driver tag is attached.
+	// Tag fires Execute per frame in render + native scrub + native
+	// playback, routing the active camera into the BaseDraw via the
+	// SetParameter recipe. Idempotent: looks for an existing tag.
+	if (!helper->GetTag(g_shotblocks_stage_driver_id))
+	{
+		BaseTag* driver = helper->MakeTag(g_shotblocks_stage_driver_id);
+		if (driver)
+			GePrint("[Shotblocks/v2] attached Camera Driver tag"_s);
+	}
 	return helper;
 }
 
@@ -258,27 +276,43 @@ static BaseObject* FindStageHelper(BaseDocument* doc)
 
 // Plan 4.1 — find or create the hidden Stage helper. Dormant on
 // creation (ID_BASEOBJECT_GENERATOR_FLAG = false) so it doesn't
-// interfere with interactive camera selection. The render-time toggle
-// (Commit 3) will flip it on for the duration of a render. Hidden via
-// NBIT::OHIDE so it doesn't appear in the OM.
+// interfere with interactive camera selection. The driver tag's
+// MSG_MULTI_RENDERNOTIFICATION handler flips it on for renders.
+// Hidden via NBIT::OHIDE so it doesn't appear in the OM.
+//
+// Commit 3 addition: ensures the Stage Driver tag is attached. The
+// driver receives MSG_MULTI_RENDERNOTIFICATION + ticks Execute per
+// frame to write the right camera into Stage's STAGEOBJECT_CLINK.
 static BaseObject* GetOrCreateStageHelper(BaseDocument* doc)
 {
 	if (!doc) return nullptr;
 	BaseObject* stage = FindStageHelper(doc);
-	if (stage) return stage;
-	stage = BaseObject::Alloc(Ostage);
-	if (!stage) return nullptr;
-	stage->SetName(maxon::String(STAGE_HELPER_NAME));
-	BaseContainer* bc = stage->GetDataInstance();
-	if (bc)
-		bc->SetString(BCKEY_HELPER_MARKER, maxon::String(STAGE_HELPER_MARKER_VALUE));
-	// Dormant by default. Driver tag (Commit 3) toggles ON for renders.
-	stage->SetParameter(
-		ConstDescIDLevel(ID_BASEOBJECT_GENERATOR_FLAG),
-		GeData(false), DESCFLAGS_SET::NONE);
-	stage->ChangeNBit(NBIT::OHIDE, NBITCONTROL::SET);
-	doc->InsertObject(stage, nullptr, nullptr);
-	GePrint("[Shotblocks/v2] created hidden Stage helper (dormant)"_s);
+	if (!stage)
+	{
+		stage = BaseObject::Alloc(Ostage);
+		if (!stage) return nullptr;
+		stage->SetName(maxon::String(STAGE_HELPER_NAME));
+		BaseContainer* bc = stage->GetDataInstance();
+		if (bc)
+			bc->SetString(BCKEY_HELPER_MARKER, maxon::String(STAGE_HELPER_MARKER_VALUE));
+		// Dormant by default. Driver tag toggles ON for renders.
+		stage->SetParameter(
+			ConstDescIDLevel(ID_BASEOBJECT_GENERATOR_FLAG),
+			GeData(false), DESCFLAGS_SET::NONE);
+		// TEST — leave Stage visible. NBIT_OHIDE may exclude the Stage
+		// from render evaluation entirely. If render starts switching
+		// cameras with the Stage visible, that's the blocker. Restore
+		// NBIT_OHIDE only if we can confirm render works hidden too.
+		// stage->ChangeNBit(NBIT::OHIDE, NBITCONTROL::SET);
+		doc->InsertObject(stage, nullptr, nullptr);
+		GePrint("[Shotblocks/v2] created Stage helper (dormant, visible for test)"_s);
+	}
+	// Note (plan-4.1 architectural pivot 2): the camera-driver tag
+	// no longer attaches to the Stage — it attaches to the helper
+	// Onull instead, and routes BaseDraw::SetSceneCamera directly
+	// per frame. The Stage helper is kept (idle) so the original
+	// approach can be revisited if Maxon clarifies the SetParameter-
+	// from-tag-on-Stage issue. See GetOrCreateV2Helper for the tag.
 	return stage;
 }
 
@@ -659,6 +693,15 @@ private:
 class ShotblocksDialog : public GeDialog
 {
 public:
+	// Plan 4.1 — per-clip-boundary camera event the driver tag reads
+	// each render-frame. Pushed from JS via set-stage-cameras.
+	struct StageCameraEvent { Int32 frame; Int32 objectId; };
+
+	// Static accessor for the driver tag (plan-4.1 commit 3) to read
+	// _stageEvents + _cameraLinks per render-frame. Set in ctor, cleared
+	// in dtor; nullptr when the dialog isn't alive (renders won't switch).
+	static ShotblocksDialog* GetInstance() { return s_instance; }
+
 	ShotblocksDialog()
 		: _htmlView(nullptr)
 		, _navigated(false)
@@ -667,7 +710,9 @@ public:
 		, _hoverActive(false)
 		, _lastTimeChangedTickMs(0)
 		, _httpPort(0)
-	{}
+	{
+		s_instance = this;
+	}
 
 	~ShotblocksDialog() override
 	{
@@ -675,7 +720,28 @@ public:
 		// the accept thread can hand the main thread a request it can't
 		// service.
 		_server.Stop();
+		if (s_instance == this) s_instance = nullptr;
 	}
+
+	// Driver-tag accessors (plan-4.1 commit 3).
+	const std::vector<StageCameraEvent>& GetStageEvents() const { return _stageEvents; }
+	BaseObject* ResolveCameraForObjectId(BaseDocument* doc, Int32 objectId) const
+	{
+		if (objectId <= 0 || !doc) return nullptr;
+		auto it = _cameraLinks.find(objectId);
+		if (it == _cameraLinks.end() || !it->second) return nullptr;
+		// GetLink(doc) returns null during render evaluation — the link
+		// is doc-scoped and render uses a different evaluation context.
+		// ForceGetLink ignores the doc and returns the live target.
+		BaseList2D* link = it->second->GetLink(doc);
+		if (!link) link = it->second->ForceGetLink();
+		return static_cast<BaseObject*>(link);
+	}
+
+private:
+	static ShotblocksDialog* s_instance;
+
+public:
 
 	Bool CreateLayout() override
 	{
@@ -1611,6 +1677,7 @@ private:
 		if (body.find("\"kind\":\"create-camera\"") != std::string::npos) return HandleCreateCamera(body);
 		if (body.find("\"kind\":\"select-in-om\"") != std::string::npos) return HandleSelectInOm(body);
 		if (body.find("\"kind\":\"set-stage-cameras\"") != std::string::npos) return HandleSetStageCameras(body);
+		if (body.find("\"kind\":\"dump-stage\"") != std::string::npos) return HandleDumpStage();
 		if (body.find("\"kind\":\"audio-add\"") != std::string::npos)
 		{
 			// JS pushes the original audio bytes (base64) once at drop
@@ -2099,6 +2166,37 @@ private:
 			}
 		}
 
+		// Name-uniquify the new camera. C4D's InsertObject does NOT
+		// auto-uniquify; without this every Add Camera click produces
+		// another object literally named "Camera". Walk every BaseObject
+		// in the doc (recursively, since cameras often nest under nulls)
+		// and find the lowest unused ".N" suffix on the base name.
+		{
+			const String baseName = cam->GetName();
+			std::set<String> existingNames;
+			std::function<void(BaseObject*)> collect = [&](BaseObject* op) {
+				while (op)
+				{
+					existingNames.insert(op->GetName());
+					if (op->GetDown()) collect(op->GetDown());
+					op = op->GetNext();
+				}
+			};
+			collect(doc->GetFirstObject());
+			if (existingNames.find(baseName) != existingNames.end())
+			{
+				for (Int32 n = 1; n < 9999; ++n)
+				{
+					String candidate = baseName + "." + String::IntToString(n);
+					if (existingNames.find(candidate) == existingNames.end())
+					{
+						cam->SetName(candidate);
+						break;
+					}
+				}
+			}
+		}
+
 		// Atomic undo wrap (per R3 / microsdk pattern). NEWOBJ is added
 		// AFTER InsertObject (different from other undo types).
 		// SetActiveObject also adds its own undo entry inside this block,
@@ -2153,6 +2251,82 @@ private:
 		return out;
 	}
 
+	// Plan 4.1 spike — dump every Ostage's CTrack/CKey structure so we
+	// can mirror the working data shape (when the keyframes were made
+	// by C4D itself via Auto-Key) in our C++ writes.
+	std::string HandleDumpStage()
+	{
+		BaseDocument* doc = GetActiveDocument();
+		if (!doc) return "{\"ok\":false,\"error\":\"no doc\"}";
+		Int stageCount = 0;
+		for (BaseObject* op = doc->GetFirstObject(); op; op = op->GetNext())
+		{
+			if (op->GetType() != Ostage) continue;
+			++stageCount;
+			{
+				GeData eg;
+				op->GetParameter(ConstDescIDLevel(ID_BASEOBJECT_GENERATOR_FLAG), eg, DESCFLAGS_GET::NONE);
+				Char* nameC = op->GetName().GetCStringCopy();
+				char buf[160];
+				_snprintf_s(buf, sizeof(buf), _TRUNCATE,
+					"[dump] Stage name='%s' enable=%d",
+					nameC ? nameC : "(null)", (int)eg.GetBool());
+				if (nameC) DeleteMem(nameC);
+				GePrint(maxon::String(buf));
+			}
+			CTrack* track = op->GetFirstCTrack();
+			Int trackIdx = 0;
+			while (track)
+			{
+				DescID did = track->GetDescriptionID();
+				Int32 cat = track->GetTrackCategory();
+				char buf[200];
+				_snprintf_s(buf, sizeof(buf), _TRUNCATE,
+					"[dump]   track #%lld depth=%d level0_id=%d level0_dtype=%d level0_creator=%d category=%d",
+					(long long)trackIdx, (int)did.GetDepth(),
+					(int)did[0].id, (int)did[0].dtype, (int)did[0].creator,
+					(int)cat);
+				GePrint(maxon::String(buf));
+				CCurve* curve = track->GetCurve();
+				if (curve)
+				{
+					const Int32 keyCount = curve->GetKeyCount();
+					for (Int32 k = 0; k < keyCount; ++k)
+					{
+						CKey* key = curve->GetKey(k);
+						if (!key) continue;
+						const Int32 fps = doc->GetFps();
+						const Int32 keyFrame = key->GetTime().GetFrame(fps);
+						const CINTERPOLATION interp = key->GetInterpolation();
+						const GeData& gd = key->GetGeData();
+						const Int32 gdType = gd.GetType();
+						char kbuf[200];
+						_snprintf_s(kbuf, sizeof(kbuf), _TRUNCATE,
+							"[dump]     key #%d frame=%d interp=%d geDataType=%d",
+							(int)k, (int)keyFrame, (int)interp, (int)gdType);
+						GePrint(maxon::String(kbuf));
+						if (gdType == DA_ALIASLINK)
+						{
+							BaseList2D* linked = gd.GetLink(doc);
+							Char* rn = linked ? linked->GetName().GetCStringCopy() : nullptr;
+							char rbuf[200];
+							_snprintf_s(rbuf, sizeof(rbuf), _TRUNCATE,
+								"[dump]       link resolves to: %s",
+								rn ? rn : "(null)");
+							if (rn) DeleteMem(rn);
+							GePrint(maxon::String(rbuf));
+						}
+					}
+				}
+				track = track->GetNext();
+				++trackIdx;
+			}
+		}
+		if (stageCount == 0)
+			GePrint("[dump] no Ostage objects in active doc"_s);
+		return "{\"ok\":true,\"kind\":\"dump-stage-ack\"}";
+	}
+
 	// Plan 4 commit 5 — selection-follows-playhead. JS resolves the
 	// active clip at the playhead on scrub-end / playback-stop AND
 	// document.hasFocus() is true; sends the clip's objectId here so
@@ -2175,13 +2349,16 @@ private:
 		return "{\"ok\":true,\"kind\":\"select-in-om-ack\",\"selected\":true}";
 	}
 
-	// Plan 4.1 commit 2 — cache the per-clip-boundary camera events JS
-	// computed via lib/stageCameras.ts. The driver tag (Commit 3) reads
-	// this cache per render-frame and writes Stage's STAGEOBJECT_CLINK
-	// directly. We deliberately do NOT animate the Stage's parameter via
-	// CKey — three attempts to write a BaseLink into a CKey produced
-	// empty link fields (see plan-4.1 spike + research notes). The
-	// per-frame parameter-write pattern is the architectural fallback.
+	// Plan 4.1 commit 2 — rebuild the hidden Stage helper's animation
+	// track on STAGEOBJECT_CLINK from the per-boundary event list JS
+	// computed via lib/stageCameras.ts.
+	//
+	// CRITICAL: the DescID must use creator=Ostage (5136). Without it
+	// the track lives in a different namespace from the parameter the
+	// renderer reads — keys visually appear but are inert. Verified by
+	// dumping a working hand-keyed Stage in C4D (plan-4.1 dump-stage
+	// spike): a working CKey has DescID(level0_id=1100, dtype=133,
+	// creator=5136). Three prior failed attempts all passed creator=0.
 	//
 	// Body shape:
 	//   {"kind":"set-stage-cameras","events":[{"frame":0,"objectId":1},
@@ -2190,10 +2367,11 @@ private:
 	{
 		BaseDocument* doc = GetActiveDocument();
 		if (!doc) return "{\"ok\":false,\"error\":\"no doc\"}";
-		// Ensure the Stage helper exists so the driver tag has somewhere
-		// to attach to (Commit 3 wires that up). Idempotent.
-		GetOrCreateStageHelper(doc);
+		BaseObject* stage = GetOrCreateStageHelper(doc);
+		if (!stage) return "{\"ok\":false,\"error\":\"stage helper alloc failed\"}";
 
+		// Cache the events too — useful for the driver tag's Enable
+		// toggle and for diagnostics.
 		std::vector<StageCameraEvent> next;
 		auto pos = body.find("\"events\"");
 		if (pos != std::string::npos)
@@ -2219,8 +2397,50 @@ private:
 		}
 		_stageEvents = std::move(next);
 
-		std::string out = "{\"ok\":true,\"kind\":\"set-stage-cameras-ack\",\"count\":";
-		out += std::to_string((long long)_stageEvents.size());
+		// Build the animation track with the CORRECT DescID (creator=
+		// Ostage). Flush existing keys for a fresh rebuild.
+		const DescID clinkDid = ConstDescID(DescLevel(STAGEOBJECT_CLINK, DTYPE_BASELISTLINK, Ostage));
+		CTrack* track = stage->FindCTrack(clinkDid);
+		if (track)
+		{
+			CCurve* curve = track->GetCurve();
+			if (curve) curve->FlushKeys();
+		}
+		else
+		{
+			track = CTrack::Alloc(stage, clinkDid);
+			if (!track) return "{\"ok\":false,\"error\":\"CTrack::Alloc failed\"}";
+			stage->InsertTrackSorted(track);
+		}
+		CCurve* curve = track->GetCurve();
+		if (!curve) return "{\"ok\":false,\"error\":\"no curve\"}";
+
+		const Int32 fps = doc->GetFps();
+		Int keyCount = 0;
+		for (const auto& ev : _stageEvents)
+		{
+			CKey* k = curve->AddKey(BaseTime(ev.frame, fps));
+			if (!k) continue;
+			BaseObject* cam = nullptr;
+			if (ev.objectId > 0)
+			{
+				auto it = _cameraLinks.find(ev.objectId);
+				if (it != _cameraLinks.end() && it->second)
+				{
+					cam = static_cast<BaseObject*>(it->second->GetLink(doc));
+					if (!cam) cam = static_cast<BaseObject*>(it->second->ForceGetLink());
+				}
+			}
+			GeData ld;
+			ld.SetBaseList2D(cam);
+			k->SetGeData(curve, ld);
+			k->SetInterpolation(curve, CINTERPOLATION::STEP);
+			++keyCount;
+		}
+		EventAdd();
+
+		std::string out = "{\"ok\":true,\"kind\":\"set-stage-cameras-ack\",\"keys\":";
+		out += std::to_string((long long)keyCount);
 		out += "}";
 		return out;
 	}
@@ -3047,7 +3267,6 @@ private:
 	// Stage's static STAGEOBJECT_CLINK parameter. Pushed from JS via
 	// set-stage-cameras on every timeline change. In-memory only;
 	// re-pushed on JS save-state if the dialog is reloaded.
-	struct StageCameraEvent { Int32 frame; Int32 objectId; };
 	std::vector<StageCameraEvent> _stageEvents;
 	// Helper-version bookkeeping. Bumped on every save-state write;
 	// EVMSG_CHANGE compares the current helper version against this
@@ -3091,6 +3310,95 @@ private:
 	// changed. Cleared on doc close / load.
 	AutoAlloc<BaseLink>  _renderSettingsSourceLink;
 	Bool                 _lastPushedStale{false};
+};
+
+// Plan 4.1 — singleton dialog pointer the driver tag reads to access
+// _stageEvents + _cameraLinks per render-frame. Nullptr when the dialog
+// isn't alive (renders won't switch in that case — acceptable since
+// closing the dialog implies the user isn't expecting Shotblocks behavior).
+ShotblocksDialog* ShotblocksDialog::s_instance = nullptr;
+
+// ---------------------------------------------------------------------------
+// Plan 4.1 commit 3 (architectural pivot 2) — Camera Driver tag.
+//
+// Attached to the hidden helper Onull (not the Stage — the Stage write
+// path doesn't work from a tag's Execute). On every Execute call (which
+// fires per frame during native scrub, native playback, and render),
+// the tag computes which clip is active at the current frame and writes
+// to BaseDraw::SetSceneCamera via the SetParameter recipe (the same
+// path our live JS→C++ set-active-camera handler uses).
+//
+// This means Shotblocks camera switching works whether the dialog is
+// open or closed, in interactive viewport AND in render. The dialog's
+// live router (useActiveClipRouter) still handles instant scrub
+// response when the dialog is open; the tag covers everything else.
+//
+// (g_shotblocks_stage_driver_id is defined at the top of the file —
+// name kept for stability with the BC marker even though the tag's
+// purpose has shifted away from the Stage.)
+// ---------------------------------------------------------------------------
+
+class ShotblocksStageDriverTag : public TagData
+{
+public:
+	static NodeData* Alloc() { return NewObjClear(ShotblocksStageDriverTag); }
+
+	// Run early in the priority pipeline so the BaseDraw's camera is
+	// set BEFORE generators / expressions consume it. INITIAL (1000)
+	// fires first.
+	Bool AddToExecution(BaseTag* tag, PriorityList* list) override
+	{
+		if (list && tag)
+			list->Add(tag, EXECUTIONPRIORITY_INITIAL, EXECUTIONFLAGS::NONE);
+		return true;
+	}
+
+	// MSG_MULTI_RENDERNOTIFICATION fires here. Toggle the Stage helper's
+	// Enable flag around the render lifecycle so its keyframed camera
+	// link drives render-time camera switching.
+	Bool Message(GeListNode* /*node*/, Int32 type, void* data) override
+	{
+		if (type == MSG_MULTI_RENDERNOTIFICATION && data)
+		{
+			RenderNotificationData* rn = static_cast<RenderNotificationData*>(data);
+			// Mark render lifecycle so Execute skips its per-frame
+			// BaseDraw write — Stage's keyframes drive during render.
+			_rendering = rn->start;
+			BaseDocument* doc = rn->doc ? rn->doc : GetActiveDocument();
+			if (doc)
+			{
+				BaseObject* stage = FindStageHelper(doc);
+				if (stage)
+				{
+					stage->SetParameter(
+						ConstDescIDLevel(ID_BASEOBJECT_GENERATOR_FLAG),
+						GeData(rn->start), DESCFLAGS_SET::NONE);
+				}
+			}
+		}
+		return TagData::Message(nullptr, type, data);
+	}
+
+	// Execute is intentionally a no-op. We previously had a per-frame
+	// BaseDraw write here that routed cameras on native C4D scrub when
+	// our dialog was closed — but it also forced the viewport onto the
+	// active clip's camera every frame, preventing the user from
+	// looking through any other camera. Removed by user request; we're
+	// back to "cameras only switch when our dialog is open" (JS-driven
+	// via useActiveClipRouter). The Stage helper drives render-time
+	// camera switching via its keyframed camera link.
+	EXECUTIONRESULT Execute(BaseTag* /*tag*/, BaseDocument* /*doc*/, BaseObject* /*op*/,
+		BaseThread* /*bt*/, Int32 /*priority*/, EXECUTIONFLAGS /*flags*/) override
+	{
+		return EXECUTIONRESULT::OK;
+	}
+
+private:
+	// Set true during MSG_MULTI_RENDERNOTIFICATION(start=true) and back
+	// to false on (start=false). When true, Execute skips its per-frame
+	// BaseDraw write so the Stage's keyframed camera link drives the
+	// render without interference.
+	Bool _rendering{false};
 };
 
 
@@ -3142,10 +3450,29 @@ static Bool RegisterShotblocksCommands()
 		NewObjClear(OpenShotblocksDialogCommand));
 }
 
+// Plan 4.1 commit 3 — register the hidden Stage Driver tag.
+//   - TAG_EXPRESSION: Execute fires per frame in the priority pipeline.
+//   - NO TAG_VISIBLE: tag doesn't show in OM's tag column.
+//   - PLUGINFLAG_HIDE + PLUGINFLAG_HIDEPLUGINMENU: doesn't appear in
+//     Create > New Tag menu either.
+static Bool RegisterShotblocksStageDriver()
+{
+	return RegisterTagPlugin(
+		g_shotblocks_stage_driver_id,
+		"Shotblocks Stage Driver"_s,
+		TAG_EXPRESSION | PLUGINFLAG_HIDE | PLUGINFLAG_HIDEPLUGINMENU,
+		ShotblocksStageDriverTag::Alloc,
+		""_s,        // no description resource — tag has no AM UI
+		nullptr,     // no icon — invisible anyway
+		0);
+}
+
 
 Bool cinema::PluginStart()
 {
 	if (!RegisterShotblocksCommands())
+		return false;
+	if (!RegisterShotblocksStageDriver())
 		return false;
 	GePrint("[Shotblocks/v2] PluginStart OK"_s);
 	return true;
