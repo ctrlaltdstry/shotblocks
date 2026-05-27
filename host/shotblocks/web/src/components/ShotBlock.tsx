@@ -1,5 +1,5 @@
 import { useRef, type CSSProperties } from 'react';
-import { useStore, SNAP_PIXEL_RADIUS, type Clip } from '../store';
+import { useStore, SNAP_PIXEL_RADIUS, EDGE_INTERACTIVE_MIN_PX, type Clip } from '../store';
 import { useClipDrag } from '../useClipDrag';
 import { WaveformCanvas } from './WaveformCanvas';
 import { LevelCurve } from './LevelCurve';
@@ -25,12 +25,14 @@ export function ShotBlock({
   side,
   trackId,
   thin,
+  widthPx,
   style,
 }: {
   clip: Clip;
   side: 'video' | 'audio';
   trackId: string;
   thin: boolean;
+  widthPx: number;
   style?: CSSProperties;
 }) {
   const edgeHover = useStore((s) => s.edgeHover);
@@ -146,12 +148,26 @@ export function ShotBlock({
     iconClass = 'icon icon--block-camera-off';
   }
 
+  // Label visibility — the .shot-block__label band uses a negative
+  // horizontal margin (margin: 0 -14px) to span the clip's full width.
+  // Combined with its own 13px+13px padding, the label's intrinsic
+  // min-content width is ~54px. When the clip is narrower than that,
+  // the label can't fit and forces the (absolute, inset:0, min-width:0)
+  // content box to render WIDER than the clip — the clip-path then
+  // clips to the wrong box, so text leaks past the clip's edge.
+  // CSS clamps couldn't beat this (verified via CDP: a 6px clip
+  // produced a 28px content box even with width:100%). Hiding the
+  // label below the same threshold the edge-zones use matches NLE
+  // convention (Premiere/FCP show no label on tiny clips). The native
+  // title tooltip is gated on the same flag so it doesn't float
+  // outside the clip rect.
+  const labelFits = widthPx >= EDGE_INTERACTIVE_MIN_PX;
   return (
     <div
       ref={ref}
       className={cls}
       style={style}
-      title={displayName}
+      title={labelFits ? displayName : undefined}
       data-clip={clip.id}
       onPointerDown={onClipPointerDown}
       onPointerMove={onRazorPointerMove}
@@ -167,7 +183,7 @@ export function ShotBlock({
         {side === 'audio' && !isOrphan && (clip.waveformVisible ?? true) && clip.peakLevels && clip.peakLevels.length > 0 && (
           <WaveformCanvas clip={clip} />
         )}
-        <div className="shot-block__label">{displayName}</div>
+        {labelFits && <div className="shot-block__label">{displayName}</div>}
         {side === 'video' && (
           <div className="shot-block__icon-wrap">
             <span className={iconClass} />
@@ -177,7 +193,7 @@ export function ShotBlock({
           <button
             className={'audio-waveform-toggle'
               + ((clip.waveformVisible ?? true) ? ' is-on' : ' is-off')}
-            title={(clip.waveformVisible ?? true) ? 'Hide waveform' : 'Show waveform'}
+            title={labelFits ? ((clip.waveformVisible ?? true) ? 'Hide waveform' : 'Show waveform') : undefined}
             onPointerDown={(e) => { e.stopPropagation(); }}
             onClick={(e) => {
               e.stopPropagation();

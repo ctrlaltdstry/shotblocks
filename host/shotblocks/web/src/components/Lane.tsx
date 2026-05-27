@@ -26,7 +26,7 @@ const THIN_THRESHOLD_PX = 32;
 
 export function Lane({ track, side }: { track: Track; side: 'video' | 'audio' }) {
   const laneRef = useRef<HTMLDivElement | null>(null);
-  const { height: laneHeight } = useElementSize(laneRef);
+  const { width: laneWidth, height: laneHeight } = useElementSize(laneRef);
   const h = useStore((s) => s.h);
   const setEdgeHover = useStore((s) => s.setEdgeHover);
   const setSelectedClip = useStore((s) => s.setSelectedClip);
@@ -436,6 +436,9 @@ export function Lane({ track, side }: { track: Track; side: 'video' | 'audio' })
       {track.clips.map((clip) => {
         const lanePctLeft  = ((clip.inFrame  - h.vMin) / visibleSpan) * 100;
         const lanePctRight = ((clip.outFrame - h.vMin) / visibleSpan) * 100;
+        const widthPx = laneWidth > 0
+          ? ((clip.outFrame - clip.inFrame) / visibleSpan) * laneWidth
+          : 0;
         return (
           <ShotBlock
             key={clip.id}
@@ -443,6 +446,7 @@ export function Lane({ track, side }: { track: Track; side: 'video' | 'audio' })
             side={side}
             trackId={trackId}
             thin={thin}
+            widthPx={widthPx}
             style={{
               left:  lanePctLeft + '%',
               right: (100 - lanePctRight) + '%',

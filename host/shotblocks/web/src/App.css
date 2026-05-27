@@ -1464,6 +1464,12 @@ body.is-hand-panning * {
   min-width: 0;
   display: block;
   overflow: hidden;
+  /* Pin to the bottom of the content column. justify-content:
+     space-between on the parent handles this when label + icon are
+     both present, but on too-narrow clips the label is hidden and
+     the icon would otherwise float to the top. margin-top:auto
+     pushes the icon to the bottom regardless of sibling count. */
+  margin-top: auto;
 }
 
 /* Icons inside a shot block. Unselected = 30% white; selected = full
