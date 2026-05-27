@@ -28,6 +28,7 @@ import { ContextMenu } from './components/ContextMenu';
 import { RangeDim } from './components/RangeDim';
 import { SpawnGhostLane } from './components/SpawnGhostLane';
 import { Inspector } from './components/Inspector';
+import { AddCameraButton } from './components/AddCameraButton';
 import { SettingsPanel } from './components/SettingsPanel';
 import { Meter } from './components/Meter';
 import { UtilityStrip } from './components/UtilityStrip';
@@ -279,6 +280,10 @@ function App() {
             per Figma node 365:668. Holds render settings (and, in v2,
             motion-layer settings via a hidden-in-v1 tab strip). */}
         <Inspector />
+
+        {/* Add Camera button — floating bottom-right of canvas, sibling
+            of Inspector. Always visible. Plan 4 commit 2. */}
+        <AddCameraButton />
       </div>
       {/* Settings modal — opened by the utility-strip gear icon.
           Centered overlay; backdrop click / Escape dismiss. */}

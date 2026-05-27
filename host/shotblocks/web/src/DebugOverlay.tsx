@@ -51,7 +51,10 @@ export function DebugOverlay() {
 
   return (
     <div style={{
-      position: 'fixed', right: 6, bottom: 24, width: 520, maxHeight: '35vh',
+      // Constrained to the Inspector column (right: 0, width = inspector
+      // width 300 - 12px padding either side). Sits above the help
+      // button's 28x28 footprint (10px gap + 28 = 38, plus a little).
+      position: 'fixed', right: 6, bottom: 48, width: 288, maxHeight: '35vh',
       padding: '6px 8px', background: 'rgba(0,0,0,0.85)',
       color: '#cfe', font: '11px/1.35 ui-monospace,Consolas,monospace',
       border: '1px solid #333', borderRadius: 4, zIndex: 9999, whiteSpace: 'pre-wrap',

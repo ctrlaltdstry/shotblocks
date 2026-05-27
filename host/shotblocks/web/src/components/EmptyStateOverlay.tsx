@@ -168,7 +168,11 @@ export function EmptyStateOverlay() {
           }
         >
           <PlusGlyph />
-          <div className="empty-state__label">drop a camera from the object manager</div>
+          <div className="empty-state__label">
+            drop a camera from the object manager
+            <br />
+            or click the <strong>Add camera button</strong>
+          </div>
         </div>
       </div>
     );

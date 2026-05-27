@@ -82,7 +82,14 @@ export type HostOutbound =
   // panel open; C++ walks the known camera plugin IDs (Ocamera 5103,
   // Orscamera 1057516, …) and returns the ones that resolve, with
   // their localized labels. See plan-4 R1.
-  | { kind: 'get-camera-types' };
+  | { kind: 'get-camera-types' }
+  // Add Camera button (plan-4 commit 2). C++ allocates a camera of
+  // typeId, copies the editor camera's pose + lens, inserts in OM at
+  // top, selects it. Ack carries { objectId, typeId, name } — JS uses
+  // those to addClip at the playhead. typeId in the ack reflects what
+  // was actually used (may differ from request if the requested type
+  // is no longer loaded; C++ falls back to Standard).
+  | { kind: 'create-camera'; typeId: number };
 
 type Listener = (msg: HostInbound) => void;
 

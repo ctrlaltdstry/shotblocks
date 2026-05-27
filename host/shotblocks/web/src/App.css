@@ -1146,10 +1146,11 @@ body.is-hand-panning * {
   background: var(--color-grey-12);
   border: 1px dashed #313131;
   border-radius: 4px;
-  /* Figma 400:2073 grew from 319x99 to 451x133 with the bigger
-     30x30 plus glyph and 12px label. */
+  /* Figma 400:2073 base size 451x133. Bumped to 155 for the second
+     label line ("or click the Add camera button"). The actual Add
+     Camera button is a sibling of Inspector — see AddCameraButton.tsx. */
   width: 451px;
-  height: 133px;
+  height: 155px;
   display: flex;
   flex-direction: column;
   align-items: center;
@@ -1198,10 +1199,46 @@ body.is-hand-panning * {
   font-size: 12px;
   color: var(--color-grey-24);
   text-align: center;
-  white-space: nowrap;
+  line-height: 1.6;
+}
+.empty-state__label strong {
+  font-weight: 600;
+  color: var(--color-grey-50);
 }
 .empty-state__plus {
   flex-shrink: 0;
+}
+
+/* Persistent Add Camera button — Figma node 468:3084. Floating sibling
+   of the Inspector, anchored to the bottom-right of the canvas area
+   inside .body. 17px clearance to the Inspector's left edge (300px
+   wide → right: 317px), 16px above the canvas bottom. Always visible
+   regardless of timeline state. Plan 4 commit 2. */
+.add-camera-button {
+  position: absolute;
+  right: 317px;
+  bottom: 16px;
+  width: 82px;
+  height: 32px;
+  padding: 0;
+  border: 0;
+  border-radius: 8px;
+  background: var(--color-timeline-primary-highlight);
+  color: var(--color-grey-white);
+  font-family: Inter, sans-serif;
+  font-weight: 600;
+  font-size: 10px;
+  letter-spacing: -0.1px;
+  white-space: nowrap;
+  cursor: pointer;
+  z-index: 50;
+  transition: filter 120ms ease;
+}
+.add-camera-button:hover {
+  filter: brightness(1.1);
+}
+.add-camera-button:active {
+  filter: brightness(0.92);
 }
 
 /* Shot block — Figma node 173:1827 spec. State × type × height matrix

@@ -1546,6 +1546,7 @@ private:
 			return "{\"ok\":true,\"kind\":\"set-loop-ack\"}";
 		}
 		if (body.find("\"kind\":\"get-camera-types\"") != std::string::npos) return HandleGetCameraTypes();
+		if (body.find("\"kind\":\"create-camera\"") != std::string::npos) return HandleCreateCamera(body);
 		if (body.find("\"kind\":\"audio-add\"") != std::string::npos)
 		{
 			// JS pushes the original audio bytes (base64) once at drop
@@ -1974,6 +1975,117 @@ private:
 			out += "\"}";
 		}
 		out += "]}";
+		return out;
+	}
+
+	// Plan 4 commit 2 — Add Camera button. Allocates a new camera of
+	// the user's preferred type (per Settings → Defaults), copies the
+	// editor camera's pose + lens params so the new view looks identical
+	// to what the user is looking at, inserts at the OM root top, and
+	// selects it in the OM. Atomic undo wraps insertion + activation
+	// (per R3 / microsdk example). Viewport routing happens after this
+	// returns — JS adds a clip at the playhead, and the existing
+	// playhead-driven router fires set-active-camera which switches the
+	// viewport via the SetParameter recipe (memory
+	// c4d-setscenecamera-bypasses-cache-invalidation).
+	std::string HandleCreateCamera(const std::string& body)
+	{
+		BaseDocument* doc = GetActiveDocument();
+		if (!doc) return "{\"ok\":false,\"error\":\"no doc\"}";
+
+		// Parse typeId from the request body. JS sends the user's
+		// defaultCameraType setting (plugin ID). Validate it actually
+		// resolves before alloc — if Redshift was unloaded between
+		// Settings setting it and the click, fall back to Standard.
+		Int32 typeId = ParseIntField(body, "typeId");
+		if (typeId <= 0 || !FindPlugin(typeId, PLUGINTYPE::OBJECT))
+			typeId = 5103; // Ocamera (Standard) — always available
+
+		BaseObject* cam = BaseObject::Alloc(typeId);
+		if (!cam) return "{\"ok\":false,\"error\":\"alloc failed\"}";
+
+		// Copy editor camera pose + lens so the new camera frames the
+		// SAME view the user is currently looking at. The expectation
+		// (matches C4D's own "Cameras → New Camera"): nothing visually
+		// changes when the viewport switches to the new camera.
+		BaseDraw* bd = doc->GetActiveBaseDraw();
+		if (bd)
+		{
+			BaseObject* editor = bd->GetEditorCamera();
+			if (editor)
+			{
+				cam->SetMl(editor->GetMl());
+				// Copy lens-related parameters from the editor camera so
+				// the new view looks identical to what the user is looking
+				// at. IDs from frameworks/.../description/ocamera.h.
+				// SDK's ConstDescIDLevel template requires compile-time
+				// constants, so each param is unrolled.
+				auto copyParam = [&](const DescID& did)
+				{
+					GeData val;
+					if (editor->GetParameter(did, val, DESCFLAGS_GET::NONE))
+						cam->SetParameter(did, val, DESCFLAGS_SET::NONE);
+				};
+				copyParam(ConstDescIDLevel(CAMERA_FOCUS));               // focal length (mm)
+				copyParam(ConstDescIDLevel(CAMERAOBJECT_APERTURE));      // sensor width (mm)
+				copyParam(ConstDescIDLevel(CAMERAOBJECT_FILM_OFFSET_X));
+				copyParam(ConstDescIDLevel(CAMERAOBJECT_FILM_OFFSET_Y));
+				copyParam(ConstDescIDLevel(CAMERAOBJECT_TARGETDISTANCE));
+				copyParam(ConstDescIDLevel(CAMERA_PROJECTION));          // perspective / parallel / etc
+			}
+		}
+
+		// Atomic undo wrap (per R3 / microsdk pattern). NEWOBJ is added
+		// AFTER InsertObject (different from other undo types).
+		// SetActiveObject also adds its own undo entry inside this block,
+		// so one Ctrl+Z reverts cam + activation atomically. (The
+		// addClip from JS is a separate undo step, per R3.)
+		doc->StartUndo();
+		doc->InsertObject(cam, nullptr, nullptr);  // OM root, top
+		doc->AddUndo(UNDOTYPE::NEWOBJ, cam);
+		doc->SetActiveObject(cam, SELECTION_NEW);
+		doc->EndUndo();
+
+		// Mint a session objectId + BaseLink, same as OM-drop does. The
+		// objectId travels back to JS, gets stored on the new clip, and
+		// is used by set-active-camera + render-queue flows to map back
+		// to this BaseObject. BaseLink survives renames + save/load.
+		const Int32 objectId = _nextObjectId++;
+		{
+			AutoAlloc<BaseLink> link;
+			if (link)
+			{
+				link->SetLink(cam);
+				_cameraLinks.emplace(objectId, std::move(link));
+			}
+		}
+
+		// Build the ack. Send back the live name (matches what JS would
+		// see if the user dragged this same cam from the OM) plus typeId
+		// so JS knows whether it got the requested type or the fallback.
+		std::string nameUtf8;
+		{
+			const String name = cam->GetName();
+			Char* cstr = name.GetCStringCopy();
+			if (cstr) { nameUtf8 = cstr; DeleteMem(cstr); }
+		}
+
+		// EventAdd so the OM repaints with the new camera + selection.
+		// JS's downstream addClip + set-active-camera flow will handle
+		// the viewport routing — no need to invalidate the BaseDraw here.
+		EventAdd();
+
+		std::string out = "{\"ok\":true,\"kind\":\"create-camera-ack\",\"objectId\":";
+		out += std::to_string(objectId);
+		out += ",\"typeId\":";
+		out += std::to_string(typeId);
+		out += ",\"name\":\"";
+		for (char ch : nameUtf8)
+		{
+			if (ch == '"' || ch == '\\') out += '\\';
+			out += ch;
+		}
+		out += "\"}";
 		return out;
 	}
 

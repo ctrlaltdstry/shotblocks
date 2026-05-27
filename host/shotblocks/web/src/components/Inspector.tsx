@@ -173,6 +173,7 @@ function HelpButton() {
       type="button"
       className="inspector-help-button"
       title="Help"
+      onMouseDown={(e) => e.preventDefault()}
       onClick={() => {
         window.alert('User manual coming in v1.');
       }}
