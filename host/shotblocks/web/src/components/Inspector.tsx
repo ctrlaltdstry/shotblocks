@@ -5,6 +5,7 @@ import { send } from '../lib/host';
 import sectionChevronUrl from '../icons/inspector-section-chevron.svg';
 import dropdownChevronUrl from '../icons/inspector-dropdown-chevron.svg';
 import folderUrl from '../icons/inspector-folder.svg';
+import helpButtonUrl from '../icons/help-button.svg';
 
 /** Right-side Inspector panel — always visible at the fixed width
  *  defined in Figma node 365:668. Hosts render settings now; the
@@ -155,7 +156,29 @@ export function Inspector() {
           </div>
         </InspectorSection>
       </div>
+      <HelpButton />
     </div>
+  );
+}
+
+/** Help button — Figma node 400:1958. 24x24 circle pinned bottom-right
+ *  of the Inspector panel, 10px from each edge. Pre-composed SVG (circle
+ *  + border + drop shadow + glyph all baked in) — rendered as <img>, not
+ *  a mask. Hover brightens via CSS filter since the SVG fill is hard-
+ *  coded. v1 click = placeholder alert; Plan 5 swaps for the manual
+ *  launch. */
+function HelpButton() {
+  return (
+    <button
+      type="button"
+      className="inspector-help-button"
+      title="Help"
+      onClick={() => {
+        window.alert('User manual coming in v1.');
+      }}
+    >
+      <img src={helpButtonUrl} alt="Help" />
+    </button>
   );
 }
 

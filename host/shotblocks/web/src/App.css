@@ -784,7 +784,7 @@ body.is-resizing-headers .body { transition: none; }
    stale-after-drag case; CSS alone wouldn't survive a drag. */
 .lanes-area.is-tool-razor .shot-block,
 .lanes-area.is-tool-razor .shot-block * {
-  cursor: url("data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAACAAAAAgCAYAAABzenr0AAABkElEQVR4nO2VMUsCYRjH/xA8NEhT5HKQtxikH0DuAwRHuMWBm1/gPkKzQ+BggwStQlAO1pJcEFiQN+QgUbdkIESWRVBwN3RkPaFwXWqi3kVw//Udfr/n+b/vHRAkSJDxIgJYA7ACgPyGK9FoVMtms5eqqp4D2Aaw4Bc8FYvFjlqtltnpplAoXPslkQKwX6vVHjuu+CHxNXkmk7lwb8APiYQTms/nDUVRztwCXknMAFjXNO3WCTJN0+4nMG0JmYhK3HulUrkbBOTYtv3uhcQGg3nlkiQdD5q6Xq8/iaJYdp87JObHFUjE4/Eyd88SyWTy1A1pNpuvgiAcVqvVh35yuVzuCoA6yRakYRKWZb0ZhvE8qJpGo/ECYHMSgV8lnOHKnE+0WCze8CWeVGBkCe6992R1Xb8PhUJ7ABanITCyBJ/xv6ILX54WfGQJnpyIdr2A95WQZfmk3W5bvTvg1eRDJYjoIBKJlAFsAVjyGv5DIp1O6wBW/QJ/kwiHwyUi2vn86gl/IcCZAzD7V/AgQf5/PgDKt0GJmp4PQwAAAABJRU5ErkJggg=="), crosshair;
+  cursor: url("data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAACAAAAAgCAYAAABzenr0AAACDElEQVR4nO2WsYsaQRTGvzczC8ZswhJM1sLCBCEWlgkY8A+wSadcSrtYhIPrLAKaysJCAvkLYjr/gxSxD1y86iRnYYKFpYXXCTe5JzvBmHPP0VsrPxjYbeb7vffNPAY46KCDtlMGwDsAJQCxfZu/TyQS82q1qovFogYwAvB0X+Yf0um0Ho1G2qjdbjPELwDPIjf3PO8f81UIIUQkEGQq51Wv1/8DiAxCa94TJ6btvPi72WyGQtxZHI7jPFRKXS63nb+73e6NAHcN8QbAJ67YVjvHQUQvUqmUrlQqWimlB4NBqGGn09Hj8XgdhPUVJSI64sonk4luNBp69eotiw9lMpnUw+FwbSeUUo9sAV4C+J7NZkMh+v3+wjysQ6VSiSGqtl24D+AIwI/bIObzeWg8tVqNAT4CEFYEjuO4HMUmEEa9Xk+3Wq2//7PZTGcyGQY4ASBtu8AQDwKI000g+CCaYcXmhUKBzc+EEPlgoNmLIYI4NoIww4oXgAshxNtgj+1lEwdXns/n2fwnER1LKZ9sXb0Rj+R4PO7edjCn0+mi7UR0EZj75XJ5N/MV3QgRi8V0LpfTnuddATgHcAzA37nydRCrcfDjBMDv6/n/mYgqUsrHUZkvxHEYCL5mXP31M+2LlPI5gHuRGS+LD2YQx1cA34jote/79nd9R/HEfEVEBdd1vX2bG1GkeR8Utf4AnzuvvqOLQicAAAAASUVORK5CYII="), default;
 }
 
 /* No custom Select-tool cursor. The Select tool uses the OS default
@@ -804,7 +804,7 @@ body.is-resizing-headers .body { transition: none; }
    during-drag body rule (.is-slipping) share one definition. */
 :root {
   --slip-cursor:
-    url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='24' height='24' viewBox='0 0 24 24'><g transform='translate(4 5.5)'><path d='M15.5 0C15.7761 0 16 0.223858 16 0.5V12.5C16 12.7761 15.7761 13 15.5 13C15.2239 13 15 12.7761 15 12.5V7.04883C14.9271 7.15985 14.8308 7.25972 14.709 7.33887L11.5449 9.39355C10.9213 9.79864 10.1089 9.40466 10.0098 8.7002L10 8.55469V7H6V8.55469L5.99023 8.7002C5.89771 9.35782 5.18388 9.74482 4.58203 9.46387L4.45508 9.39355L1.29102 7.33887C1.16916 7.25972 1.07294 7.15985 1 7.04883V12.5C1 12.7761 0.776142 13 0.5 13C0.223858 13 0 12.7761 0 12.5V0.5C0 0.223858 0.223858 0 0.5 0C0.776142 0 1 0.223858 1 0.5V5.9502C1.07289 5.83945 1.16941 5.74012 1.29102 5.66113L4.45508 3.60645C5.12035 3.17434 6 3.65203 6 4.44531V6H10V4.44531L10.0098 4.2998C10.1023 3.64218 10.8161 3.25518 11.418 3.53613L11.5449 3.60645L14.709 5.66113C14.8306 5.74012 14.9271 5.83945 15 5.9502V0.5C15 0.223858 15.2239 0 15.5 0ZM1.83594 6.5L5 8.55469V4.44531L1.83594 6.5ZM11 8.55469L14.1641 6.5L11 4.44531V8.55469Z' fill='white' stroke='black' stroke-width='0.5'/></g></svg>") 12 12,
+    url("data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAACAAAAAgCAYAAABzenr0AAACZUlEQVR4nO1Vz6tSQRg9Z2ZUEEylwkU+ELIycGEgZBHUMoh4PmrTKto9yEWhbSLQf6E2tWjRsuJBEO2FCFy6qGhRSkHQJvqBkUHQ5CfjYxDB63UTcQ9cGO5858yZ7/tmBogQIUKEfw3WWpC8AeA3gD6A7BpySQBvRIvk9Xa7zSCkBICXvV7PlstlS/J02NVJnhEN0QLwOpfLxZeSjDEZAIN+v28rlYoY2BQtL6QGoLiAKv/K/vqTDG6KhmgBeAcgHcT4vIG6E5NSPMjn8yL2NZvNmhkhnU7L+LObu+9ihbPlGRg47aUQ8nBmQCklBs4bYz42Gg07Go1EzGqt93scGdvxeGy3t7dl/hOASyTXNwDgValUmtZxBlkMwFEnmHHj3flut2uFI1zfgDEmUEPvGqhWq7bVak135iOTySz8fAin3W7bWq0WKgPTHvB3HRai4WVgtRKI+06nEzoDzWZzmsXQBlwPfJd6Sl39HiC5Q/IRgIeT47fj94Ds2vXAt7A9MPAMyCIvAPySDpeduSY8oZQqGmMOKqVOyj85IXJSjDFjAM8BPJ4zsDwDzuXQuwcuAzgL4B6A9+6s/1BKHfBoMv7p5j6QlNhzk/GVlQ0syMBWKpWKKaUOTVJ6DcBTkre11vs8jtwDdwA8I3kVgMTGANRXLoFzOfTegtlNKN8ekhWt9WEAesYpFotGa32E5LFYLJby4uveW/A2aAbSrqn+APhC8vjcWxAUJHlKrmin9SToWxAnecHV/OZcrVeC494CcJfkRdEOyk0qpTYA7C0UCiqsAfGQSCSkVzbi8XhyDZ0IEf5j/AWLOMMulgeZ/gAAAABJRU5ErkJggg==") 16 16,
     ew-resize;
 }
 /* Slip cursor is set on the LANE (data-side=audio), not the
@@ -888,15 +888,14 @@ body.is-hand-panning * {
   margin-left: -0.5px;
 }
 /* The slice segment — the part of the cut line over the hovered
-   clip, i.e. where the razor will actually cut. Brighter + thicker
-   yellow (#ffd60a, the razor/snap accent) with a soft glow so the
-   user's eye lands on the target clip. */
+   clip, i.e. where the razor will actually cut. Thin black 75% line
+   so it reads as a clean cut indicator against the colored clip body
+   without competing with the snap-indicator yellow elsewhere. */
 .cut-line__active {
   position: absolute;
-  width: 3px;
-  margin-left: -1.5px;
-  background: #ffd60a;
-  box-shadow: 0 0 6px 1px rgba(255, 214, 10, 0.7);
+  width: 2px;
+  margin-left: -1px;
+  background: rgba(0, 0, 0, 0.75);
   border-radius: 1px;
 }
 
@@ -1842,6 +1841,42 @@ body.is-hand-panning * {
   flex-direction: column;
   gap: 10px;
   padding: 10px;
+}
+
+/* Help button — Figma node 400:1958. Pinned bottom-right of the
+   Inspector, 10px from each visible edge. The SVG is 28x28 because the
+   drop shadow bleeds 2px left and 4px down past the 24x24 circle; we
+   subtract those offsets when positioning so the CIRCLE (the visible
+   mark) lands 10px from the panel edges, not the shadow. Hover
+   brightens via filter since the SVG fill is hardcoded (grey-12). */
+.inspector-help-button {
+  position: absolute;
+  /* circle's right edge sits at svg-x=26 (svg width 28, circle x=2..26),
+     so the svg's right edge IS the circle's right edge — `right: 10px`
+     puts the circle 10px from the inspector's right edge. */
+  right: 10px;
+  /* circle's bottom sits at svg-y=24, svg height 28, so shadow bleeds
+     4px below the circle. To put the circle 10px above the inspector's
+     bottom, the svg's bottom-edge sits 6px above (10 - 4). */
+  bottom: 6px;
+  width: 28px;
+  height: 28px;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  cursor: pointer;
+}
+.inspector-help-button img {
+  display: block;
+  width: 28px;
+  height: 28px;
+}
+.inspector-help-button:hover img {
+  /* Brighten the whole asset (circle + glyph) toward grey-16 fill /
+     slightly brighter glyph. CSS filter is the cleanest path since the
+     SVG fill is hardcoded; using a var() override would require more
+     restructuring of the asset. */
+  filter: brightness(1.3);
 }
 
 /* Section card — Figma node 375:1176 / 376:1254. Grey-16 fill,
