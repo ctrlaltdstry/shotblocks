@@ -3,7 +3,19 @@
 > **Release:** v1 — see [v1-release-roadmap.md](v1-release-roadmap.md)
 > **Status:** items 1-5 shipped 2026-05-28 (`30c75b8`, `08112d2`,
 > `3db1e0e`, `6a0154f`, `8eb172d`); item 6 dropped (no icon changes
-> needed); item 7 deferred to its own design session.
+> needed); item 7 (camera-rig-tag rework) deferred to its own design
+> session — NEXT UP, see HANDOFF.md.
+>
+> A broad set of additional polish shipped the same day beyond the
+> original 5 items (all `feat(plan-5)`/`fix` on 2026-05-28):
+> hide debug overlay by default; render mode defaults to whole-sequence;
+> interactive + smooth-scrub + infinite-edge-wrap timecode; purple accent
+> scheme (timecode stays blue); vertical zoom gated on audio content;
+> audio-clip delete = single undo; clip hover polish (no tooltip, clean
+> edge highlight, stable label band); snap-line edge fade; play-range bar
+> restyle; smarter Add Camera placement (playhead-or-roomier-side); plus
+> two render fixes — individual-shots per-entry camera + Stage process
+> tied to whole-sequence mode. See HANDOFF.md for the full commit range.
 > **Plan owner:** Mike + Claude
 
 A grab-bag of pre-ship polish items, ordered smallest-to-largest so each
