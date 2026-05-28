@@ -2,7 +2,7 @@ import { useEffect, useRef } from 'react';
 import { useStore, getNextClipId, setNextClipId, LEVEL_DEFAULT_TANGENT, type Track, type LevelKeyframe, type LevelInterp, type LevelTangent } from './store';
 import { TRACK_FLAG_DEFAULTS } from './store/types';
 import { onMessage, send } from './lib/host';
-import { fetchAudio, removeAudio, hasAudio } from './lib/audioStore';
+import { fetchAudio, hasAudio, dropAudioMemory } from './lib/audioStore';
 import { computeStageEvents } from './lib/stageCameras';
 import { ensureCameraTypes } from './lib/cameraTypes';
 
@@ -214,8 +214,17 @@ export function usePersistence(): void {
       for (const t of s.audioTracks) {
         for (const c of t.clips) nowMediaIds.add(c.mediaId ?? c.id);
       }
+      // Queue orphaned media for removal as part of the NEXT save-state
+      // (not immediately). The save-state handler removes these bytes
+      // inside the same StartUndo/EndUndo as the clip-JSON write, so
+      // deleting an audio clip is ONE undo step (clip + its bytes
+      // restore together). Removing immediately stranded the bytes
+      // outside the undo, so undo brought the clip back unlinked.
       for (const mediaId of prevMediaIds) {
-        if (!nowMediaIds.has(mediaId)) void removeAudio(mediaId);
+        if (!nowMediaIds.has(mediaId)) {
+          pendingAudioRemoval.add(mediaId);
+          dropAudioMemory(mediaId);
+        }
       }
 
       if (skipNextSave.current) {
@@ -419,6 +428,12 @@ async function loadFromHost(skipNextSave: React.MutableRefObject<boolean>) {
   }
 }
 
+// Media (by mediaId) whose bytes should be freed from the C++ helper on
+// the next save-state. Removal is bundled INTO save-state's undo block
+// (not done immediately) so deleting an audio clip is a single undo
+// step — clip metadata and its bytes restore together on Ctrl+Z.
+const pendingAudioRemoval = new Set<number>();
+
 function saveToHost() {
   const s = useStore.getState();
   // Strip transient fields — only persist what defines the timeline.
@@ -499,7 +514,11 @@ function saveToHost() {
   collect(s.videoTracks);
   collect(s.audioTracks);
   const json = JSON.stringify(payload);
-  void send({ kind: 'save-state', json, objectIds });
+  // Media whose bytes are now orphaned — C++ frees them inside the same
+  // undo block as this save so delete is one undo step.
+  const removeAudioMedia = [...pendingAudioRemoval];
+  pendingAudioRemoval.clear();
+  void send({ kind: 'save-state', json, objectIds, removeAudioMedia });
   // Plan 4.1 — push the per-boundary camera event list so C++ can
   // rebuild the hidden Stage helper's animation track. Same cadence
   // as save-state (250ms debounce). The Stage stays dormant during

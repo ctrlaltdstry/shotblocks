@@ -1513,6 +1513,14 @@ private:
 			doc->StartUndo();
 			doc->AddUndo(UNDOTYPE::CHANGE_SMALL, helper);
 			bc->SetString(BCKEY_CLIPS_JSON, maxon::String(json.c_str()));
+
+			// Free bytes for media orphaned by this edit (e.g. an audio
+			// clip was deleted). Done INSIDE this undo block so the clip-
+			// JSON change and the byte removal are one atomic undo step —
+			// Ctrl+Z restores the clip AND its audio together. The
+			// AddUndo above already snapshotted the whole helper BC
+			// (bytes included), so this costs no extra undo memory.
+			RemoveOrphanedAudioBytes(bc, body);
 			// Bump a monotonic version counter so EVMSG_CHANGE
 			// handlers (including ours) can distinguish "the helper
 			// changed because of something the user did via Ctrl+Z"
@@ -2010,6 +2018,37 @@ private:
 	// of truth. individual-shots will land in Commit 10. Factored
 	// into its own method to keep Dispatch under the sourceprocessor's
 	// 600-line function cap.
+	// Free audio bytes for every mediaId in the body's "removeAudioMedia"
+	// array. Called from inside save-state's StartUndo/EndUndo so a clip
+	// delete + its byte removal are one atomic undo. Extracted to keep
+	// Dispatch under Maxon's 600-line source-processor cap.
+	void RemoveOrphanedAudioBytes(BaseContainer* bc, const std::string& body)
+	{
+		if (!bc) return;
+		auto rp = body.find("\"removeAudioMedia\"");
+		if (rp == std::string::npos) return;
+		rp = body.find('[', rp);
+		if (rp == std::string::npos) return;
+		++rp;
+		while (rp < body.size() && body[rp] != ']')
+		{
+			while (rp < body.size() && (body[rp] == ' ' || body[rp] == ',' || body[rp] == '\t')) ++rp;
+			if (rp >= body.size() || body[rp] == ']') break;
+			char* endp = nullptr;
+			long mediaId = std::strtol(body.c_str() + rp, &endp, 10);
+			if (endp && endp != body.c_str() + rp)
+			{
+				if (mediaId > 0)
+					bc->RemoveData(BCKEY_AUDIO_BASE + (Int32)mediaId);
+				rp = endp - body.c_str();
+			}
+			else
+			{
+				++rp;
+			}
+		}
+	}
+
 	// Diag: walk the helper BaseContainer and print per-range byte totals
 	// to the C4D Console. Used to triage .c4d file-size bloat
 	// (.agent/bugs.md "file size bloat"). One-shot — extracted to a

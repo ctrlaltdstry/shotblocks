@@ -58,14 +58,13 @@ export type HostOutbound =
   | { kind: 'scrub-end' }
   | { kind: 'tool'; id: string }
   | { kind: 'set-active-camera'; objectId: number }
-  | { kind: 'save-state'; json: string; objectIds: number[] }
+  | { kind: 'save-state'; json: string; objectIds: number[]; removeAudioMedia?: number[] }
   | { kind: 'load-state' }
   | { kind: 'undo' }
   | { kind: 'redo' }
   | { kind: 'toggle-play' }
   | { kind: 'audio-add'; clipId: number; bytes: string }
   | { kind: 'audio-fetch'; clipId: number }
-  | { kind: 'audio-remove'; clipId: number }
   | { kind: 'set-play-range'; inFrame: number; outFrame: number }
   | { kind: 'set-loop'; enabled: boolean }
   | { kind: 'set-cursor-mode'; mode: 'slip' | 'razor' | 'pen' | 'select' | 'av-split' | 'roll' | 'play-range' | 'hand' | 'hand-grab' | 'zoom' | 'default' }

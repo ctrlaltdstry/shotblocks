@@ -90,13 +90,14 @@ export async function getAudioBuffer(
   return p;
 }
 
-/** Notify C++ to remove the audio binary for `mediaId` from the doc
- *  helper, and drop our in-memory entry. Caller must only invoke this
- *  once NO clip references the media any more (a split leaves
- *  multiple clips sharing one mediaId). */
-export async function removeAudio(mediaId: number): Promise<void> {
+/** Drop the in-memory Blob for `mediaId`. The C++ helper's persisted
+ *  bytes are freed separately, bundled into the next save-state's undo
+ *  block (see usePersistence pendingAudioRemoval) so an audio-clip
+ *  delete is a single undo step. Caller must only invoke this once NO
+ *  clip references the media any more (a split leaves multiple clips
+ *  sharing one mediaId). */
+export function dropAudioMemory(mediaId: number): void {
   entries.delete(mediaId);
-  await send({ kind: 'audio-remove', clipId: mediaId });
 }
 
 /** True if we have a Blob in memory for this mediaId. */
