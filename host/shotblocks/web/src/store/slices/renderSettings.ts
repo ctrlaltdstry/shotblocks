@@ -27,7 +27,7 @@ export interface RenderSettingsSlice {
 }
 
 export const createRenderSettingsSlice: StateCreator<State, [], [], RenderSettingsSlice> = (set) => ({
-  renderMode: 'individual-shots',
+  renderMode: 'whole-sequence',
   setRenderMode: (mode) => set((s) => (
     s.renderMode === mode ? s : { renderMode: mode }
   )),

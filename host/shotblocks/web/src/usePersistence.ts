@@ -347,10 +347,11 @@ async function loadFromHost(skipNextSave: React.MutableRefObject<boolean>) {
       .sort((a, b) => a - b);
     const markersVisible = parsed.markersVisible !== false;
     // Render mode — coerce to a valid enum value; default to
-    // individual-shots if missing or garbage.
-    const renderMode = parsed.renderMode === 'whole-sequence'
-      ? 'whole-sequence' as const
-      : 'individual-shots' as const;
+    // whole-sequence if missing or garbage (the common case now that
+    // native render paths switch cameras via the Stage helper).
+    const renderMode = parsed.renderMode === 'individual-shots'
+      ? 'individual-shots' as const
+      : 'whole-sequence' as const;
     // Default camera type — plugin ID for the in-timeline Add Camera
     // button (plan-4 commit 2). Fall back to Standard (5103) if missing
     // or not a positive integer. If the saved value points at a plugin
