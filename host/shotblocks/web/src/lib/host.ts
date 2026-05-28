@@ -101,9 +101,7 @@ export type HostOutbound =
   // Events are sorted by frame, deduplicated (no consecutive entries
   // with the same objectId). objectId === 0 = gap (no camera). C++
   // translates each event into a STEP CKey on STAGEOBJECT_CLINK.
-  | { kind: 'set-stage-cameras'; events: { frame: number; objectId: number }[] }
-  // SPIKE: dump every Ostage's CTrack structure to the C4D Console.
-  | { kind: 'dump-stage' };
+  | { kind: 'set-stage-cameras'; events: { frame: number; objectId: number }[] };
 
 type Listener = (msg: HostInbound) => void;
 

@@ -1717,7 +1717,6 @@ private:
 		if (body.find("\"kind\":\"create-camera\"") != std::string::npos) return HandleCreateCamera(body);
 		if (body.find("\"kind\":\"select-in-om\"") != std::string::npos) return HandleSelectInOm(body);
 		if (body.find("\"kind\":\"set-stage-cameras\"") != std::string::npos) return HandleSetStageCameras(body);
-		if (body.find("\"kind\":\"dump-stage\"") != std::string::npos) return HandleDumpStage();
 		if (body.find("\"kind\":\"audio-add\"") != std::string::npos)
 		{
 			// JS pushes the original audio bytes (base64) once at drop
@@ -2289,82 +2288,6 @@ private:
 		}
 		out += "\"}";
 		return out;
-	}
-
-	// Plan 4.1 spike — dump every Ostage's CTrack/CKey structure so we
-	// can mirror the working data shape (when the keyframes were made
-	// by C4D itself via Auto-Key) in our C++ writes.
-	std::string HandleDumpStage()
-	{
-		BaseDocument* doc = GetActiveDocument();
-		if (!doc) return "{\"ok\":false,\"error\":\"no doc\"}";
-		Int stageCount = 0;
-		for (BaseObject* op = doc->GetFirstObject(); op; op = op->GetNext())
-		{
-			if (op->GetType() != Ostage) continue;
-			++stageCount;
-			{
-				GeData eg;
-				op->GetParameter(ConstDescIDLevel(ID_BASEOBJECT_GENERATOR_FLAG), eg, DESCFLAGS_GET::NONE);
-				Char* nameC = op->GetName().GetCStringCopy();
-				char buf[160];
-				_snprintf_s(buf, sizeof(buf), _TRUNCATE,
-					"[dump] Stage name='%s' enable=%d",
-					nameC ? nameC : "(null)", (int)eg.GetBool());
-				if (nameC) DeleteMem(nameC);
-				GePrint(maxon::String(buf));
-			}
-			CTrack* track = op->GetFirstCTrack();
-			Int trackIdx = 0;
-			while (track)
-			{
-				DescID did = track->GetDescriptionID();
-				Int32 cat = track->GetTrackCategory();
-				char buf[200];
-				_snprintf_s(buf, sizeof(buf), _TRUNCATE,
-					"[dump]   track #%lld depth=%d level0_id=%d level0_dtype=%d level0_creator=%d category=%d",
-					(long long)trackIdx, (int)did.GetDepth(),
-					(int)did[0].id, (int)did[0].dtype, (int)did[0].creator,
-					(int)cat);
-				GePrint(maxon::String(buf));
-				CCurve* curve = track->GetCurve();
-				if (curve)
-				{
-					const Int32 keyCount = curve->GetKeyCount();
-					for (Int32 k = 0; k < keyCount; ++k)
-					{
-						CKey* key = curve->GetKey(k);
-						if (!key) continue;
-						const Int32 fps = doc->GetFps();
-						const Int32 keyFrame = key->GetTime().GetFrame(fps);
-						const CINTERPOLATION interp = key->GetInterpolation();
-						const GeData& gd = key->GetGeData();
-						const Int32 gdType = gd.GetType();
-						char kbuf[200];
-						_snprintf_s(kbuf, sizeof(kbuf), _TRUNCATE,
-							"[dump]     key #%d frame=%d interp=%d geDataType=%d",
-							(int)k, (int)keyFrame, (int)interp, (int)gdType);
-						GePrint(maxon::String(kbuf));
-						if (gdType == DA_ALIASLINK)
-						{
-							BaseList2D* linked = gd.GetLink(doc);
-							Char* rn = linked ? linked->GetName().GetCStringCopy() : nullptr;
-							char rbuf[200];
-							_snprintf_s(rbuf, sizeof(rbuf), _TRUNCATE,
-								"[dump]       link resolves to: %s",
-								rn ? rn : "(null)");
-							if (rn) DeleteMem(rn);
-							GePrint(maxon::String(rbuf));
-						}
-					}
-				}
-				track = track->GetNext();
-				++trackIdx;
-			}
-		}
-		if (stageCount == 0)
-			GePrint("[dump] no Ostage objects in active doc"_s);
-		return "{\"ok\":true,\"kind\":\"dump-stage-ack\"}";
 	}
 
 	// Plan 4 commit 5 — selection-follows-playhead. JS resolves the
