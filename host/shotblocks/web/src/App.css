@@ -467,6 +467,16 @@ body.is-resizing-headers .body { transition: none; }
   bottom: auto;
   transform: translateX(-50%);
 }
+/* "below-left": left edge aligned to the element, 10px under it. For
+   controls hugging the window's LEFT edge where a centered "below"
+   tooltip would clip off-screen (e.g. the topbar timecode). */
+[data-tooltip][data-tooltip-pos="below-left"]::after {
+  left: 0;
+  right: auto;
+  top: calc(100% + 10px);
+  bottom: auto;
+  transform: none;
+}
 /* "left": centered vertically, 12px to the left (for bottom-right
    anchored controls where right/below would clip off-screen). */
 [data-tooltip][data-tooltip-pos="left"]::after {

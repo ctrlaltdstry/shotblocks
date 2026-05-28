@@ -125,8 +125,10 @@ export function Timecode() {
   }
 
   function onClick(e: React.MouseEvent<HTMLDivElement>) {
-    // Toggle only on a Ctrl/Cmd-click that wasn't a drag.
-    if ((e.ctrlKey || e.metaKey) && !drag.current.moved) {
+    // Ctrl/Cmd-click toggles the display. A Ctrl-click never starts a
+    // scrub (onPointerDown returns early when ctrl/meta is held), so no
+    // drag-vs-click disambiguation is needed here.
+    if (e.ctrlKey || e.metaKey) {
       setShowFrames((v) => !v);
     }
   }
@@ -137,7 +139,8 @@ export function Timecode() {
   return (
     <div
       className="topbar__timecode"
-      title="Drag to scrub · Ctrl-click to toggle timecode / frames"
+      data-tooltip="Drag to scrub · Ctrl-click for frames"
+      data-tooltip-pos="below-left"
       onPointerDown={onPointerDown}
       onClick={onClick}
     >
