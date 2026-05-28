@@ -30,9 +30,11 @@ PLUGIN_ID_TAG = 1000001
 
 
 def _load_icon():
-    icon_path = os.path.join(_HERE, "res", "icons", "tshotblocks.tif")
+    icon_path = os.path.join(_HERE, "res", "icons", "sb_camera_tag.png")
     bmp = c4d.bitmaps.BaseBitmap()
-    bmp.InitWith(icon_path)
+    result, _ = bmp.InitWith(icon_path)
+    if result != c4d.IMAGERESULT_OK:
+        print("[Shotblocks] tag icon failed to load: {}".format(icon_path))
     return bmp
 
 

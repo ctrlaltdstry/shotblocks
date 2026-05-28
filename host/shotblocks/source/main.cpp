@@ -3434,14 +3434,51 @@ private:
 };
 
 
+// Load the command/menu icon from <plugin>/res/icons/sb_menu.png. The
+// PNG ships via the Python deploy's /MIR of src/res/. Returns nullptr on
+// failure (command still registers, just without an icon).
+static BaseBitmap* LoadMenuIcon()
+{
+	HMODULE hMod = nullptr;
+	GetModuleHandleExW(
+		GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS |
+		GET_MODULE_HANDLE_EX_FLAG_UNCHANGED_REFCOUNT,
+		(LPCWSTR)&LoadMenuIcon, &hMod);
+	wchar_t path[MAX_PATH] = {0};
+	GetModuleFileNameW(hMod, path, MAX_PATH);
+	wchar_t* lastSlash = wcsrchr(path, L'\\');
+	if (lastSlash)
+		*(lastSlash + 1) = 0;
+	wcscat_s(path, MAX_PATH, L"res\\icons\\sb_menu.png");
+	BaseBitmap* bmp = BaseBitmap::Alloc();
+	if (!bmp)
+		return nullptr;
+	char u8[MAX_PATH * 2] = {0};
+	WideCharToMultiByte(CP_UTF8, 0, path, -1, u8, sizeof(u8), nullptr, nullptr);
+	Filename fn;
+	fn.SetString(maxon::String(u8));
+	if (bmp->Init(fn) != IMAGERESULT::OK)
+	{
+		BaseBitmap::Free(bmp);
+		GePrint("[Shotblocks/v2] menu icon failed to load"_s);
+		return nullptr;
+	}
+	return bmp;
+}
+
 static Bool RegisterShotblocksCommands()
 {
-	return RegisterCommandPlugin(
+	BaseBitmap* icon = LoadMenuIcon();
+	const Bool ok = RegisterCommandPlugin(
 		g_shotblocks_cmd_id,
 		"Shotblocks"_s,
-		0, nullptr,
+		0, icon,
 		"Dockable web-based Shotblocks UI"_s,
 		NewObjClear(OpenShotblocksDialogCommand));
+	// RegisterCommandPlugin copies the bitmap; free our local copy.
+	if (icon)
+		BaseBitmap::Free(icon);
+	return ok;
 }
 
 // Plan 4.1 commit 3 — register the hidden Stage Driver tag.
