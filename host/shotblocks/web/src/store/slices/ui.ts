@@ -36,6 +36,10 @@ export interface UiSlice {
    *  Ocamera. If a saved value is no longer available (e.g. user
    *  uninstalled Redshift), fall back to the first available type. */
   defaultCameraType: number;
+  /** True once the doc carried an explicit saved camera-type choice, or
+   *  the user picked one this session. While false (fresh doc, no pick),
+   *  the available-types resolver may auto-prefer Redshift. */
+  cameraTypeExplicit: boolean;
 
   /** A/V chip "write target" — the track that receives cursorless
    *  inserts (Add Camera button, paste). One active chip per side.
@@ -129,6 +133,7 @@ export const createUiSlice: StateCreator<State, [], [], UiSlice> = (set) => ({
 
   availableCameraTypes: [],
   defaultCameraType: 5103,  // Ocamera (Standard) — always available
+  cameraTypeExplicit: false,
   activeVChip: 'V1',
   activeAChip: 'A1',
 
@@ -149,7 +154,7 @@ export const createUiSlice: StateCreator<State, [], [], UiSlice> = (set) => ({
   setAudioScrub: (on) => set({ audioScrub: on }),
   setSettingsOpen: (open) => set({ settingsOpen: open }),
   setAvailableCameraTypes: (types) => set({ availableCameraTypes: types }),
-  setDefaultCameraType: (id) => set({ defaultCameraType: id }),
+  setDefaultCameraType: (id) => set({ defaultCameraType: id, cameraTypeExplicit: true }),
   setActiveChip: (trackId) => set((s) => {
     if (trackId.startsWith('V')) {
       return s.activeVChip === trackId ? s : { activeVChip: trackId };

@@ -71,3 +71,20 @@ export const MIN_CLIP_FRAMES = 1;
  *  existing level keyframe moves that node instead of adding a
  *  duplicate. Mirrors Python's MERGE_AF_TOL. */
 export const LEVEL_MERGE_AF = 8;
+
+/** Camera plugin IDs. Standard Ocamera is always available; RS Camera
+ *  (Orscamera) only resolves when Redshift is installed + loaded. */
+export const CAMERA_ID_STANDARD = 5103;
+export const CAMERA_ID_REDSHIFT = 1057516;
+
+/** Resolve the auto-default camera type from the available list: prefer
+ *  Redshift when it resolved this session (the common case — Redshift
+ *  ships with C4D subscriptions), else Standard, else the first listed.
+ *  Only used when the user hasn't made an explicit choice. */
+export function preferredDefaultCameraType(
+  available: { id: number }[],
+): number {
+  if (available.some((t) => t.id === CAMERA_ID_REDSHIFT)) return CAMERA_ID_REDSHIFT;
+  if (available.some((t) => t.id === CAMERA_ID_STANDARD)) return CAMERA_ID_STANDARD;
+  return available[0]?.id ?? CAMERA_ID_STANDARD;
+}

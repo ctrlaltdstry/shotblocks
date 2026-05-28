@@ -4,6 +4,7 @@ import { TRACK_FLAG_DEFAULTS } from './store/types';
 import { onMessage, send } from './lib/host';
 import { fetchAudio, removeAudio, hasAudio } from './lib/audioStore';
 import { computeStageEvents } from './lib/stageCameras';
+import { ensureCameraTypes } from './lib/cameraTypes';
 
 /** Per-doc clip persistence. C++ owns the storage (hidden helper
  *  BaseObject inside the C4D document), JS owns serialization. Ports
@@ -356,9 +357,8 @@ async function loadFromHost(skipNextSave: React.MutableRefObject<boolean>) {
     // that isn't loaded in this session (e.g. user uninstalled Redshift
     // since save), the Settings UI will reconcile it against the live
     // availableCameraTypes list on its first open.
-    const savedCamType = Number.isInteger(parsed.defaultCameraType) && (parsed.defaultCameraType as number) > 0
-      ? (parsed.defaultCameraType as number)
-      : 5103;
+    const hasSavedCamType = Number.isInteger(parsed.defaultCameraType) && (parsed.defaultCameraType as number) > 0;
+    const savedCamType = hasSavedCamType ? (parsed.defaultCameraType as number) : 5103;
     // A/V chip targets — reconcile against the loaded tracks. If a
     // saved chip points at a track that no longer exists (e.g. someone
     // hand-edited the doc or the trackId convention changed), fall
@@ -376,10 +376,16 @@ async function loadFromHost(skipNextSave: React.MutableRefObject<boolean>) {
       markersVisible,
       renderMode,
       defaultCameraType: savedCamType,
+      cameraTypeExplicit: hasSavedCamType,
       activeVChip,
       activeAChip,
       isHydrated: true,
     });
+
+    // Resolve the default camera type now (not lazily on Settings open)
+    // so a fresh doc's first Add Camera already prefers Redshift when
+    // it's installed. Idempotent + async; doesn't block the load.
+    void ensureCameraTypes();
 
     // Fetch persisted audio binaries for any audio MEDIA we don't
     // already have in memory. Keyed by mediaId so split halves

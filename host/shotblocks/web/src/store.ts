@@ -36,6 +36,9 @@ export {
   clipEdgeZonePx,
   MIN_CLIP_FRAMES,
   LEVEL_MERGE_AF,
+  CAMERA_ID_STANDARD,
+  CAMERA_ID_REDSHIFT,
+  preferredDefaultCameraType,
 } from './store/constants';
 export {
   LEVEL_DEFAULT_TANGENT,
@@ -146,6 +149,11 @@ export interface State {
   // button — plugin ID (5103 = Standard Ocamera, 1057516 = Redshift
   // Orscamera). Persisted in the helper-BC JSON. Defaults to Standard.
   defaultCameraType: number;
+  // True once the doc had a saved camera-type choice OR the user picked
+  // one this session. While false, the available-types resolver may
+  // auto-prefer Redshift. Not persisted (a saved defaultCameraType
+  // implies explicit on the next load).
+  cameraTypeExplicit: boolean;
 
   // A/V chip "write target" — the track that receives cursorless
   // inserts (Add Camera button, paste). One active chip per side.

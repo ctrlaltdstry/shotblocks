@@ -1,6 +1,6 @@
 import { useEffect, useRef } from 'react';
 import { useStore } from '../store';
-import { send } from '../lib/host';
+import { ensureCameraTypes } from '../lib/cameraTypes';
 import { InspectorDropdown } from './Inspector';
 
 /** Centered modal hosting global preferences. Opened by the utility-
@@ -15,34 +15,13 @@ export function SettingsPanel() {
   const defaultCameraType = useStore((s) => s.defaultCameraType);
   const ref = useRef<HTMLDivElement | null>(null);
 
-  // Fetch the list of installed camera types on first open. C++ walks
-  // the known camera plugin IDs (Ocamera 5103, Orscamera 1057516, ...)
-  // and returns the ones that resolve in this C4D session — so RS
-  // Camera only appears when Redshift is loaded. See plan-4 R1.
+  // Ensure the installed camera types are fetched (idempotent). Usually
+  // already done eagerly after hydration; this is a retry path if that
+  // fetch failed (e.g. C++ wasn't ready yet).
   useEffect(() => {
     if (!open) return;
-    if (availableCameraTypes.length > 0) return;
-    void (async () => {
-      try {
-        const ack = await send({ kind: 'get-camera-types' }) as {
-          ok?: boolean;
-          types?: { id: number; label: string }[];
-        };
-        if (ack && ack.ok && Array.isArray(ack.types)) {
-          useStore.getState().setAvailableCameraTypes(ack.types);
-          // If the persisted defaultCameraType isn't in the available
-          // list (e.g. user uninstalled Redshift since save), fall back
-          // to the first type — Standard is always first.
-          const current = useStore.getState().defaultCameraType;
-          if (!ack.types.some((t) => t.id === current) && ack.types.length > 0) {
-            useStore.getState().setDefaultCameraType(ack.types[0].id);
-          }
-        }
-      } catch {
-        // Non-fatal — dropdown shows empty until a future open retries.
-      }
-    })();
-  }, [open, availableCameraTypes.length]);
+    void ensureCameraTypes();
+  }, [open]);
 
   // Escape to dismiss. Outside-click is handled by the backdrop's
   // own onClick (clicks on the panel itself stop propagation).
