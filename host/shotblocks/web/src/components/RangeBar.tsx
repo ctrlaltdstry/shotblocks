@@ -113,44 +113,30 @@ export function RangeBar({ rulerRef }: { rulerRef: React.RefObject<HTMLDivElemen
   }
 
   const px = pxPerFrame();
-  // Handle positions: the chevron-tip points outward. The 3px bar
-  // sits on the INNER edge of the handle (at x=9..12 in the 16-wide
-  // SVG, scaled to 12/16 = 75% across). For the in handle (left),
-  // the bar's right edge should land on xIn. For the out handle
-  // (right, mirrored), the bar's left edge should land on xOut.
-  //
-  // HANDLE_W is the visual width of the chevron SVG; we offset so the
-  // inner 3px bar is exactly at the in/out frame column.
-  const HANDLE_W = 16;
   const xIn  = (playRangeIn  - h.vMin) * px;
   const xOut = (playRangeOut - h.vMin) * px;
 
-  // Geometry. In the 16×39 handle SVG (preserveAspectRatio="none"),
-  // the 3-px blue bar lives at viewBox x=9..12 and the chevron
-  // points LEFT with its apex around viewBox x=1.5 and base at x=12.
+  // Geometry for the gray handle SVG (Figma 538:3418/3421),
+  // viewBox 0 0 11.077 50, preserveAspectRatio="none". A single merged
+  // shape: a 3px bar on the RIGHT (viewBox x=8.077..11.077) with a
+  // chevron pointing LEFT (apex near x=0.63).
   //
   // We anchor the bar's INNER edge to the in/out frame column:
-  //   IN handle  — bar's LEFT edge (viewBox x=9) sits at xIn
-  //                → handleLeft = xIn − 9.
-  //                Chevron renders at (xIn − 8)..(xIn + 3) — its base
-  //                overlaps the bar, apex sticks out to the LEFT of
-  //                the range (outside it). ✓
-  //   OUT handle — mirrored via scaleX(−1). Mirrored bar is at
-  //                viewBox-mirror x=(16−12)..(16−9) = 4..7. Its
-  //                RIGHT edge (the inside-of-range edge after
-  //                mirroring) sits at xOut → handleLeft = xOut − 7.
-  //                Chevron (mirrored to x=4..15) points RIGHT, apex
-  //                sticks out to the RIGHT of the range (outside). ✓
-  //
-  // At doc boundaries (xIn=0 or xOut=rulerW), the bar still sits
-  // visibly at the ruler edge, marking the no-play-range state with
-  // just the two thin blue bars (matches the Figma design).
+  //   IN handle  — bar's LEFT edge (viewBox x≈8.077) sits at xIn
+  //                → handleLeft = xIn − 8.077. Chevron sticks out to
+  //                the LEFT of the range (outside it). ✓
+  //   OUT handle — mirrored via scaleX(−1). The bar maps to mirror-x
+  //                0..3; its RIGHT edge (inside-of-range) sits at xOut
+  //                → handleLeft = xOut − 3. Chevron points RIGHT,
+  //                sticking out to the right (outside). ✓
+  const HANDLE_W = 11.077;
+  const BAR_INNER = 8.077; // viewBox x of the bar's inner (left) edge.
   const inHandleStyle: CSSProperties = {
-    left: (xIn - 9) + 'px',
+    left: (xIn - BAR_INNER) + 'px',
     width: HANDLE_W + 'px',
   };
   const outHandleStyle: CSSProperties = {
-    left: (xOut - 7) + 'px',
+    left: (xOut - (HANDLE_W - BAR_INNER)) + 'px',
     width: HANDLE_W + 'px',
     transform: 'scaleX(-1)',
   };

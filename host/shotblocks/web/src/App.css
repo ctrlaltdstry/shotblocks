@@ -302,6 +302,7 @@ body.is-resizing-headers .body { transition: none; }
 .range-bar__middle {
   position: absolute;
   top: 0; bottom: 0;
+  /* Per Figma 538:3416 — single blue 10% interior. */
   background: rgba(0, 122, 255, 0.10);
   pointer-events: none;
   z-index: 3;
