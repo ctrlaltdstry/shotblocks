@@ -12,8 +12,8 @@
   --color-grey-white: #ffffff;
 
   /* Timeline accents */
-  --color-timeline-primary-highlight:    #007aff;
-  --color-timeline-default-block:        #4da2ff;
+  --color-timeline-primary-highlight:    #824cee;
+  --color-timeline-default-block:        #a47bf2;
   /* Audio keyframe accent — orange to contrast against the audio
      clip's green fill. Used on selected nodes, tangent handles +
      connector lines, and the pen-tool marquee. Separate from the
