@@ -1721,6 +1721,7 @@ private:
 			_v2LoopEnabled = body.find("\"enabled\":true") != std::string::npos;
 			return "{\"ok\":true,\"kind\":\"set-loop-ack\"}";
 		}
+		if (body.find("\"kind\":\"warp-cursor\"") != std::string::npos) return HandleWarpCursor(body);
 		if (body.find("\"kind\":\"get-camera-types\"") != std::string::npos) return HandleGetCameraTypes();
 		if (body.find("\"kind\":\"create-camera\"") != std::string::npos) return HandleCreateCamera(body);
 		if (body.find("\"kind\":\"select-in-om\"") != std::string::npos) return HandleSelectInOm(body);
@@ -2047,6 +2048,19 @@ private:
 				++rp;
 			}
 		}
+	}
+
+	// Teleport the OS cursor to (x,y) in SCREEN pixels. Used by the
+	// timecode scrub to wrap the cursor edge-to-edge so the drag is
+	// infinite (JS can't move the cursor itself). The resulting synthetic
+	// movementX is suppressed JS-side. Extracted to keep Dispatch under
+	// Maxon's 600-line source-processor cap.
+	std::string HandleWarpCursor(const std::string& body)
+	{
+		Int32 x = ParseIntField(body, "x");
+		Int32 y = ParseIntField(body, "y");
+		SetCursorPos((int)x, (int)y);
+		return "{\"ok\":true,\"kind\":\"warp-cursor-ack\"}";
 	}
 
 	// Diag: walk the helper BaseContainer and print per-range byte totals

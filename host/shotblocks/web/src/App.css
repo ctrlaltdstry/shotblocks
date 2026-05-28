@@ -31,8 +31,20 @@
 .topbar__timecode {
   font-family: 'JetBrains Mono', ui-monospace, Menlo, Consolas, monospace;
   font-size: 14px; font-weight: 400;
-  color: var(--color-timeline-primary-highlight);
+  /* Stays blue intentionally even though the primary accent is now
+     purple — the timecode reads as a distinct system readout. */
+  color: #007aff;
   font-variant-numeric: tabular-nums;
+  /* Horizontal-scrub affordance (drag to move the playhead). */
+  cursor: ew-resize;
+  user-select: none;
+}
+/* While dragging the timecode, hide the cursor everywhere so its clamp
+   at the screen edge isn't visible — the scrub keeps responding to
+   movementX regardless of where the OS cursor sits. */
+body.is-timecode-scrubbing,
+body.is-timecode-scrubbing * {
+  cursor: none !important;
 }
 
 /* ---- body grid ---- */

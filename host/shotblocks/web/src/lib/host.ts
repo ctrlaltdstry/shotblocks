@@ -67,6 +67,7 @@ export type HostOutbound =
   | { kind: 'audio-fetch'; clipId: number }
   | { kind: 'set-play-range'; inFrame: number; outFrame: number }
   | { kind: 'set-loop'; enabled: boolean }
+  | { kind: 'warp-cursor'; x: number; y: number }
   | { kind: 'set-cursor-mode'; mode: 'slip' | 'razor' | 'pen' | 'select' | 'av-split' | 'roll' | 'play-range' | 'hand' | 'hand-grab' | 'zoom' | 'default' }
   | { kind: 'sync-render-settings' }
   | { kind: 'add-to-queue'; mode: 'whole-sequence' }
