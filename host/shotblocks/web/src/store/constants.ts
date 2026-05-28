@@ -24,25 +24,40 @@ export const MIN_TRACK_PX = 48;
  *  on the formula — both route through clipEdgeZonePx() below. */
 export const EDGE_HIT_PX = 24;
 
-/** Minimum pixel width at which a clip exposes trim/roll edge zones.
- *  3 × EDGE_HIT_PX = the seam-overlap model (trim-left / roll / trim-
- *  right thirds) needs at least one full edge-zone per third to stay
- *  reachable. Below this, the clip is body-only: edge-area clicks fall
- *  through to body drag, the cursor never enters trim/roll mode, and
- *  the clip is still selectable, draggable, and razorable. Standard
- *  NLE behaviour — Premiere/FCP/Resolve all gate edge handles on a
- *  pixel threshold rather than auto-clamping clip width. The clip
- *  itself stays geometrically truthful (1 frame = 1 frame on screen);
- *  to trim a too-narrow clip the user zooms in. */
-export const EDGE_INTERACTIVE_MIN_PX = EDGE_HIT_PX * 3;
+/** Absolute floor (px) below which a clip is body-only: too narrow to
+ *  host even a scaled-down trim/roll split, so edge-area clicks fall
+ *  through to body drag and the cursor never enters trim/roll mode. The
+ *  clip stays selectable, draggable, and razorable. Standard NLE
+ *  behaviour — Premiere/FCP/Resolve gate edge handles on width rather
+ *  than auto-clamping clip duration. The clip stays geometrically
+ *  truthful (1 frame = 1 frame on screen); to trim below the floor the
+ *  user zooms in. Each edge zone needs ~6px to be grabbable, ×3 = 18. */
+export const EDGE_INTERACTIVE_MIN_PX = 18;
 
-/** Per-clip trim/roll edge-zone width. Returns the full EDGE_HIT_PX
- *  when the clip is wide enough to host all three modes, otherwise 0
- *  to disable edge affordance entirely (body-only mode). */
+/** Per-clip trim/roll edge-zone width. Scales each of the three edge
+ *  thirds (trim-left / roll / trim-right) down proportionally on narrow
+ *  clips — clipWidth/3, capped at the full EDGE_HIT_PX — so handles stay
+ *  reachable as the clip shrinks instead of vanishing at a hard cutoff.
+ *  Returns 0 (body-only) only below EDGE_INTERACTIVE_MIN_PX. */
 export function clipEdgeZonePx(clipWidthPx: number): number {
   if (clipWidthPx < EDGE_INTERACTIVE_MIN_PX) return 0;
-  return EDGE_HIT_PX;
+  return Math.min(EDGE_HIT_PX, clipWidthPx / 3);
 }
+
+/** Minimum clip width (px) to show the label. Distinct from edge-handle
+ *  reachability: a clip can be too narrow to fit a readable label while
+ *  still being wide enough to trim. Below this the label + title tooltip
+ *  are hidden (NLE convention). */
+export const LABEL_MIN_PX = EDGE_HIT_PX * 3;
+
+/** Minimum clip width (px) to render the yellow edge brackets. The
+ *  bracket visual is 13px wide (see .shot-block__bracket in App.css);
+ *  two of them need ~2× that or they overflow past the clip body and
+ *  overlap each other. Below this the brackets are hidden so a handle
+ *  never renders wider than its own clip, including mid-trim. Edge
+ *  *interaction* (clipEdgeZonePx) can still be active below this — the
+ *  user just trims without the bracket chrome. */
+export const BRACKET_MIN_PX = 26;
 
 /** Minimum legal clip duration in frames. Mirrors Python's
  *  MIN_SHOT_FRAMES=1 (sb_shot_model.py:16) — a pure data-level minimum.

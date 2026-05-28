@@ -1,5 +1,5 @@
 import { useRef, type CSSProperties } from 'react';
-import { useStore, SNAP_PIXEL_RADIUS, EDGE_INTERACTIVE_MIN_PX, type Clip } from '../store';
+import { useStore, SNAP_PIXEL_RADIUS, LABEL_MIN_PX, BRACKET_MIN_PX, type Clip } from '../store';
 import { useClipDrag } from '../useClipDrag';
 import { WaveformCanvas } from './WaveformCanvas';
 import { LevelCurve } from './LevelCurve';
@@ -134,6 +134,10 @@ export function ShotBlock({
     hoverLeft  && 'is-edge-left',
     hoverRight && 'is-edge-right',
     isDragging && 'is-dragging',
+    // Below ~2 bracket-widths the 13px edge brackets overflow past the
+    // clip body (and each other). Suppress them so the handle never
+    // renders wider than the clip it belongs to, including mid-trim.
+    widthPx < BRACKET_MIN_PX && 'is-no-bracket',
   ].filter(Boolean).join(' ');
 
   // Icon class follows state + side:
@@ -161,7 +165,7 @@ export function ShotBlock({
   // convention (Premiere/FCP show no label on tiny clips). The native
   // title tooltip is gated on the same flag so it doesn't float
   // outside the clip rect.
-  const labelFits = widthPx >= EDGE_INTERACTIVE_MIN_PX;
+  const labelFits = widthPx >= LABEL_MIN_PX;
   return (
     <div
       ref={ref}

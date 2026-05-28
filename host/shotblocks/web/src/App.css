@@ -1715,6 +1715,9 @@ body.is-hand-panning * {
 }
 .shot-block.is-edge-left  .shot-block__bracket--left  { opacity: 1; }
 .shot-block.is-edge-right .shot-block__bracket--right { opacity: 1; }
+/* Clip too narrow to host the 13px brackets without overflow — hide
+   them even while the edge is hovered/dragged. */
+.shot-block.is-no-bracket .shot-block__bracket { opacity: 0 !important; }
 
 /* Audio clips are light green — a 30% WHITE bracket fill washes out
    against them. Use a dark fill on audio so the hover DARKENS the
