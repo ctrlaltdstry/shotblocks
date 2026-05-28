@@ -107,6 +107,12 @@ export function useAltRightZoom() {
       const audiosCanvas = document.getElementById('lanes-audios');
       const audiosHeader = document.getElementById('headers-audios');
 
+      // Vertical zoom only makes sense when there's audio content to
+      // resize. With no audio clips present the audio stack is just an
+      // empty header row — zooming it does nothing useful and looks
+      // broken. Gate all vertical zoom on at least one audio clip.
+      const hasAudioContent = s0.audioTracks.some((t) => t.clips.length > 0);
+
       // Video side is FIXED-HEIGHT — it never zooms vertically. Only
       // the audio stack responds to vertical drag; the video headers
       // are ignored entirely.
@@ -114,13 +120,13 @@ export function useAltRightZoom() {
         // Only the audio side zooms. A press in the video headers is
         // a no-op (no vertical zoom, and headers carry no time axis).
         const inAudioHeaders = !!target.closest('#headers-audios');
-        if (inAudioHeaders && audiosHeader) {
+        if (hasAudioContent && inAudioHeaders && audiosHeader) {
           const t = measure('audio', audiosHeader.getBoundingClientRect(), s0.vAudio);
           if (t) vTargets.push(t);
         }
-      } else {
+      } else if (hasAudioContent) {
         // Canvas scope: horizontal zoom affects everything; vertical
-        // zoom is audio-only.
+        // zoom is audio-only (and only when audio content exists).
         const ta = measure('audio', audiosCanvas?.getBoundingClientRect() ?? null, s0.vAudio);
         if (ta) vTargets.push(ta);
       }
