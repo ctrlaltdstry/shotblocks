@@ -1,7 +1,7 @@
 # v1 Plan 4.1 — Live Stage camera switching (whole-sequence render fix)
 
 > **Release:** v1 — see [v1-release-roadmap.md](v1-release-roadmap.md)
-> **Status:** ready to start (spike validated 2026-05-27)
+> **Status:** shipped (`b7d17bb`..`a8e61d3`) — render-time camera switching verified 2026-05-28
 > **Plan owner:** Mike + Claude
 
 A live, hidden Stage object in the scene flips the active camera at every Shotblocks clip boundary during render — so any C4D render path (Render to Picture Viewer, Add to Render Queue from C4D's menu, batch render, network render) correctly switches cameras mid-sequence without the Shotblocks dialog being open.
@@ -145,7 +145,28 @@ After three failed attempts the band-aid rule kicks in. Pivoted to a different m
 
 4. **Render with Stage Enable=ON + correct keyframes still doesn't switch.** Even though Mike's reference scene renders correctly, our auto-built Stage doesn't. We've ruled out keyframe correctness and Enable state.
 
-**Open question for next session — what's different between ours and the working reference?**
+**RESOLVED 2026-05-28 (`a8e61d3`).** The table below was a red herring — the
+NBIT_OHIDE / interp differences did not matter. The actual blocker was a
+**BaseContainer marker-key collision**: the Stage helper stamped its identity
+marker on BC key `1100`, which on an `Ostage` IS `STAGEOBJECT_CLINK` (the
+camera-link parameter). The marker-string write and the camera-link write
+fought over the same slot, so:
+
+1. `FindStageHelper` never matched (the marker string was gone) → a new Stage
+   was allocated on every `GetOrCreateStageHelper` call (the "duplicate Stage
+   per Add Camera" symptom).
+2. The surviving Stage's camera link was clobbered → empty Camera field → no
+   render switch.
+
+Fix: moved the Stage marker to a private key (`1000900`) clear of all Stage
+params; seeded the static `STAGEOBJECT_CLINK` + forced `SetKeyDirty` /
+`SetDirty` / `AnimateObject` so the link populates; kept Enable dormant during
+editing and toggled ON via `MSG_MULTI_RENDERNOTIFICATION` (with a dirty-force)
+only for the render snapshot; re-applied `NBIT_OHIDE` (visibility is
+independent of render eval). Editing viewport stays free; render switches
+cameras across native paths; Stage is invisible in the OM.
+
+**Original open question (kept for the record) — what's different between ours and the working reference?**
 
 | | Working reference | Our auto-built |
 |---|---|---|
