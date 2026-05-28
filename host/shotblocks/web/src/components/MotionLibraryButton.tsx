@@ -9,10 +9,13 @@
  *  first — reads as a stacked-pages library icon. We mirror Figma's
  *  exact DOM (flex-centered wrapper around each rotated pill) so
  *  each rotation is centered on its own pill, not on a shared
- *  origin. */
+ *  origin.
+ *
+ *  Inactive placeholder for the next iteration — no click handler, no
+ *  tooltip, no pointer cursor (see .motion-library-btn CSS). */
 export function MotionLibraryButton() {
   return (
-    <div className="motion-library-btn" title="Motion library">
+    <div className="motion-library-btn">
       <div className="motion-library-btn__glyph">
         <div className="motion-library-btn__pill-wrap motion-library-btn__pill-wrap--top">
           <div className="motion-library-btn__pill" />

@@ -10,7 +10,8 @@ function LoopToggle() {
   return (
     <div
       className={'utilstrip__icon' + (on ? ' is-active' : '')}
-      title={on ? 'Loop: on' : 'Loop: off'}
+      data-tooltip="Loop (⇧L)"
+      data-tooltip-pos="below"
       onClick={() => {
         const next = !useStore.getState().loopEnabled;
         useStore.getState().setLoopEnabled(next);
@@ -34,7 +35,8 @@ function SnapToggle() {
   return (
     <div
       className={'utilstrip__icon' + (on ? ' is-active' : '')}
-      title={on ? 'Snap: on' : 'Snap: off'}
+      data-tooltip="Snap (N)"
+      data-tooltip-pos="below"
       onClick={() => useStore.getState().setSnapEnabled(!useStore.getState().snapEnabled)}
     >
       <span className="icon icon--snap" style={{ '--icon-w': '14px', '--icon-h': '14px' } as React.CSSProperties} />
@@ -58,12 +60,8 @@ function BeatDetectionButton() {
   return (
     <div
       className={'utilstrip__icon' + ((active || busy) ? ' is-active' : '')}
-      title={
-        busy ? 'Detecting beats…'
-          : active ? 'Beat Detection: on'
-          : hasPeaks ? 'Beat Detection: off'
-          : 'Beat Detection'
-      }
+      data-tooltip={busy ? 'Detecting beats…' : 'Beat Detection'}
+      data-tooltip-pos="below"
       onClick={() => {
         if (busy) return;
         if (!hasPeaks) {
@@ -88,7 +86,8 @@ function MarkersToggle() {
   return (
     <div
       className={'utilstrip__icon' + (on ? ' is-active' : '')}
-      title={on ? 'Markers: visible' : 'Markers: hidden'}
+      data-tooltip="Markers (⇧M)"
+      data-tooltip-pos="below"
       onClick={() => useStore.getState().setMarkersVisible(!useStore.getState().markersVisible)}
     >
       <span className="icon icon--markers" style={{ '--icon-w': '10px', '--icon-h': '13px' } as React.CSSProperties} />
@@ -104,7 +103,8 @@ function SettingsButton() {
   return (
     <div
       className={'utilstrip__icon' + (open ? ' is-active' : '')}
-      title="Settings"
+      data-tooltip="Settings"
+      data-tooltip-pos="below"
       onClick={() => useStore.getState().setSettingsOpen(!useStore.getState().settingsOpen)}
     >
       <span className="icon icon--settings" style={{ '--icon-w': '15px', '--icon-h': '15px' } as React.CSSProperties} />

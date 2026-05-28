@@ -82,7 +82,8 @@ body.is-resizing-headers .body { transition: none; }
   display: flex;
   align-items: center;
   justify-content: center;
-  cursor: pointer;
+  /* Inactive placeholder — default cursor (no finger), no hover. */
+  cursor: default;
   box-sizing: border-box;
   user-select: none;
 }
@@ -355,7 +356,11 @@ body.is-resizing-headers .body { transition: none; }
   display: flex; flex-direction: column;
   padding: 0 0 4px 4px;
   gap: 10px;
-  overflow: hidden;
+  /* visible (both axes) so tool tooltips can escape the narrow rail
+     into the canvas. A mixed visible/hidden pair computes the visible
+     axis as auto (still clips), so both must be visible. Cards are
+     fixed-size and fit the column, so nothing else spills. */
+  overflow: visible;
   position: relative;
 }
 .rail__tools {
@@ -407,6 +412,73 @@ body.is-resizing-headers .body { transition: none; }
 .rail__tool:hover { background: rgba(255, 255, 255, 0.07); }
 .rail__tool.is-active { background: var(--color-timeline-primary-highlight); }
 
+/* Custom tooltip — dark pill showing "<Name> (<Key>)" from the
+   data-tooltip attribute on any element. Replaces native title (slow
+   ~1s delay, OS styling). 350ms appear delay, instant hide. Direction
+   via data-tooltip-pos: "right" (default, for the left rail) or
+   "below" (for the top utility strip). The host element's ancestors
+   must not clip overflow (e.g. .rail uses overflow:visible). */
+[data-tooltip] {
+  position: relative;
+}
+[data-tooltip]::after {
+  content: attr(data-tooltip);
+  position: absolute;
+  white-space: nowrap;
+  background: var(--color-grey-16);
+  color: var(--color-grey-white);
+  font-family: Inter, sans-serif;
+  font-size: 11px;
+  font-weight: 500;
+  line-height: 1;
+  padding: 6px 8px;
+  border-radius: 4px;
+  border: 0.5px solid var(--color-grey-24);
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.4);
+  pointer-events: none;
+  opacity: 0;
+  transition: opacity 0.1s ease 0s;
+  z-index: 100;
+}
+/* Default + explicit "right": centered vertically, 12px to the right. */
+[data-tooltip]::after,
+[data-tooltip][data-tooltip-pos="right"]::after {
+  left: calc(100% + 12px);
+  top: 50%;
+  transform: translateY(-50%);
+}
+/* "below": centered horizontally, 10px under the element. */
+[data-tooltip][data-tooltip-pos="below"]::after {
+  left: 50%;
+  right: auto;
+  top: calc(100% + 10px);
+  bottom: auto;
+  transform: translateX(-50%);
+}
+/* "left": centered vertically, 12px to the left (for bottom-right
+   anchored controls where right/below would clip off-screen). */
+[data-tooltip][data-tooltip-pos="left"]::after {
+  right: calc(100% + 12px);
+  left: auto;
+  top: 50%;
+  bottom: auto;
+  transform: translateY(-50%);
+}
+/* "above": centered horizontally, 10px above the element (for bottom-
+   anchored controls where below/right would clip). */
+[data-tooltip][data-tooltip-pos="above"]::after {
+  left: 50%;
+  right: auto;
+  top: auto;
+  bottom: calc(100% + 10px);
+  transform: translateX(-50%);
+}
+[data-tooltip]:hover::after {
+  opacity: 1;
+  /* 350ms appear delay; instant hide (delay only on the hover rule). */
+  transition: opacity 0.1s ease 0.35s;
+}
+
 /* The icon mask system from icons.css */
 .icon {
   display: block;
@@ -443,7 +515,9 @@ body.is-resizing-headers .body { transition: none; }
   gap: 10px;
   color: var(--color-grey-50);
   font-family: Inter, sans-serif;
-  overflow: hidden;
+  /* visible so the audio-scrub tooltip can escape rightward; the meter
+     bars clip their own fills via .rail__meter-bar overflow:hidden. */
+  overflow: visible;
   box-sizing: border-box;
 }
 /* Live stereo dB meter — two thin bars (L/R). Per Figma 443:2792:

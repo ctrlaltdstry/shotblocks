@@ -63,7 +63,8 @@ function AudioScrubToggle() {
   return (
     <div
       className={'rail__scrub-toggle utilstrip__icon' + (on ? ' is-active' : '')}
-      title={on ? 'Audio scrub: on' : 'Audio scrub: off'}
+      data-tooltip="Audio scrub"
+      data-tooltip-pos="right"
       onClick={() => set(!on)}
     >
       <span className="icon icon--audio-scrub" style={{ '--icon-w': '14px', '--icon-h': '16px' } as React.CSSProperties} />
@@ -186,7 +187,7 @@ function App() {
             it. */}
         <div className="rail">
           <ToolPalette />
-          <div className="rail__meter" title="dB meter">
+          <div className="rail__meter">
             <AudioScrubToggle />
             <Meter />
           </div>

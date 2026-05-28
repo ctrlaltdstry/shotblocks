@@ -9,13 +9,15 @@ interface ToolDef {
   iconStyle: CSSProperties;
 }
 
+// title = "<Name> (<Key>)" — the keys mirror useKeyboard.ts's tool
+// shortcuts (V/B/P/H/Z/S). Keep both in sync.
 const TOOLS: ToolDef[] = [
-  { id: 'select', title: 'Select',         iconClass: 'icon--select', iconStyle: { '--icon-w': '14px', '--icon-h': '14px' } as CSSProperties },
-  { id: 'razor',  title: 'Razor',          iconClass: 'icon--razor',  iconStyle: { '--icon-w': '14px', '--icon-h': '14px', '--icon-rot': '45deg' } as CSSProperties },
-  { id: 'pen',    title: 'Pen',            iconClass: 'icon--pen',    iconStyle: { '--icon-w': '14px', '--icon-h': '14px' } as CSSProperties },
-  { id: 'hand',   title: 'Hand (H)',       iconClass: 'icon--hand',   iconStyle: { '--icon-w': '16px', '--icon-h': '16px' } as CSSProperties },
-  { id: 'zoom',   title: 'Zoom (Z)',       iconClass: 'icon--zoom',   iconStyle: { '--icon-w': '16px', '--icon-h': '16px' } as CSSProperties },
-  { id: 'slip',   title: 'Slip',           iconClass: 'icon--slip',   iconStyle: { '--icon-w': '15px', '--icon-h': '12px' } as CSSProperties },
+  { id: 'select', title: 'Select (V)', iconClass: 'icon--select', iconStyle: { '--icon-w': '14px', '--icon-h': '14px' } as CSSProperties },
+  { id: 'razor',  title: 'Razor (B)',  iconClass: 'icon--razor',  iconStyle: { '--icon-w': '14px', '--icon-h': '14px', '--icon-rot': '45deg' } as CSSProperties },
+  { id: 'pen',    title: 'Pen (P)',    iconClass: 'icon--pen',    iconStyle: { '--icon-w': '14px', '--icon-h': '14px' } as CSSProperties },
+  { id: 'hand',   title: 'Hand (H)',   iconClass: 'icon--hand',   iconStyle: { '--icon-w': '16px', '--icon-h': '16px' } as CSSProperties },
+  { id: 'zoom',   title: 'Zoom (Z)',   iconClass: 'icon--zoom',   iconStyle: { '--icon-w': '16px', '--icon-h': '16px' } as CSSProperties },
+  { id: 'slip',   title: 'Slip (S)',   iconClass: 'icon--slip',   iconStyle: { '--icon-w': '15px', '--icon-h': '12px' } as CSSProperties },
 ];
 
 /** Tool palette in the left rail. Click sets the active tool locally
@@ -36,7 +38,7 @@ export function ToolPalette() {
           <div
             key={t.id}
             className={'rail__tool' + (activeTool === t.id ? ' is-active' : '')}
-            title={t.title}
+            data-tooltip={t.title}
             data-tool={t.id}
             style={t.iconStyle}
             onClick={() => pick(t.id)}

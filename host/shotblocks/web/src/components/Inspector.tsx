@@ -176,7 +176,8 @@ function HelpButton() {
     <button
       type="button"
       className="inspector-help-button"
-      title="Help"
+      data-tooltip="Help"
+      data-tooltip-pos="above"
       onMouseDown={(e) => e.preventDefault()}
       onClick={() => {
         window.alert('User manual coming in v1.');
