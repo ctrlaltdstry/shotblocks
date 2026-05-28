@@ -1,7 +1,9 @@
 # v1 Plan 5 — Polish pass (settings, render UI, tooltips, icons, debug cleanup)
 
 > **Release:** v1 — see [v1-release-roadmap.md](v1-release-roadmap.md)
-> **Status:** ready to start (planned 2026-05-28)
+> **Status:** in progress — items 1-4 shipped 2026-05-28 (`30c75b8`,
+> `08112d2`, `3db1e0e`, `6a0154f`); items 5-6 blocked on assets;
+> item 7 deferred to its own session.
 > **Plan owner:** Mike + Claude
 
 A grab-bag of pre-ship polish items, ordered smallest-to-largest so each
