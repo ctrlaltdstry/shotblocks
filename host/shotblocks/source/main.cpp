@@ -3433,9 +3433,27 @@ public:
 				BaseObject* stage = FindStageHelper(doc);
 				if (stage)
 				{
+					// Only enable the Stage for the render if it actually
+					// has keyframes. In individual-shots render mode JS
+					// flushes the Stage's track (empty), so it must NOT be
+					// enabled — the Take system owns per-shot cameras and an
+					// enabled empty Stage shouldn't participate. On render-
+					// end always flip OFF regardless.
+					// Only enable the Stage for the render if it has
+					// keyframes. In individual-shots mode JS flushes the
+					// track (empty) so the Stage stays inert and the Take
+					// system owns per-shot cameras.
+					Bool enable = false;
+					if (rn->start)
+					{
+						const DescID did = ConstDescID(DescLevel(STAGEOBJECT_CLINK, DTYPE_BASELISTLINK, Ostage));
+						CTrack* track = stage->FindCTrack(did);
+						CCurve* curve = track ? track->GetCurve() : nullptr;
+						enable = curve && curve->GetKeyCount() > 0;
+					}
 					stage->SetParameter(
 						ConstDescIDLevel(ID_BASEOBJECT_GENERATOR_FLAG),
-						GeData(rn->start), DESCFLAGS_SET::NONE);
+						GeData(enable), DESCFLAGS_SET::NONE);
 					// Force the Enable flip to take before the renderer
 					// snapshots the scene.
 					stage->SetDirty(DIRTYFLAGS::DATA | DIRTYFLAGS::CACHE);

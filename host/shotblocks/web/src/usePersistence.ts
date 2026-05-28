@@ -523,5 +523,14 @@ function saveToHost() {
   // rebuild the hidden Stage helper's animation track. Same cadence
   // as save-state (250ms debounce). The Stage stays dormant during
   // interactive use; the driver tag flips it on for renders.
-  void send({ kind: 'set-stage-cameras', events: computeStageEvents(s.videoTracks) });
+  //
+  // ONLY in whole-sequence render mode: that's the only mode the Stage
+  // serves (native render paths switch cameras via its keyframes). In
+  // individual-shots mode the Take system owns per-shot cameras, so the
+  // Stage is unnecessary — send an empty list to flush its keyframes so
+  // a stale Stage can't interfere with an individual-shots render.
+  const stageEvents = s.renderMode === 'whole-sequence'
+    ? computeStageEvents(s.videoTracks)
+    : [];
+  void send({ kind: 'set-stage-cameras', events: stageEvents });
 }
