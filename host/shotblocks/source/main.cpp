@@ -212,6 +212,12 @@ static const char  HELPER_NULL_NAME[]     = "_shotblocks";
 // Viewer, Render Queue, network render) honors Shotblocks sequencing.
 static const char  STAGE_HELPER_MARKER_VALUE[] = "shotblocks_stage_helper";
 static const char  STAGE_HELPER_NAME[]         = "_shotblocks_stage";
+// The Stage marker must NOT reuse BCKEY_HELPER_MARKER (1100) — on an
+// Ostage that ID IS STAGEOBJECT_CLINK (the camera-link param). Writing
+// the marker string there clobbers/loses against the camera link, so
+// FindStageHelper never matches and a duplicate Stage is allocated on
+// every call. Use a private ID clear of all Stage params.
+static const Int32 BCKEY_STAGE_MARKER = 1000900;
 
 // Find the existing v2 helper in `doc`, or nullptr.
 static BaseObject* FindV2Helper(BaseDocument* doc)
@@ -263,15 +269,26 @@ static BaseObject* GetOrCreateV2Helper(BaseDocument* doc)
 static BaseObject* FindStageHelper(BaseDocument* doc)
 {
 	if (!doc) return nullptr;
+	BaseObject* byName = nullptr;
 	for (BaseObject* op = doc->GetFirstObject(); op; op = op->GetNext())
 	{
 		if (op->GetType() != Ostage) continue;
 		BaseContainer* bc = op->GetDataInstance();
 		if (!bc) continue;
-		if (bc->GetString(BCKEY_HELPER_MARKER) == maxon::String(STAGE_HELPER_MARKER_VALUE))
+		if (bc->GetString(BCKEY_STAGE_MARKER) == maxon::String(STAGE_HELPER_MARKER_VALUE))
 			return op;
+		// Fallback: stages created before the marker-key fix stamped the
+		// marker on key 1100 (== STAGEOBJECT_CLINK), which got clobbered.
+		// Recognize them by name and re-stamp the correct marker.
+		if (!byName && op->GetName() == maxon::String(STAGE_HELPER_NAME))
+			byName = op;
 	}
-	return nullptr;
+	if (byName)
+	{
+		BaseContainer* bc = byName->GetDataInstance();
+		if (bc) bc->SetString(BCKEY_STAGE_MARKER, maxon::String(STAGE_HELPER_MARKER_VALUE));
+	}
+	return byName;
 }
 
 // Plan 4.1 — find or create the hidden Stage helper. Dormant on
@@ -287,6 +304,26 @@ static BaseObject* GetOrCreateStageHelper(BaseDocument* doc)
 {
 	if (!doc) return nullptr;
 	BaseObject* stage = FindStageHelper(doc);
+	// Remove any stray duplicate Stage helpers (from the pre-fix marker
+	// collision, which spawned a new Stage on every call).
+	if (stage)
+	{
+		BaseObject* op = doc->GetFirstObject();
+		while (op)
+		{
+			BaseObject* next = op->GetNext();
+			if (op != stage && op->GetType() == Ostage &&
+				op->GetName() == maxon::String(STAGE_HELPER_NAME))
+			{
+				op->Remove();
+				BaseObject::Free(op);
+			}
+			op = next;
+		}
+		// Ensure a previously-visible Stage (created during the visible
+		// render test) gets hidden on next access.
+		stage->ChangeNBit(NBIT::OHIDE, NBITCONTROL::SET);
+	}
 	if (!stage)
 	{
 		stage = BaseObject::Alloc(Ostage);
@@ -294,18 +331,21 @@ static BaseObject* GetOrCreateStageHelper(BaseDocument* doc)
 		stage->SetName(maxon::String(STAGE_HELPER_NAME));
 		BaseContainer* bc = stage->GetDataInstance();
 		if (bc)
-			bc->SetString(BCKEY_HELPER_MARKER, maxon::String(STAGE_HELPER_MARKER_VALUE));
-		// Dormant by default. Driver tag toggles ON for renders.
+			bc->SetString(BCKEY_STAGE_MARKER, maxon::String(STAGE_HELPER_MARKER_VALUE));
+		// Dormant by default — viewport stays free for manual camera
+		// navigation during editing. The driver tag's
+		// MSG_MULTI_RENDERNOTIFICATION handler flips Enable ON for the
+		// duration of a render (which fires before the renderer snapshots
+		// the scene), then back OFF when the render ends.
 		stage->SetParameter(
 			ConstDescIDLevel(ID_BASEOBJECT_GENERATOR_FLAG),
 			GeData(false), DESCFLAGS_SET::NONE);
-		// TEST — leave Stage visible. NBIT_OHIDE may exclude the Stage
-		// from render evaluation entirely. If render starts switching
-		// cameras with the Stage visible, that's the blocker. Restore
-		// NBIT_OHIDE only if we can confirm render works hidden too.
-		// stage->ChangeNBit(NBIT::OHIDE, NBITCONTROL::SET);
+		// Hidden from the OM — the user never sees or manages it.
+		// Render switching is driven by the keyframe track + Enable
+		// toggle, both independent of OM visibility, so hiding is safe.
+		stage->ChangeNBit(NBIT::OHIDE, NBITCONTROL::SET);
 		doc->InsertObject(stage, nullptr, nullptr);
-		GePrint("[Shotblocks/v2] created Stage helper (dormant, visible for test)"_s);
+		GePrint("[Shotblocks/v2] created Stage helper (dormant, hidden)"_s);
 	}
 	// Note (plan-4.1 architectural pivot 2): the camera-driver tag
 	// no longer attaches to the Stage — it attaches to the helper
@@ -2416,6 +2456,9 @@ private:
 		if (!curve) return "{\"ok\":false,\"error\":\"no curve\"}";
 
 		const Int32 fps = doc->GetFps();
+		const Int32 nowFrame = doc->GetTime().GetFrame(fps);
+		BaseObject* nowCam = nullptr;
+		Int32 nowCamBestFrame = -1;
 		Int keyCount = 0;
 		for (const auto& ev : _stageEvents)
 		{
@@ -2431,12 +2474,37 @@ private:
 					if (!cam) cam = static_cast<BaseObject*>(it->second->ForceGetLink());
 				}
 			}
+			// STEP semantics: the active camera at nowFrame is the one from
+			// the latest event at or before nowFrame.
+			if (ev.frame <= nowFrame && ev.frame > nowCamBestFrame)
+			{
+				nowCamBestFrame = ev.frame;
+				nowCam = cam;
+			}
 			GeData ld;
 			ld.SetBaseList2D(cam);
 			k->SetGeData(curve, ld);
 			k->SetInterpolation(curve, CINTERPOLATION::STEP);
 			++keyCount;
 		}
+		// Seed the STATIC STAGEOBJECT_CLINK with the current-frame camera
+		// so the field is populated even while the Stage is dormant. The
+		// keyframe track is what actually drives render-time switching;
+		// this static value is a harmless seed (Enable=OFF gates it).
+		{
+			const DescID staticDid = ConstDescID(DescLevel(STAGEOBJECT_CLINK, DTYPE_BASELISTLINK, Ostage));
+			GeData sd;
+			sd.SetBaseList2D(nowCam);
+			stage->SetParameter(staticDid, sd, DESCFLAGS_SET::NONE);
+		}
+		// Force the animation system to pick up the rebuilt track and
+		// write the animated link onto the Stage's static STAGEOBJECT_CLINK
+		// at the current time. Without the dirty + AnimateObject pass the
+		// static Camera field stays empty and the renderer (which snapshots
+		// the static value) never sees a camera.
+		curve->SetKeyDirty();
+		stage->SetDirty(DIRTYFLAGS::DATA | DIRTYFLAGS::CACHE);
+		doc->AnimateObject(stage, doc->GetTime(), ANIMATEFLAGS::NONE);
 		EventAdd();
 
 		std::string out = "{\"ok\":true,\"kind\":\"set-stage-cameras-ack\",\"keys\":";
@@ -3373,6 +3441,9 @@ public:
 					stage->SetParameter(
 						ConstDescIDLevel(ID_BASEOBJECT_GENERATOR_FLAG),
 						GeData(rn->start), DESCFLAGS_SET::NONE);
+					// Force the Enable flip to take before the renderer
+					// snapshots the scene.
+					stage->SetDirty(DIRTYFLAGS::DATA | DIRTYFLAGS::CACHE);
 				}
 			}
 		}
