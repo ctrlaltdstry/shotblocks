@@ -1620,7 +1620,12 @@ body.is-hand-panning * {
   margin: -5px -14px 0;      /* cancel content padding so the band is full-width */
   padding: 3px 13px;
   background: rgba(0, 0, 0, 0.10);
-  line-height: normal;
+  /* Fixed line-height + matching min-height so the band keeps the same
+     height when the text is dropped on a narrow clip (an empty inline
+     box would otherwise collapse and the bar would get shorter). */
+  line-height: 14px;
+  min-height: 14px;
+  box-sizing: content-box;
   white-space: nowrap;
   text-overflow: ellipsis;
   overflow: hidden;
@@ -1802,19 +1807,15 @@ body.is-hand-panning * {
   background-repeat: no-repeat;
   background-position: center;
 }
+/* No yellow stroke — just the clean fill highlight. Square off the
+   inner corners so the fill butts flat against the clip interior. */
 .shot-block__bracket--left {
   left: -1px;
-  border-top: 1px solid var(--color-timeline-edge-highlight, #EDA840);
-  border-left: 1px solid var(--color-timeline-edge-highlight, #EDA840);
-  border-bottom: 1px solid var(--color-timeline-edge-highlight, #EDA840);
   border-top-right-radius: 0;
   border-bottom-right-radius: 0;
 }
 .shot-block__bracket--right {
   right: -1px;
-  border-top: 1px solid var(--color-timeline-edge-highlight, #EDA840);
-  border-right: 1px solid var(--color-timeline-edge-highlight, #EDA840);
-  border-bottom: 1px solid var(--color-timeline-edge-highlight, #EDA840);
   border-top-left-radius: 0;
   border-bottom-left-radius: 0;
 }

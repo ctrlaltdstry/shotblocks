@@ -171,7 +171,6 @@ export function ShotBlock({
       ref={ref}
       className={cls}
       style={style}
-      title={labelFits ? displayName : undefined}
       data-clip={clip.id}
       onPointerDown={onClipPointerDown}
       onPointerMove={onRazorPointerMove}
@@ -187,7 +186,11 @@ export function ShotBlock({
         {side === 'audio' && !isOrphan && (clip.waveformVisible ?? true) && clip.peakLevels && clip.peakLevels.length > 0 && (
           <WaveformCanvas clip={clip} />
         )}
-        {labelFits && <div className="shot-block__label">{displayName}</div>}
+        {/* The label BAND always renders so the clip's visual style stays
+            consistent as it narrows; only the TEXT is dropped below the
+            fit threshold (empty band carries no min-content width, so it
+            doesn't force the clip wider). */}
+        <div className="shot-block__label">{labelFits ? displayName : ''}</div>
         {side === 'video' && (
           <div className="shot-block__icon-wrap">
             <span className={iconClass} />
