@@ -4,7 +4,10 @@ import { useEffect, useState } from 'react';
  *  so console.log/warn/error get mirrored here. Toggle with backtick. */
 export function DebugOverlay() {
   const [lines, setLines] = useState<string[]>([]);
-  const [visible, setVisible] = useState(true);
+  // Hidden by default — toggle with backtick when debugging. The log is
+  // still capturing console output the whole time; backtick just reveals
+  // the panel.
+  const [visible, setVisible] = useState(false);
 
   useEffect(() => {
     const orig = { log: console.log, warn: console.warn, error: console.error };
