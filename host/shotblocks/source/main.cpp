@@ -2670,6 +2670,25 @@ private:
 			}
 			if (rsIdx >= 0 && rsIdx < rsCount)
 				br->SetActiveRenderSettingsIndex(entryIdx, rsIdx);
+
+			// Per-entry CAMERA. The queue entry has its own camera index,
+			// SEPARATE from the take's SetCamera, and it WINS at render
+			// time. With takeOnly=true above, the entry stays on its
+			// default camera (index 0 = "Default") for every shot — which
+			// is why all shots rendered the same camera. Set it explicitly
+			// to this shot's camera. GetAllCameraNames is 0-based but
+			// SetActiveCameraIndex expects that index + 1 (0 == Default).
+			maxon::BaseArray<cinema::String> camNames;
+			br->GetAllCameraNames(entryIdx, camNames);
+			Int32 camCount = br->GetCameraCount(entryIdx);
+			const cinema::String wantCam = r.cam->GetName();
+			Int32 camPos = -1;
+			for (Int32 i = 0; i < camNames.GetCount() && i < camCount; ++i)
+			{
+				if (camNames[i] == wantCam) { camPos = i; break; }
+			}
+			if (camPos >= 0)
+				br->SetActiveCameraIndex(entryIdx, camPos + 1);
 			++added;
 		}
 
