@@ -1221,8 +1221,8 @@ body.is-hand-panning * {
 .empty-state__panel.is-active .empty-state__label {
   color: var(--color-grey-50);
 }
-.empty-state__panel.is-active .empty-state__plus path {
-  fill: var(--color-grey-50);
+.empty-state__panel.is-active .empty-state__plus {
+  color: var(--color-grey-50);
 }
 .empty-state__label {
   font-family: Inter, sans-serif;
@@ -1234,10 +1234,11 @@ body.is-hand-panning * {
 }
 .empty-state__label strong {
   font-weight: 600;
-  color: var(--color-grey-50);
+  color: inherit;
 }
 .empty-state__plus {
   flex-shrink: 0;
+  color: var(--color-grey-24);
 }
 
 /* Persistent Add Camera button — Figma node 468:3084. Floating sibling

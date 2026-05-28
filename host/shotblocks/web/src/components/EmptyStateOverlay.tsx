@@ -180,24 +180,21 @@ export function EmptyStateOverlay() {
   return null;
 }
 
-/** Plus glyph from Figma 417:2305 — 30x30 with rounded-square +
- *  shape (8px-wide arms, 2px corner rounding). Fill --color-grey-16
- *  matches the dashed border treatment so it sits as a soft visual
- *  cue rather than a hard pop. */
+/** Plus glyph from Figma 468:3119 — 18x18, two round-capped strokes
+ *  (4px wide). Uses currentColor so the panel's active state can tint
+ *  it via .empty-state__plus { color }. */
 function PlusGlyph() {
   return (
     <svg
       className="empty-state__plus"
-      width="30"
-      height="30"
-      viewBox="0 0 30 30"
+      width="18"
+      height="18"
+      viewBox="0 0 18 18"
       fill="none"
       xmlns="http://www.w3.org/2000/svg"
     >
-      <path
-        d="M18 0C19.1046 0 20 0.895431 20 2V10H28C29.1046 10 30 10.8954 30 12V18C30 19.1046 29.1046 20 28 20H20V28C20 29.1046 19.1046 30 18 30H12C10.8954 30 10 29.1046 10 28V20H2C0.895431 20 0 19.1046 0 18V12C0 10.8954 0.895431 10 2 10H10V2C10 0.895431 10.8954 0 12 0H18Z"
-        fill="#292929"
-      />
+      <line x1="9" y1="2" x2="9" y2="16" stroke="currentColor" strokeWidth="4" strokeLinecap="round" />
+      <line x1="16" y1="9" x2="2" y2="9" stroke="currentColor" strokeWidth="4" strokeLinecap="round" />
     </svg>
   );
 }
