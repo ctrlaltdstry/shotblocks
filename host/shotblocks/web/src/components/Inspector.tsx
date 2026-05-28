@@ -128,16 +128,20 @@ export function Inspector() {
             />
           </InspectorRow>
           <div className="inspector-section__action">
-            <div className="inspector-section__button-row">
-              <InspectorButton
-                onClick={onAddToQueue}
-                disabled={addDisabled}
-                title={addTooltip}
-                pulsing={pulsing}
-              >
-                Add to Queue
-              </InspectorButton>
-              {renderMode === 'individual-shots' && (
+            {/* Whole-sequence renders go through C4D's Render to Picture
+                Viewer (Plan 4.1 makes native paths switch cameras), so
+                the queue + settings buttons only apply to Individual
+                shots. */}
+            {renderMode === 'individual-shots' && (
+              <div className="inspector-section__button-row">
+                <InspectorButton
+                  onClick={onAddToQueue}
+                  disabled={addDisabled}
+                  title={addTooltip}
+                  pulsing={pulsing}
+                >
+                  Add to Queue
+                </InspectorButton>
                 <InspectorButton
                   onClick={onSyncRenderSettings}
                   disabled={!renderSettingsStale}
@@ -146,8 +150,8 @@ export function Inspector() {
                   <span className="inspector-button__icon inspector-button__icon--sync" />
                   Settings
                 </InspectorButton>
-              )}
-            </div>
+              </div>
+            )}
             {status && (
               <div className={'inspector-section__status is-' + statusKind}>
                 {status}
