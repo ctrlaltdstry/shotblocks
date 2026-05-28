@@ -20,7 +20,10 @@ export function Playhead({
   const visibleSpan = Math.max(1, h.vMax - h.vMin);
   const pxPerFrame = width / visibleSpan;
   const visible = displayFrame >= h.vMin && displayFrame <= h.vMax;
-  const x = (displayFrame - h.vMin) * pxPerFrame;
+  // Clamp to width-1 so the 1px line stays on-screen at the last frame.
+  // Without this, x === width puts the line flush against the canvas's
+  // right edge (under the Inspector) and it visually disappears.
+  const x = Math.min((displayFrame - h.vMin) * pxPerFrame, Math.max(0, width - 1));
 
   return (
     <div
