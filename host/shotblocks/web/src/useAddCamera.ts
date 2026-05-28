@@ -10,9 +10,10 @@ import { send } from './lib/host';
  *      Settings → Defaults).
  *   2. C++ allocates the camera, copies editor cam pose + lens, inserts
  *      in OM at root top, selects it, returns { objectId, typeId, name }.
- *   3. JS adds a clip on the active V-chip's track at the playhead, span
- *      72 frames (clamped to doc end). addClip's findFreeSlot resolves
- *      any overlap by snapping to the nearest free spot.
+ *   3. JS adds a 72-frame clip on the active V-chip's track. Placement:
+ *      at the playhead if that span is clear, otherwise flush against the
+ *      colliding clip on whichever side has more open space. addClip's
+ *      findFreeSlot is the final safety net.
  *   4. The existing playhead-driven router (useActiveClipRouter) detects
  *      the new clip and fires set-active-camera, which switches the
  *      viewport via the SetParameter cache-invalidation recipe.
@@ -42,16 +43,53 @@ export function useAddCamera(): () => Promise<void> {
     // track. (Plan-4 commit 4 wired this — commit 2 hardcoded V1.)
     const targetTrackId = s.activeVChip;
 
-    // Place the new clip at the PLAYHEAD on the target track. If that
-    // position overlaps an existing clip, addClip's findFreeSlot snaps it
-    // to the nearest free spot. Use the optimistic scrub frame when a
-    // scrub is in flight so it matches what the playhead shows.
-    const inFrame = Math.max(0, s.scrubFrame ?? s.currentFrame);
+    // Placement rule:
+    //   1. Try the 72-frame span AT the playhead. If it's clear (no
+    //      overlap with an existing clip on the target track), use it.
+    //   2. If it overlaps, snap the new clip flush against the colliding
+    //      clip on whichever side — left or right — has more open space.
+    // addClip's findFreeSlot is still the final safety net (it nudges to
+    // the nearest free spot if our computed frame somehow doesn't fit).
+    const ph = Math.max(0, s.scrubFrame ?? s.currentFrame);
+    const num = parseInt(targetTrackId.slice(1), 10);
+    const track = s.videoTracks.find((t) => t.id === num);
+    const clips = track ? [...track.clips].sort((a, b) => a.inFrame - b.inFrame) : [];
+    const DUR = DEFAULT_CLIP_FRAMES;
+
+    const overlaps = (inF: number) => {
+      const outF = inF + DUR;
+      return clips.some((c) => inF < c.outFrame && outF > c.inFrame);
+    };
+
+    let inFrame = ph;
+    if (clips.length > 0 && overlaps(ph)) {
+      // The clip the playhead sits over (or the nearest one the span hits).
+      const hit = clips.find((c) => ph < c.outFrame && ph + DUR > c.inFrame) ?? clips[0];
+      const hitIdx = clips.indexOf(hit);
+      // Open space to the LEFT of `hit`: from the previous clip's end
+      // (or doc start) up to hit.inFrame.
+      const prev = clips[hitIdx - 1];
+      const leftStart = prev ? prev.outFrame : 0;
+      const leftSpace = hit.inFrame - leftStart;
+      // Open space to the RIGHT of `hit`: from hit.outFrame up to the
+      // next clip's start (or doc end).
+      const next = clips[hitIdx + 1];
+      const rightEnd = next ? next.inFrame : s.docFrames;
+      const rightSpace = rightEnd - hit.outFrame;
+      // Place flush on the side with more room. Ties go right.
+      if (leftSpace > rightSpace) {
+        inFrame = Math.max(leftStart, hit.inFrame - DUR);
+      } else {
+        inFrame = hit.outFrame;
+      }
+    }
+
+    inFrame = Math.max(0, inFrame);
     // Clamp the clip end to doc end so we don't extend the doc. If
     // there's less than DEFAULT_CLIP_FRAMES of room remaining, the new
     // clip is shorter. (Doc must have at least 1 frame of room.)
     const maxOut = Math.max(inFrame + 1, s.docFrames);
-    const outFrame = Math.min(inFrame + DEFAULT_CLIP_FRAMES, maxOut);
+    const outFrame = Math.min(inFrame + DUR, maxOut);
 
     useStore.getState().addClip(targetTrackId, {
       inFrame,
