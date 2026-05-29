@@ -10,9 +10,38 @@ work).
 
 ---
 
-## uncached simulations don't run during v2 (spacebar) playback
+## ~~uncached simulations don't run + cached sims stutter during v2 (spacebar) playback~~ FIXED 2026-05-29
 
-**Symptoms.** With an *uncached* simulation in the scene (cloth, soft
+**RESOLUTION.** Root cause: v2 owned playback with a dialog Timer that
+advanced `doc->SetTime()` per frame (a per-frame *seek*), not C4D's
+native sequential play. That broke simulations two ways: (1) seeking
+doesn't step the sim solver, so uncached sims froze; (2) the redraw
+after `SetTime` used only `EventAdd()` (coalesced → viewport repainted
+~every 60 frames → heavy stutter on cached/Alembic scenes). Trying to
+force the redraw with `ExecutePasses(caches=true)` + `DrawViews(FORCE
+FULLREDRAW)` from the Timer **crashed** — `DrawViews` already runs scene
+execution, so that double-rebuilt the cache, and force-rebuilding an
+order-dependent sim/Alembic cache from the Timer re-enters the sim
+pipeline (crash stack: `Timer → c4d_simulation → io_alembic`).
+
+**Fix:** stop owning playback; **delegate to C4D's native transport**.
+`toggle-play` now calls `RunAnimation(doc, forward, stop)`; `set-play-
+range` (I/O) sets C4D's loop range via `SetLoopMinTime/SetLoopMaxTime`
+so native play honors it and the C4D timeline bracket updates live;
+seeks use the transport-aware `SetDocumentTime`; scrub-begin/end
+stop/resume native play. C4D evaluates sims/Alembic sequentially and
+redraws correctly — both the uncached-freeze and the cached-stutter are
+gone. Tradeoff accepted: C4D's own play button now also respects the v2
+range while set, and loop on/off follows C4D's cycle button (the loop
+*mode* isn't SDK-settable; the range is). See `host/shotblocks/source/
+main.cpp` toggle-play / set-play-range / ApplyV2RangeToDocLoop, and the
+Claude-only memory `feedback_c4d_playback_delegate_to_runanimation`.
+
+History preserved below for the lessons-learned value.
+
+---
+
+**Symptoms (originally filed).** With an *uncached* simulation in the scene (cloth, soft
 body, particles, Pyro, dynamics, etc.):
 1. Hitting **spacebar** to play in the Shotblocks v2 timeline plays the
    camera/animation but the **simulation does not advance** — it sits
