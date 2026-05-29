@@ -1673,6 +1673,7 @@ private:
 			}
 			return "{\"ok\":true,\"kind\":\"set-play-range-ack\"}";
 		}
+		if (body.find("\"kind\":\"set-doc-frames\"") != std::string::npos) return HandleSetDocFrames(body);
 		if (body.find("\"kind\":\"set-loop\"") != std::string::npos)
 		{
 			// Cache v2's loop flag. Read by the playback timer at the
@@ -1997,6 +1998,33 @@ private:
 				::KillTimer(_cursorSubclassed, kCursorTimerId);
 			}
 		}
+	}
+
+	// Handler for `set-doc-frames` — grow (or set) the document length.
+	// JS sends this when Add Camera can't fit a full-length camera on the
+	// targeted track; we extend C4D's max time so the new camera gets its
+	// full duration at the tail instead of a 1-frame sliver. Mirrors the
+	// set-play-range pattern. Extracted to keep Dispatch under the
+	// sourceprocessor's 600-line function cap.
+	//
+	// Intentionally NOT undoable: this is a plain SetMaxTime with no
+	// AddUndo, so undoing the Add Camera leaves the longer sequence (the
+	// user shortens it manually if they want). Min time is preserved, not
+	// assumed to be 0, to match PostDocInfo's maxFrame - minFrame.
+	std::string HandleSetDocFrames(const std::string& body)
+	{
+		Int32 frames = ParseIntField(body, "frames");
+		if (frames < 1) frames = 1;
+		BaseDocument* doc = GetActiveDocument();
+		if (doc)
+		{
+			Int32 fps = doc->GetFps();
+			Int32 minFrame = doc->GetMinTime().GetFrame(fps);
+			doc->SetMaxTime(BaseTime(minFrame + frames, fps));
+			EventAdd();
+			PostDocInfo();
+		}
+		return "{\"ok\":true,\"kind\":\"set-doc-frames-ack\"}";
 	}
 
 	// of truth. individual-shots will land in Commit 10. Factored

@@ -66,6 +66,11 @@ export type HostOutbound =
   | { kind: 'audio-add'; clipId: number; bytes: string }
   | { kind: 'audio-fetch'; clipId: number }
   | { kind: 'set-play-range'; inFrame: number; outFrame: number }
+  // Grow the document length so Add Camera can place a full-length camera
+  // at the tail when the targeted track is full (instead of a 1-frame
+  // sliver). C++ calls SetMaxTime (not undoable) and re-broadcasts
+  // doc-info. See useAddCamera.
+  | { kind: 'set-doc-frames'; frames: number }
   | { kind: 'set-loop'; enabled: boolean }
   | { kind: 'warp-cursor'; x: number; y: number }
   | { kind: 'set-cursor-mode'; mode: 'slip' | 'razor' | 'pen' | 'select' | 'av-split' | 'roll' | 'play-range' | 'hand' | 'hand-grab' | 'zoom' | 'default' }

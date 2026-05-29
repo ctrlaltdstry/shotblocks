@@ -12,8 +12,11 @@ import { send } from './lib/host';
  *      in OM at root top, selects it, returns { objectId, typeId, name }.
  *   3. JS adds a 72-frame clip on the active V-chip's track. Placement:
  *      at the playhead if that span is clear, otherwise flush against the
- *      colliding clip on whichever side has more open space. addClip's
- *      findFreeSlot is the final safety net.
+ *      colliding clip on whichever side has more open space. If a full
+ *      camera fits nowhere on the track, the sequence is extended (via the
+ *      set-doc-frames host message) so it lands at full length at the tail
+ *      instead of a 1-frame sliver. addClip's findFreeSlot is the final
+ *      safety net.
  *   4. The existing playhead-driven router (useActiveClipRouter) detects
  *      the new clip and fires set-active-camera, which switches the
  *      viewport via the SetParameter cache-invalidation recipe.
@@ -85,11 +88,41 @@ export function useAddCamera(): () => Promise<void> {
     }
 
     inFrame = Math.max(0, inFrame);
-    // Clamp the clip end to doc end so we don't extend the doc. If
-    // there's less than DEFAULT_CLIP_FRAMES of room remaining, the new
-    // clip is shorter. (Doc must have at least 1 frame of room.)
-    const maxOut = Math.max(inFrame + 1, s.docFrames);
-    const outFrame = Math.min(inFrame + DUR, maxOut);
+
+    // Does a full-length camera fit ANYWHERE on this track? Scan the
+    // largest free gap: head [0, first.inFrame], between consecutive
+    // clips, and tail [last.outFrame, docFrames]. If the biggest gap is
+    // >= DUR, the camera fits as-is (today's placement is fine, no
+    // clamp needed). Only when it fits nowhere do we extend the doc.
+    let maxGap = s.docFrames;
+    if (clips.length > 0) {
+      maxGap = clips[0].inFrame; // head gap
+      for (let i = 0; i < clips.length; i++) {
+        const gapEnd = i + 1 < clips.length ? clips[i + 1].inFrame : s.docFrames;
+        maxGap = Math.max(maxGap, gapEnd - clips[i].outFrame);
+      }
+    }
+
+    let outFrame: number;
+    if (maxGap >= DUR) {
+      // Fits somewhere — keep the computed placement at full length.
+      outFrame = inFrame + DUR;
+    } else {
+      // Doesn't fit anywhere: place flush at the end of the last clip and
+      // extend the sequence so the new camera gets its full duration.
+      inFrame = clips.length > 0 ? clips[clips.length - 1].outFrame : 0;
+      outFrame = inFrame + DUR;
+      if (outFrame > s.docFrames) {
+        // Grow C4D's doc length, then await the ack so the store's
+        // docFrames is fresh before addClip runs. Host unreachable →
+        // fall through; addClip's findFreeSlot clamps as before.
+        try {
+          await send({ kind: 'set-doc-frames', frames: outFrame });
+        } catch {
+          // ignore — no host; clip will be clamped by addClip
+        }
+      }
+    }
 
     useStore.getState().addClip(targetTrackId, {
       inFrame,
