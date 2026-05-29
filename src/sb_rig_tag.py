@@ -29,6 +29,7 @@ from sb_rig_quat import (
 )
 import sb_rig_noise
 import sb_rig_zoom
+import sb_rig_follow
 
 
 # Tag parameter IDs (match res/description/tshotblocks.h)
@@ -57,6 +58,28 @@ SHOTBLOCKS_ZOOM_HOLD            = 1043
 SHOTBLOCKS_ZOOM_RAMP_IN         = 1044
 SHOTBLOCKS_ZOOM_RAMP_OUT        = 1045
 SHOTBLOCKS_ZOOM_RETURN          = 1046
+# Chase / Follow-Target. Chase drives the camera BODY (position only);
+# aim stays on the look-at + angular spring. The pursuit math lives in
+# sb_rig_follow (pure functions, no c4d), so the v2 Targeting "Chase"
+# pill can reuse the same engine. See .agent/plans/rig-chase-follow.md.
+SHOTBLOCKS_FOLLOW_ENABLED       = 1050
+SHOTBLOCKS_FOLLOW_TARGET        = 1051
+SHOTBLOCKS_FOLLOW_DISTANCE      = 1052
+SHOTBLOCKS_FOLLOW_VEL_SMOOTH    = 1053
+SHOTBLOCKS_FOLLOW_REORIENT      = 1054
+SHOTBLOCKS_FOLLOW_HEIGHT_BIAS   = 1055
+SHOTBLOCKS_FOLLOW_SIDE_BIAS     = 1056
+# Aim Tracking: when Chase is on, lets the AIM (rotation) spring respond
+# faster than the body's Angular damping. 0% = aim uses Angular as-is
+# (smooth, laggy); 100% = aim snaps to keep the subject framed even when
+# the body is heavily smoothed. Decouples "smooth body" from "locked aim".
+SHOTBLOCKS_FOLLOW_AIM_TRACK     = 1057
+# Aim Lead: aim AHEAD of the subject along its travel (anticipation), so a
+# fast subject doesn't ride the trailing edge of frame. LEAD_DIST is how
+# far ahead at full speed (scene units); AIM_LEAD is a 0..1 blend from
+# aiming dead-on the subject (0) to fully at the lead point (1).
+SHOTBLOCKS_FOLLOW_LEAD_DIST     = 1058
+SHOTBLOCKS_FOLLOW_AIM_LEAD      = 1059
 SHOTBLOCKS_GRP_FRAMING          = 1103  # group host in tshotblocks.res for the UD-injected Frame Offset
 
 # Fallback distance (cm) for converting viewport-fraction noise into
@@ -148,6 +171,8 @@ def _state_for(tag):
             "prev_heading": None,     # for Bank-Into-Turns yaw rate
             "zoom_schedule": sb_rig_zoom.make_schedule_state(),
             "zoom_focal_baseline": None,
+            "follow": sb_rig_follow.make_state(),
+            "follow_lead_world": None,   # world aim-lead point, set per-frame
         }
         _RUNTIME[key] = st
     return st
@@ -338,6 +363,16 @@ class ShotblocksTag(c4d.plugins.TagData):
         node[SHOTBLOCKS_ZOOM_RAMP_IN]       = 0.25
         node[SHOTBLOCKS_ZOOM_RAMP_OUT]      = 0.6
         node[SHOTBLOCKS_ZOOM_RETURN]        = 0.7
+        node[SHOTBLOCKS_FOLLOW_ENABLED]     = False
+        node[SHOTBLOCKS_FOLLOW_DISTANCE]    = 300.0
+        node[SHOTBLOCKS_FOLLOW_VEL_SMOOTH]  = 0.5
+        node[SHOTBLOCKS_FOLLOW_REORIENT]    = 0.5
+        node[SHOTBLOCKS_FOLLOW_HEIGHT_BIAS] = 50.0
+        node[SHOTBLOCKS_FOLLOW_SIDE_BIAS]   = 0.0
+        node[SHOTBLOCKS_FOLLOW_AIM_TRACK]   = 0.7   # aim tracks tighter than body by default
+        node[SHOTBLOCKS_FOLLOW_LEAD_DIST]   = 0.0   # lead off until dialed in
+        node[SHOTBLOCKS_FOLLOW_AIM_LEAD]    = 0.0
+        # Follow Target starts unset (BaseLink defaults to None).
         # Target and Up Target start unset (BaseLinks default to None).
         # Frame Offset is a UserData slot — added in _on_tag_applied
         # (Init is called for fresh tags before they're attached to
@@ -516,11 +551,19 @@ class ShotblocksTag(c4d.plugins.TagData):
             finally:
                 ShotblocksTag._in_reset_eval = False
 
-        # Position target: always from the camera's own keyframed
-        # local pose. Look-at doesn't move the camera, only aims it.
-        # Rotation target: starts as the keyframed rotation. If
-        # look-at is active, we'll slerp/replace below.
+        # Position target: from the camera's own keyframed local pose,
+        # UNLESS Chase is driving the body — then the desired position
+        # is "behind the follow target along its heading" (the chase
+        # engine replaces the keyframed pos; aim/rotation untouched).
+        # Look-at doesn't move the camera, only aims it. Rotation target
+        # starts as the keyframed rotation; look-at may slerp/replace it
+        # below.
         target_pos, key_rot = _read_keyframed_target(cam, doc, time, fps)
+        chase_pos = _chase_local_target_pos(
+            tag, st, doc, time, fps, dt,
+            is_reset=bool(st["reset_pending"]))
+        if chase_pos is not None:
+            target_pos = chase_pos
         target_rot = key_rot
 
         if st["reset_pending"] and reset_on_boundary:
@@ -586,6 +629,17 @@ class ShotblocksTag(c4d.plugins.TagData):
         k_rot = k_from_damping(_read_damping(tag, st,
                                              SHOTBLOCKS_DAMPING_ROT,
                                              "damping_rot"))
+        # Aim Tracking (Chase only): blend the rotation stiffness UP toward
+        # the stiffest response so the aim can stay locked on the subject
+        # even when the body is heavily damped. This decouples "smooth
+        # body" (Linear) from "locked aim" — the user's request: 100%
+        # Linear for a glassy body, high Aim Tracking to keep the subject
+        # framed. k_from_damping(0.0) is the stiff end (K_MAX).
+        if bool(tag[SHOTBLOCKS_FOLLOW_ENABLED]):
+            aim_track = max(0.0, min(1.0, float(tag[SHOTBLOCKS_FOLLOW_AIM_TRACK] or 0.0)))
+            if aim_track > 0.0:
+                k_stiff = k_from_damping(0.0)
+                k_rot = k_rot + (k_stiff - k_rot) * aim_track
         c_pos = critical_c(k_pos)
         c_rot = critical_c(k_rot)
 
@@ -595,9 +649,11 @@ class ShotblocksTag(c4d.plugins.TagData):
         has_explicit_bank_source = False
         if look_at_target is not None:
             ou, ov = _read_frame_offset(tag)
+            aim_pt = _chase_aim_point_world(tag, st, look_at_target)
             la_hpb = _compute_look_at_local_rot(
                 cam, look_at_target, up_target,
-                offset_u=ou, offset_v=ov, doc=doc)
+                offset_u=ou, offset_v=ov, doc=doc,
+                aim_point_world=aim_pt)
             if la_hpb is not None:
                 strength = float(tag[SHOTBLOCKS_LOOK_AT_STRENGTH])
                 s = max(0.0, min(1.0, strength))
@@ -762,6 +818,102 @@ def _read_keyframed_target(cam, doc, time, fps):
     return (px, py, pz), (rx, ry, rz)
 
 
+def _chase_local_target_pos(tag, st, doc, time, fps, dt, is_reset):
+    """If Chase is enabled and a Follow Target is set, return the camera's
+    desired LOCAL position (parent-relative 3-tuple) for this frame —
+    the position the existing position spring should chase. Returns None
+    when Chase is off or unset, so the caller falls back to the camera's
+    own keyframed position.
+
+    The chase math (sb_rig_follow) runs in WORLD space: it reads the
+    follow target's world position, low-passes its velocity, and places
+    the camera behind the target's heading. We then convert the single
+    resulting world point to the camera's parent-local frame — the same
+    frame the spring and _write_back use (so they compose cleanly).
+
+    `is_reset` is True on a boundary / scrub reset; we clear the chase
+    smoothing first so the seed equals the freshly computed desired spot
+    (mirroring the spring's reset_to_target), and so the heading low-pass
+    doesn't carry stale velocity across the cut.
+    """
+    if not bool(tag[SHOTBLOCKS_FOLLOW_ENABLED]):
+        return None
+    follow_obj = tag[SHOTBLOCKS_FOLLOW_TARGET]
+    if follow_obj is None:
+        return None
+
+    cam = tag.GetObject()
+    if cam is None:
+        return None
+
+    follow_state = st["follow"]
+    if is_reset:
+        sb_rig_follow.reset_state(follow_state)
+
+    # Follow target's world position this frame.
+    try:
+        tgt_w = follow_obj.GetMg().off
+    except Exception:
+        return None
+    target_world = (tgt_w.x, tgt_w.y, tgt_w.z)
+
+    lead_dist = float(tag[SHOTBLOCKS_FOLLOW_LEAD_DIST] or 0.0)
+    result = sb_rig_follow.desired_position(
+        follow_state, target_world, dt,
+        follow_distance=float(tag[SHOTBLOCKS_FOLLOW_DISTANCE]   or 0.0),
+        velocity_smoothing=float(tag[SHOTBLOCKS_FOLLOW_VEL_SMOOTH] or 0.0),
+        reorient_speed=float(tag[SHOTBLOCKS_FOLLOW_REORIENT]    or 0.0),
+        height_bias=float(tag[SHOTBLOCKS_FOLLOW_HEIGHT_BIAS]    or 0.0),
+        side_bias=float(tag[SHOTBLOCKS_FOLLOW_SIDE_BIAS]        or 0.0),
+        lead_distance=lead_dist,
+    )
+    desired_world = result["camera"]
+    # Stash the world-space aim-lead point so the look-at path can blend
+    # the aim toward it (anticipation). Cleared to None when lead is off
+    # so the look-at path knows to aim dead-on the subject.
+    st["follow_lead_world"] = result["lead"] if lead_dist != 0.0 else None
+    follow_state["last_frame"] = time.GetFrame(fps)
+
+    # Convert the world desired point to the camera's parent-local frame,
+    # matching _read_keyframed_target's local convention.
+    desired_v = c4d.Vector(desired_world[0], desired_world[1], desired_world[2])
+    parent = cam.GetUp()
+    if parent is not None:
+        try:
+            desired_v = ~parent.GetMg() * desired_v
+        except Exception:
+            pass
+    return (desired_v.x, desired_v.y, desired_v.z)
+
+
+def _chase_aim_point_world(tag, st, look_at_target):
+    """Return the world-space point the camera should AIM at when Chase's
+    aim-lead is active — a blend from the look-at target's origin (Aim
+    Lead = 0) toward the chase lead point ahead of the subject (Aim Lead
+    = 1). Returns None when lead is off / unavailable, so the caller aims
+    dead-on the target as before.
+
+    The lead point itself is computed in the chase engine (it already
+    has the smoothed heading) and stashed on `st` by
+    `_chase_local_target_pos`, which runs earlier this frame.
+    """
+    if not bool(tag[SHOTBLOCKS_FOLLOW_ENABLED]):
+        return None
+    lead_world = st.get("follow_lead_world")
+    if lead_world is None or look_at_target is None:
+        return None
+    amount = max(0.0, min(1.0, float(tag[SHOTBLOCKS_FOLLOW_AIM_LEAD] or 0.0)))
+    if amount <= 0.0:
+        return None
+    try:
+        subj = look_at_target.GetMg().off
+    except Exception:
+        return None
+    return (subj.x + (lead_world[0] - subj.x) * amount,
+            subj.y + (lead_world[1] - subj.y) * amount,
+            subj.z + (lead_world[2] - subj.z) * amount)
+
+
 def _matrix_to_hpb_safe(mg):
     """Decompose a C4D matrix to HPB radians. Uses c4d.utils.MatrixToHPB
     if available, otherwise extracts manually from the basis vectors.
@@ -786,10 +938,17 @@ def _matrix_to_hpb_safe(mg):
 
 
 def _compute_look_at_local_rot(cam, target_obj, up_obj,
-                               offset_u=0.0, offset_v=0.0, doc=None):
+                               offset_u=0.0, offset_v=0.0, doc=None,
+                               aim_point_world=None):
     """Compute the local (relative-to-parent) HPB rotation that aims
     the camera's -Z axis at `target_obj`, optionally framing the
     target at a screen-space offset.
+
+    If `aim_point_world` (a 3-tuple world position) is given, the camera
+    aims at THAT point instead of `target_obj`'s origin — used by Chase's
+    aim-lead so the camera can look slightly ahead of the subject. The
+    up-target / bank handling is unaffected. `target_obj` is still
+    required (non-None) as the "is look-at active" gate.
 
     Base aim mirrors the Maxon SDK lookatcamera.cpp pattern:
         local_dir = (~(cam.GetUpMg() * cam.GetFrozenMln()))
@@ -842,9 +1001,14 @@ def _compute_look_at_local_rot(cam, target_obj, up_obj,
     up_mg = cam.GetUpMg()
     frozen_mln = cam.GetFrozenMln()
     parent_frozen = up_mg * frozen_mln
+    if aim_point_world is not None:
+        aim_off = c4d.Vector(aim_point_world[0], aim_point_world[1],
+                             aim_point_world[2])
+    else:
+        aim_off = target_obj.GetMg().off
     try:
         inv_parent_frozen = ~parent_frozen
-        local_dir = inv_parent_frozen * target_obj.GetMg().off - cam.GetRelPos()
+        local_dir = inv_parent_frozen * aim_off - cam.GetRelPos()
     except Exception:
         # Defensive: very rare edge case where parent matrix isn't
         # invertible. Fall back to world-only aim.

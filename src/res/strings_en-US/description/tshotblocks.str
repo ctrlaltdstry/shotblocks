@@ -24,10 +24,21 @@ STRINGTABLE Tshotblocks
     SHOTBLOCKS_ZOOM_RAMP_IN           "Snap In";
     SHOTBLOCKS_ZOOM_RAMP_OUT          "Pull Back";
     SHOTBLOCKS_ZOOM_RETURN            "Return";
+    SHOTBLOCKS_FOLLOW_ENABLED         "Chase Target";
+    SHOTBLOCKS_FOLLOW_TARGET          "Target";
+    SHOTBLOCKS_FOLLOW_DISTANCE        "Follow Distance";
+    SHOTBLOCKS_FOLLOW_VEL_SMOOTH      "Velocity Smoothing";
+    SHOTBLOCKS_FOLLOW_REORIENT        "Swing Speed";
+    SHOTBLOCKS_FOLLOW_HEIGHT_BIAS     "Height Offset";
+    SHOTBLOCKS_FOLLOW_SIDE_BIAS       "Side Offset";
+    SHOTBLOCKS_FOLLOW_AIM_TRACK       "Aim Lock";
+    SHOTBLOCKS_FOLLOW_LEAD_DIST       "Look Ahead Distance";
+    SHOTBLOCKS_FOLLOW_AIM_LEAD        "Look Ahead";
     SHOTBLOCKS_GRP_DAMPING            "Damping";
     SHOTBLOCKS_GRP_LOOK_AT            "Look At";
     SHOTBLOCKS_GRP_FRAMING            "Framing";
     SHOTBLOCKS_GRP_NOISE              "Noise";
     SHOTBLOCKS_GRP_ZOOM               "Zoom";
+    SHOTBLOCKS_GRP_FOLLOW             "Chase";
     SHOTBLOCKS_GRP_ADVANCED           "Advanced";
 }
