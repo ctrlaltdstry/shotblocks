@@ -1,151 +1,143 @@
-# Handoff — end of 2026-05-28 session
+# Handoff — end of 2026-05-29 session
 
-Big session. **Plan 4.1 (live Stage render) finished and shipped**,
-**Plan 5 (v1 polish pass) items 1–5 shipped plus a large second wave of
-polish**, and **two render bugs fixed**. The only remaining v1 work is
-the **camera-rig-tag rework (Plan 5 item 7)** — deferred to its own
-focused design session, which is what the NEXT chat should start on.
+Next session's job: **build the Chase / Follow-Target camera behavior.**
+The design is already done and specced — this is an implementation
+session, not a design one. Read the spec, then start building.
 
 ## Read these first
 
-1. `CLAUDE.md` — non-negotiable rules. Especially the dev-loop, the
-   "measure before fixing" rule, and "two failed attempts on the same
-   bug → stop and surface the architectural alternative."
-2. `.agent/router.md` → `.agent/constitution.md` — project principles.
-3. `.agent/plans/v1-plan-5-polish-pass.md` — the polish plan; item 7 is
-   the camera-rig-tag rework, the next session's subject.
-4. `.agent/skills/rig-hierarchy.md` + `.agent/skills/spring-damper.md` —
-   the rig design (no rig nulls; tag does math on the camera pose).
-5. `src/sb_rig_tag.py` and the `src/sb_rig_*.py` siblings — the actual
-   rig code (see "Camera-rig-tag — starting point" below).
+1. `CLAUDE.md` — non-negotiable rules. Especially the **dev loop**, the
+   **"measure before fixing"** rule, and **"two failed attempts on the
+   same bug → stop and surface the architectural alternative."** (This
+   session lost time guessing at a layout bug and at a playback bug
+   before resetting to measurement — don't repeat that. After the FIRST
+   failed fix, reset to the known-good baseline and re-apply one change
+   at a time.)
+2. **`.agent/plans/rig-chase-follow.md`** — the full Chase/Follow spec.
+   This is the task. All the key decisions are already made (see below).
+3. `.agent/skills/spring-damper.md` — the lag/overshoot engine the chase
+   reuses.
+4. `src/sb_rig_tag.py` + `src/sb_rig_spring.py` — the rig tag and the
+   spring it composes. Read how `_read_keyframed_target` /
+   `_execute` / `_write_back` work; chase plugs in as a new position-
+   target source.
 
-## What shipped this session (29 commits, `a8e61d3`..`d8e070f`)
+## The task — Chase / Follow-Target (decided design)
 
-**Plan 4.1 — live Stage render (FINISHED):**
-- `a8e61d3` fix render-time Stage camera switching. Root cause was a
-  BaseContainer marker-key collision: the Stage helper's identity marker
-  was written to BC key `1100`, which on an `Ostage` IS
-  `STAGEOBJECT_CLINK` (the camera-link param). They clobbered each other →
-  duplicate Stages + empty camera links. Fixed by moving the marker to a
-  private key. (Memory: `c4d-bc-marker-key-param-collision`.)
-- `3077d97` tie the Stage process to whole-sequence render mode — in
-  individual-shots mode JS flushes the Stage track and the render-time
-  enable only fires when keyframes exist.
+A camera that **pursues a moving object with its own momentum** — trails
+it, lags, overshoots on turns — instead of being rigidly parented. Use
+case: a camera chasing a flying mouse-cursor as it darts between objects.
 
-**Render bug fix (pre-existing, found this session):**
-- `4cf7d8f` individual-shots Render Queue jobs all rendered the SAME
-  camera. A BatchRender queue ENTRY has its own camera index, separate
-  from the take's SetCamera, and it wins at render time. Fixed via
-  `SetActiveCameraIndex(entry, camPos + 1)`. (Memory:
-  `c4d-batchrender-per-entry-camera`.)
+**Decisions already locked in (do NOT re-litigate; build to these):**
+- **New pure-function module `src/sb_rig_follow.py`** — no `c4d` import,
+  exactly like `sb_rig_spring`/`sb_rig_noise`/`sb_rig_zoom`. Signature
+  idea: given (target pos, target velocity, current cam state, knobs) →
+  return the **desired camera position**. The existing position spring
+  does the lag/overshoot. This module is **front-end-agnostic** on
+  purpose: the tag drives it now, the v2 motion-layers Targeting "Chase"
+  pill drives the *same module* later. Build the math once.
+- **Velocity-relative pursuit:** desired pos =
+  `target_pos − (velocity_dir × follow_distance)` + a small height/side
+  bias. The "behind it along its heading" model.
+- **Position only.** Chase drives the camera *body*. **Aim stays on the
+  existing Look-At Target + angular spring** (they compose — you can
+  chase one object and look at another, or set both to the cursor).
+- The two **failure modes are the real work** (need live tuning against
+  a real flying-cursor anim, not theory):
+  1. *Low-speed direction jitter* — velocity direction flips when slow;
+     fix = low-pass the velocity + fade the velocity-relative offset out
+     to a neutral world-offset hold below a speed threshold.
+  2. *Reverse whip-around* — cap how fast the "behind" point re-orients
+     on a sharp reversal (a re-orient damping knob).
+- **Implied knobs:** Follow Target (own object link, separate from
+  Look-At Target), Follow Distance, Position Damping (exists), Velocity
+  Smoothing, Re-orient Speed, Height/Side Bias.
 
-**Plan 5 — polish pass (items 1–5 + a big second wave):**
-- Settings default camera → Redshift when installed (`3db1e0e`).
-- Hide Add-to-Queue/Settings buttons in whole-sequence mode (`08112d2`).
-- Remove Dump Stage button + `[dump]` debug logging (`30c75b8`).
-- Custom styled tooltips + tool shortcuts; Pen=P, Shift+M=marker toggle;
-  Motion Library button disabled (placeholder) (`6a0154f`).
-- Menu + camera-tag icons (purple set), 64×64 PNGs in `src/res/icons/`,
-  loaded by C++ command + Python tag (`8eb172d`, `8aad6c4`).
-- Render mode now defaults to **whole-sequence** (`66e5b82`).
-- Debug overlay hidden by default; backtick still toggles it (`9ec4b61`).
-- Timecode: Ctrl-click toggles timecode/frames; smooth per-frame scrub
-  readout; click-drag scrubs with infinite edge-wrap via a C++
-  `warp-cursor` command (SetCursorPos) — Pointer Lock was avoided because
-  WebView2 shows an unsuppressable "press Esc" banner (`757f388`,
-  `6603f29`, `60f3329`).
-- Purple primary accent `#824CEE` (clip bodies `#A47BF2`); timecode stays
-  blue `#007AFF` as a distinct readout (`4f9d837`).
-- Vertical timeline zoom gated on having audio content (`5de6dd5`).
-- Audio-clip delete is now a single undo step — byte removal bundled into
-  the save-state undo block (`1f00f4f`).
-- Clip hover polish: no native tooltip on clips, edge-hover brackets lost
-  the yellow stroke (clean fill only, incl. roll), label band keeps a
-  stable height when text drops on narrow clips (`769c6cb`).
-- Snap-indicator lines fade to transparent at top/bottom (`72158e9`).
-- Play-range bar restyle to final Figma (blue 10% interior, gray→blue
-  handle iterations settled on `#007AFF`) (`11eaecf`).
-- Clip edge handles scale on narrow clips + hide when too small
-  (`0beb50d`); empty-state drop-zone text/icon tidy (`f05b5fc`).
-- Add Camera placement: at the playhead if the 72-frame span is clear,
-  else flush against the colliding clip on the roomier side (`d8e070f`).
-- Playhead line stays visible at the last frame (`b4a95f2`).
+**Open questions to resolve before/while implementing** (in the spec):
+- Velocity source: target frame-to-frame position delta (simplest, fits
+  the stateless-sample philosophy) vs CTrack-derived. Delta + low-pass
+  is probably enough.
+- Chase needs prev-frame smoothed velocity → per-tag runtime state.
+  Decide how it **resets on scrub-back / shot boundary** (likely: snap
+  to current desired spot on reset, like the spring's `reset_to_target`
+  already does — see `_RUNTIME` / `request_reset` in sb_rig_tag.py).
+- The world-offset "gentle hold" shape at low speed.
 
-## NEXT SESSION — Camera-rig-tag rework (Plan 5 item 7)
+**How to verify:** you'll need a scene with an animated object to chase.
+Make one (animate a null/cube flying around), drop the rig tag on a
+camera, set Follow Target to the flying object, scrub/play and judge the
+feel. There's a `scenes/dev-test.c4d` on disk (now gitignored) you can
+use or replace.
 
-Mike wants to re-examine and tweak what the Shotblocks camera-animation
-tag does. This is open-ended and deserves a focused session. **Start by
-asking Mike which behaviors he wants to change** — don't assume.
+## Where it fits the roadmap
 
-### Camera-rig-tag — starting point (what exists today)
+Built **pre-v2 as a rig-tag knob**, deliberately so the v2 motion-layers
+Targeting "Chase" pill reuses the same `sb_rig_follow.py` engine
+(Plans 2–4 of `.agent/plans/motion-layers-roadmap.md`, which now links to
+the chase spec). It may end up its own small pre-v2 release increment
+(like v1.2 Live Aim) — that placement is an open call.
 
-The tag is the **Python** plugin under `src/` (separate from the C++
-timeline). It's applied to a camera; its per-frame `Execute` runs a
-procedural pipeline on the camera's evaluated pose and writes the result
-back via `SetRelRot`/`SetRelPos` (local channels, never `SetMg`).
+## Current rig-tag state (just reworked this session — context)
 
-- `src/sb_rig_tag.py` (1392 lines) — the `ShotblocksTag` (TagData).
-  Composes the subsystems. Param IDs at the top match
-  `res/description/tshotblocks.h`. Two modes: **Additive** (read keyframed
-  pose, spring against it, write smoothed result — user keyframes never
-  modified) and **Replace** (deferred/stubbed — short-circuits with a
-  warning; presets/look-at-driven, none of which exist yet).
-- `src/sb_rig_spring.py` (121) — spring-damper (pos + rot smoothing).
-- `src/sb_rig_quat.py` (201) — quaternion look-at / slerp helpers.
-- `src/sb_rig_noise.py` (395) — fBm/value-noise handheld + walk-cycle.
-- `src/sb_rig_zoom.py` (231) — beat/zoom punch behavior.
+The camera-rig tag AM was reworked and **committed** this session
+(commit `5dc0fe1`):
+- **Additive-only** — the Replace mode was removed (never built).
+- **Damping** = Linear / Angular **percent sliders**, default 0%.
+- **Look At + Framing** are still separate groups (an "Aim" merge was
+  tried and reverted — left as-is).
+- **Noise** = "Handheld Noise" checkbox (was a profile dropdown);
+  sliders + artist labels (Shake Amount, Drift Speed, Walk Cycle, Seed).
+- **Zoom** = sliders + renamed section "Zoom" (Frequency, Amount, Hold,
+  Snap In, Pull Back, Return).
+- **`.res` slider lesson (important for any AM work):** a
+  `CUSTOMGUI REALSLIDER` fills width by default — **do NOT add
+  `FIT_H`/`SCALE_H`**, it breaks the layout (collapses sliders + sibling
+  fields). Copy the SDK's own working `.res` form
+  (`c4d_sdk_2026/plugins/.../oenoise.res`). Memory:
+  `feedback_c4d_res_slider_no_fit_h`.
 
-### Hard rules for the rig tag (from memory + CLAUDE.md)
+## Also shipped this session (context, all committed + pushed)
 
-- **No rig nulls.** Every behavior is math on the camera pose, not a null
-  chain. (`.agent/skills/rig-hierarchy.md`, memory `no-rig-nulls`.)
-- **Writes go through `SetRelRot`/`SetRelPos`**, not `SetMg` — world
-  writes get clobbered by C4D's world-from-local recompose. (memory
-  `c4d-setrelrot-vs-setmg`.)
-- **Per-tag state keyed by `tag.GetUniqueIP()`**, not `id(tag)` — C4D
-  churns the Python wrapper every Execute. (memory
-  `c4d-basetag-python-wrapper-churn`.)
-- **Noise above the spring's ~1.5 Hz corner must go post-spring** or the
-  low-pass eats it. (memory `noise-band-placement`.)
-- **Use fBm, not sum-of-sines**, for organic noise — Mike rejected sines.
-  (memory `noise-fbm-over-sines`.)
-- **`CUSTOMGUI_VECTOR2D` is UserData-only** in C4D 2026 (.res parser
-  rejects it; empties the AM). The 2D joystick (Frame Offset) is added via
-  `tag.AddUserData`. (memory `c4d-customgui-vector2d-userdata-only`.)
-- **Don't `except: pass` at C4D API boundaries** — log the exception.
-- **Read the Python source before guessing** on constants/ordering/
-  semantics — it's authoritative. (memory `mine-python-for-constants`.)
+- **Playback fix** (`ad83fa1`): v2 spacebar now delegates to C4D's native
+  `RunAnimation` transport instead of a hand-rolled per-frame `SetTime`
+  timer. Cached sims/Alembic now play smoothly; uncached sims run; the
+  earlier per-frame-`ExecutePasses` approach **crashed** (re-entered the
+  sim/Alembic cache build). I/O play range now sets C4D's loop times
+  live. Memory: `feedback_c4d_playback_delegate_to_runanimation`. Don't
+  reintroduce a manual playback timer.
+- **Live Aim roadmap** (`9c1d41e`): the mouse→keyframes performance-
+  capture feature, planned as **v1.2**. Research in
+  `.agent/research/live-camera-control.md`. (Separate from chase; both
+  are "procedural camera authoring.")
 
-### Known rig-tag deferred bug (relevant)
+## Git / GitHub (set up this session)
 
-Cameras using the Shotblocks rig tag render as a single frozen frame —
-the spring-damper / fBm state isn't initialized cold at render time (the
-renderer doesn't tick Execute like live playback). Filed and deferred;
-relates to a future "bake to keyframes" capability. Worth deciding
-whether the rework addresses this.
+- Repo is now on GitHub (**private**): `github.com/ctrlaltdstry/shotblocks`.
+  `origin` is configured, `main` tracks `origin/main`.
+- **Workflow is trunk-based on `main`** — commit straight to main, no
+  branches (solo project; CLAUDE.md confirms). Push to back up.
+- **Mike is new to git** — explain in plain terms, no unexplained jargon.
+  Commit only when asked; push only when asked (it's outward-facing).
+- One commit per atomic, verified change. End commit messages with the
+  `Co-Authored-By: Claude Opus 4.8 (1M context)` line.
 
 ## Dev loop (re-stated)
 
-- `powershell -ExecutionPolicy Bypass -File scripts\dev-loop.ps1` —
-  kills C4D, deploys, relaunches with `dev-test.c4d`. Run from the repo
-  ROOT (running it from a subdir prints only the PowerShell banner).
-- **Python rig** changes ship via the `src/` deploy — no build step.
-- **C++ timeline** changes need
-  `cmake --build c:/Dev/c4d_sdk_2026/build-win64 --target shotblocks --config Release`
-  BEFORE dev-loop. Watch the **600-line function cap** on `Dispatch` —
-  extract new handlers into private methods (e.g. `HandleWarpCursor`,
-  `RemoveOrphanedAudioBytes`).
-- **Web** changes: `npm run build` in `host/shotblocks/web` (Vite catches
-  type errors that `tsc --noEmit` sometimes misses — trust the build).
-- Verify in the live app before committing. One atomic change per commit.
+- `powershell -ExecutionPolicy Bypass -File scripts\dev-loop.ps1` from
+  the repo ROOT — kills C4D, deploys, relaunches with `dev-test.c4d`.
+- **Python rig** changes (`src/`) ship via that deploy — **no build
+  step.** The chase work is Python-only, so the loop is fast: edit
+  `sb_rig_follow.py` / `sb_rig_tag.py` → dev-loop → judge feel.
+- (C++ timeline changes would need
+  `cmake --build c:/Dev/c4d_sdk_2026/build-win64 --target shotblocks
+  --config Release` first — but chase doesn't touch C++.)
+- Verify in the live app before committing.
 
 ## Working tree
 
-`scenes/dev-test.c4d` shows as modified — autosave noise, **don't
-commit**. The random-named junk scenes at the repo root (`efwefwfew.c4d`,
-`sdfsdfsdfsdf.c4d`, `scenes/frames/`, etc.) and the two old
-`HANDOFF-*SCRUB-BUG*.md` files are untracked session debris — delete at
-will. `scenes/test stage animation.c4d` is the Stage render reference;
-keep it.
+Untracked debris safe to ignore or delete: the two `HANDOFF-*SCRUB-BUG*`
+files (that bug is long fixed), `Icons/`, and random junk scenes
+(`ertergerg34.c4d`, `sdfsdfsdfsd.c4d`, `test.c4d`). `dev-test.c4d` is now
+gitignored (autosave noise). Nothing uncommitted that matters.
 
-Good luck with the rig tag.
+Good luck with the chase camera.
