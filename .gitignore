@@ -7,6 +7,14 @@ scenes/backup/
 *.tmp
 .DS_Store
 
+# Local dev test scene — autosaves constantly (85MB+ of churn), not a
+# reproducible fixture. Kept on disk for the dev loop, out of the repo.
+scenes/dev-test.c4d
+# Alembic / sim caches and render-log debris dropped into scenes/ during testing
+*.abc
+scenes/log_*.xml
+scenes/frames/
+
 # Python
 __pycache__/
 *.pyc
