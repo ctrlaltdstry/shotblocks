@@ -819,58 +819,26 @@ public:
 		// only lights when the user switches the active RD or makes
 		// some other doc edit. 250ms is the dialog Timer cadence —
 		// fast enough for the user to never notice the lag.
-		PushRenderSettingsDrift(GetActiveDocument());
-		// Advance v2-owned playback. Computes the target frame from
-		// wall-clock elapsed time since play started, so timer jitter
-		// doesn't accumulate (Python's _playback_anchor_t /
-		// _playback_anchor_frame pattern, sb_canvas_playback.py:147).
-		// While the user scrub-holds the playhead during playback, the
-		// advance is frozen — the timeline stays where they hold it.
-		if (_v2Playing && !_v2ScrubPaused)
-		{
-			BaseDocument* doc = GetActiveDocument();
-			if (doc)
-			{
-				Int32 fps = doc->GetFps();
-				if (fps <= 0) fps = 30;
-				Float nowMs = GeGetMilliSeconds();
-				Float elapsedSec = (nowMs - _v2AnchorMs) / 1000.0;
-				Int32 targetFrame = _v2AnchorFrame + (Int32)(elapsedSec * fps);
-				BaseTime minT = doc->GetMinTime();
-				Int32 minFrame = minT.GetFrame(fps);
-				Int32 curFrame = doc->GetTime().GetFrame(fps) - minFrame;
-				if (targetFrame != curFrame)
-				{
-					// End of range? Wrap (loop) or stop.
-					if (targetFrame >= _v2RangeOut)
-					{
-						if (_v2LoopEnabled)
-						{
-							// Re-anchor so the next tick computes from
-							// rangeIn at a wall time corresponding to
-							// the overflow past rangeOut. Keeps long-
-							// playback drift bounded.
-							Int32 overflow = targetFrame - _v2RangeOut;
-							Float overflowSec = overflow / (Float)fps;
-							_v2AnchorMs    = nowMs - overflowSec * 1000.0;
-							_v2AnchorFrame = _v2RangeIn;
-							targetFrame    = _v2RangeIn;
-						}
-						else
-						{
-							// Stop at end-of-range. Drop timer cadence
-							// back to idle so we're not waking 30x/sec
-							// when nothing's happening.
-							targetFrame = _v2RangeOut - 1;
-							_v2Playing = false;
-							SetTimer(250);
-						}
-					}
-					doc->SetTime(BaseTime(minFrame + targetFrame, fps));
-					EventAdd();
-				}
-			}
-		}
+		//
+		// Skip during v2 playback: the drift check serializes the
+		// RenderData container to fingerprint it (ComputeRenderSettings
+		// Fingerprint), which is too expensive to run every frame at
+		// fps cadence — it competes with the per-frame redraw and makes
+		// playback stutter. The user isn't editing render settings while
+		// playing, so there's nothing to detect; the poll resumes the
+		// moment playback stops.
+		if (!_v2Playing)
+			PushRenderSettingsDrift(GetActiveDocument());
+		// Playback is driven by C4D's native transport (RunAnimation),
+		// NOT by advancing doc->SetTime from this Timer. The hand-rolled
+		// per-frame seek couldn't redraw heavy sim/Alembic scenes
+		// smoothly: plain EventAdd repainted only ~every 60 frames, and
+		// forcing the redraw (ExecutePasses/DrawViews) crashed by
+		// re-entering the simulation cache build. C4D's own play loop
+		// evaluates sims/Alembic sequentially and redraws correctly, so
+		// we hand it the transport (see toggle-play) and just mirror the
+		// playhead via the EVMSG_TIMECHANGED tick. The fps-cadence Timer
+		// bump is gone; this Timer stays at idle 250ms cadence.
 		PostTick();
 	}
 
@@ -1334,18 +1302,9 @@ private:
 					absFrame = minFrame;
 				if (absFrame > maxFrame)
 					absFrame = maxFrame;
-				doc->SetTime(BaseTime(absFrame, fps));
-				// If a seek lands DURING v2-owned playback, re-anchor the
-				// wall-clock playback clock to the seeked frame — else the
-				// next Timer() tick recomputes targetFrame from the stale
-				// anchor and snaps the playhead back. Playback then
-				// continues from where the scrub dropped it. Mirrors
-				// Python's _move_playhead re-anchor (sb_canvas_playback.py:640).
-				if (_v2Playing)
-				{
-					_v2AnchorMs    = GeGetMilliSeconds();
-					_v2AnchorFrame = absFrame - minFrame;
-				}
+				// SetDocumentTime is transport-aware (cooperates with a
+				// running RunAnimation) where raw SetTime is not.
+				SetDocumentTime(doc, BaseTime(absFrame, fps));
 				// EVMSG_TIMECHANGED triggers the viewport + timeline + our
 				// own PostTick via CoreMessage, keeping every UI in sync.
 				EventAdd();
@@ -1354,30 +1313,27 @@ private:
 		}
 		if (body.find("\"kind\":\"scrub-begin\"") != std::string::npos)
 		{
-			// User grabbed the v2 playhead. If v2 playback is running,
-			// freeze it — the Timer stops advancing and PostTick reports
-			// not-playing, so the timeline + audio hold wherever the
-			// scrub puts the playhead. No-op if not v2-playing.
-			if (_v2Playing)
+			// User grabbed the v2 playhead during playback. Stop C4D's
+			// native animation so the playhead holds where they scrub
+			// (the seek messages then move it). _v2Playing stays true so
+			// scrub-end knows to resume.
+			if (_v2Playing && !_v2ScrubPaused)
+			{
 				_v2ScrubPaused = true;
+				BaseDocument* doc = GetActiveDocument();
+				if (doc) RunAnimation(doc, true, true);   // stop
+			}
 			return "{\"ok\":true,\"kind\":\"scrub-begin-ack\"}";
 		}
 		if (body.find("\"kind\":\"scrub-end\"") != std::string::npos)
 		{
-			// User released the v2 playhead. Re-anchor the playback
-			// clock to the current (scrubbed-to) frame and resume.
+			// User released the v2 playhead. Resume native play from the
+			// scrubbed-to frame.
 			if (_v2ScrubPaused)
 			{
 				_v2ScrubPaused = false;
 				BaseDocument* doc = GetActiveDocument();
-				if (doc)
-				{
-					Int32 fps = doc->GetFps();
-					if (fps <= 0) fps = 30;
-					Int32 minFrame = doc->GetMinTime().GetFrame(fps);
-					_v2AnchorMs    = GeGetMilliSeconds();
-					_v2AnchorFrame = doc->GetTime().GetFrame(fps) - minFrame;
-				}
+				if (doc) RunAnimation(doc, true, false);  // play forward
 			}
 			return "{\"ok\":true,\"kind\":\"scrub-end-ack\"}";
 		}
@@ -1652,24 +1608,16 @@ private:
 		}
 		if (body.find("\"kind\":\"toggle-play\"") != std::string::npos)
 		{
-			// Spacebar toggles v2-owned playback. We do NOT call
-			// CallCommand(12412) because C4D's native play forward
-			// respects C4D's native cycle button, which can't be
-			// controlled from the SDK. Instead we run our own timer
-			// (see Timer()) that advances doc->SetTime per frame and
-			// honors _v2LoopEnabled + the play range.
-			//
-			// C4D's native play button still works independently —
-			// pressing it puts C4D in its own playback mode; we just
-			// receive EVMSG_TIMECHANGED and broadcast tick. v2's loop
-			// toggle has no effect on C4D-initiated playback.
+			// Delegates to C4D's native play transport (RunAnimation);
+			// see the long note in Timer(). We point C4D's loop range at
+			// the v2 play range so native play wraps/stops there, and the
+			// EVMSG_TIMECHANGED tick keeps the v2 playhead synced.
 			BaseDocument* doc = GetActiveDocument();
 			if (!doc) return "{\"ok\":false,\"error\":\"no doc\"}";
 			if (_v2Playing)
 			{
 				_v2Playing = false;
-				// Drop the timer back to idle cadence.
-				SetTimer(250);
+				RunAnimation(doc, true, true);   // stop
 			}
 			else
 			{
@@ -1680,38 +1628,39 @@ private:
 				Int32 minFrame = minT.GetFrame(fps);
 				Int32 curFrame = doc->GetTime().GetFrame(fps) - minFrame;
 				// If the playhead is outside the play range, snap to
-				// rangeIn before starting (Python behavior at
-				// sb_canvas_playback.py:137).
+				// rangeIn before starting.
 				if (curFrame < _v2RangeIn || curFrame >= _v2RangeOut)
 				{
 					curFrame = _v2RangeIn;
-					doc->SetTime(BaseTime(minFrame + curFrame, fps));
-					EventAdd();
+					SetDocumentTime(doc, BaseTime(minFrame + curFrame, fps));
 				}
-				_v2AnchorMs    = GeGetMilliSeconds();
-				_v2AnchorFrame = curFrame;
-				// Bump timer to ~fps cadence so playback advances
-				// smoothly; idle cadence is 250ms.
-				Int32 period = 1000 / fps;
-				if (period < 1) period = 1;
-				SetTimer(period);
+				ApplyV2RangeToDocLoop(doc);
+				RunAnimation(doc, true, false);  // play forward
 			}
 			PostTick();
 			return "{\"ok\":true,\"kind\":\"toggle-play-ack\"}";
 		}
 		if (body.find("\"kind\":\"set-play-range\"") != std::string::npos)
 		{
-			// Cache the v2 play range in C++ memory. NOT synced to
-			// C4D's LoopMin/MaxTime — that would make C4D's own
-			// player wrap on the range, overruling v2's loop toggle.
-			// v2's playback timer reads this cache to enforce loop
-			// behavior; C4D's native play button ignores it.
+			// Cache the v2 play range and push it to C4D's loop range so
+			// native play (which we delegate to) wraps/stops there. If
+			// playback is live, update the loop range immediately.
 			Int32 inFrame  = ParseIntField(body, "inFrame");
 			Int32 outFrame = ParseIntField(body, "outFrame");
 			if (inFrame  < 0) inFrame  = 0;
 			if (outFrame <= inFrame) outFrame = inFrame + 1;
 			_v2RangeIn  = inFrame;
 			_v2RangeOut = outFrame;
+			// Push to C4D's loop range immediately (not just when
+			// playing) so the I/O shortcuts update C4D's timeline preview
+			// bracket right away, before the user hits play. Also adds the
+			// EventAdd so the C4D timeline repaints the new bracket.
+			BaseDocument* doc = GetActiveDocument();
+			if (doc)
+			{
+				ApplyV2RangeToDocLoop(doc);
+				EventAdd();
+			}
 			return "{\"ok\":true,\"kind\":\"set-play-range-ack\"}";
 		}
 		if (body.find("\"kind\":\"set-loop\"") != std::string::npos)
@@ -1891,6 +1840,30 @@ private:
 		// No perspective view — fall back to active BD.
 		_pinnedBaseDraw = doc->GetActiveBaseDraw();
 		return _pinnedBaseDraw;
+	}
+
+	// Point C4D's loop range at the v2 play range so native play
+	// (RunAnimation) wraps/stops there. C4D's loop *mode* button isn't
+	// SDK-settable, but the loop min/max times are. Range is stored as
+	// frames relative to doc min; convert to absolute BaseTime.
+	void ApplyV2RangeToDocLoop(BaseDocument* doc)
+	{
+		if (!doc)
+			return;
+		Int32 fps = doc->GetFps();
+		if (fps <= 0)
+			fps = 30;
+		Int32 minFrame = doc->GetMinTime().GetFrame(fps);
+		Int32 maxFrame = doc->GetMaxTime().GetFrame(fps);
+		Int32 inAbs  = minFrame + _v2RangeIn;
+		Int32 outAbs = minFrame + _v2RangeOut - 1;   // inclusive last frame
+		// Clamp to the document's own range so we never set a loop
+		// outside [min, max] (C4D ignores / misbehaves otherwise).
+		if (inAbs  < minFrame) inAbs  = minFrame;
+		if (outAbs > maxFrame) outAbs = maxFrame;
+		if (outAbs < inAbs)    outAbs = inAbs;
+		doc->SetLoopMinTime(BaseTime(inAbs,  fps));
+		doc->SetLoopMaxTime(BaseTime(outAbs, fps));
 	}
 
 	// ------- C++ -> JS state push -------
@@ -3337,22 +3310,14 @@ private:
 	// back/forward to a different version, in which case we tell JS
 	// to reload (push notification → state-changed message).
 	Int32                _lastSeenVersion{0};
-	// v2-owned playback. Spacebar starts/stops this. While
-	// _v2Playing is true, the dialog Timer ticks at fps cadence and
-	// advances doc->SetTime(frame+1, fps), honoring _v2LoopEnabled
-	// and the [_v2RangeIn, _v2RangeOut) play range. Mirrors Python's
-	// _toggle_playback / _playback_tick (sb_canvas_playback.py).
-	// C4D's native play button still works independently — that
-	// path doesn't set _v2Playing, so the loop logic doesn't apply.
+	// v2 playback delegates to C4D's native transport (RunAnimation);
+	// see toggle-play and Timer(). _v2Playing tracks whether v2 started
+	// the playback (vs C4D's own play button) so scrub-begin/end can
+	// stop/resume it and PostTick can report v2-initiated play.
 	Bool                 _v2Playing{false};
-	// True while the user is scrub-holding the v2 playhead DURING v2
-	// playback. The Timer freezes its advance and PostTick reports
-	// not-playing, so the timeline + audio hold at the scrubbed frame.
-	// scrub-end re-anchors and clears this so playback resumes from
-	// the drop point.
+	// True while the user scrub-holds the v2 playhead during playback.
+	// scrub-begin stops native play; scrub-end resumes it.
 	Bool                 _v2ScrubPaused{false};
-	Float                _v2AnchorMs{0.0};   // wall-clock anchor at play start
-	Int32                _v2AnchorFrame{0};  // doc frame at play start
 	Int32                _v2RangeIn{0};
 	Int32                _v2RangeOut{1 << 30};
 	Bool                 _v2LoopEnabled{false};
