@@ -73,12 +73,10 @@
     .sidebar__mark {
       width: 22px; height: 22px;
       border-radius: 6px;
-      background: var(--accent);
       flex: 0 0 auto;
-      display: grid; place-items: center;
-      color: var(--white);
-      font-weight: 700; font-size: 13px;
+      display: block;
     }
+    .sidebar__mark img { width: 100%; height: 100%; display: block; border-radius: 6px; }
     .sidebar__name { color: var(--white); font-weight: 600; font-size: 15px; }
     .sidebar__ver { color: var(--grey-50); font-size: 11px; font-family: var(--font-mono); }
 
@@ -205,6 +203,29 @@
 
     .placeholder-body { color: var(--grey-50); font-style: italic; }
 
+    /* Screenshots */
+    figure {
+      margin: 18px 0 22px;
+    }
+    figure img {
+      display: block;
+      width: 100%;
+      height: auto;
+      border: 1px solid var(--grey-16);
+      border-radius: 6px;
+      background: var(--grey-7);
+    }
+    figure.fig-narrow { max-width: 360px; }
+    figure.fig-rig { max-width: 300px; }
+    figure.fig-rig img { background: var(--grey-12); }
+    figure.fig-tools img { background: var(--grey-10); }
+    figcaption {
+      color: var(--grey-50);
+      font-size: 13px;
+      margin-top: 6px;
+      line-height: 1.4;
+    }
+
     .footer {
       margin-top: 60px; padding-top: 20px;
       border-top: 1px solid var(--grey-16);
@@ -222,7 +243,7 @@
     <!-- ============ SIDEBAR ============ -->
     <aside class="sidebar" id="sidebar">
       <div class="sidebar__brand">
-        <div class="sidebar__mark">S</div>
+        <div class="sidebar__mark"><img src="images/icon.png" alt="Shotblocks" /></div>
         <div>
           <div class="sidebar__name">Shotblocks</div>
           <div class="sidebar__ver" id="brand-version">v1.0.0&nbsp;beta&nbsp;&middot;&nbsp;Manual</div>
@@ -248,6 +269,10 @@
           <p class="lead">A timeline-based shot sequencer for camera animation in Cinema&nbsp;4D&nbsp;2026.</p>
           <p>Shotblocks gives Cinema&nbsp;4D a proper editing timeline for your cameras. Instead of juggling a Stage object, render takes, and a tangle of keyframes, you arrange your shots as blocks on a track — drag to reorder, trim the cuts, and scrub through the whole sequence as one continuous edit. Drop in a music track and you get waveforms, a live level meter, and automatic beat detection to cut against.</p>
           <p>The signature idea is simple: <strong>your cameras are your shots.</strong> Any camera in your scene — one you keyframed by hand, one driven by a spline, or a fresh one Shotblocks makes for you — becomes a shot the moment you drag it onto the timeline. As the playhead moves across the timeline, the viewport switches to whichever camera owns that frame. There are no in-between states: cuts are hard cuts, exactly one camera is live at any frame.</p>
+          <figure>
+            <img src="images/in-context.png" alt="Shotblocks docked into the Cinema 4D interface" />
+            <figcaption>Shotblocks docks into your Cinema&nbsp;4D layout like any other window — here along the bottom, beneath the viewport and Object Manager.</figcaption>
+          </figure>
           <h3>What you can do with it</h3>
           <ul>
             <li><strong>Sequence cameras</strong> on a multi-track timeline with hard cuts, trims, roll edits, and ripple.</li>
@@ -307,6 +332,10 @@
             <li><strong>Scrub.</strong> Drag in the ruler at the top. The viewport follows the playhead, switching cameras at each cut.</li>
             <li><strong>Play.</strong> Press <kbd>Space</kbd> to play the sequence. Press it again to stop.</li>
           </ol>
+          <figure>
+            <img src="images/two-shots.png" alt="Two camera shots arranged on track V1" />
+            <figcaption>Two shots cut back to back on V1. The blue handles at the top mark the play range.</figcaption>
+          </figure>
           <div class="tip">
             <span class="tip__label">Tip</span>
             Everything you build is saved inside your <code>.c4d</code> document automatically — there's no separate Shotblocks file to manage. Just save your scene as normal.
@@ -326,6 +355,14 @@
             <li><strong>Inspector</strong> — the panel on the right. In v1 it holds the render settings. The <strong>?</strong> button at its bottom-right opens this manual.</li>
           </ul>
           <p>Video tracks grow <em>upward</em> from the center; audio tracks grow <em>downward</em>, with a thin divider line between them — the same arrangement as Premiere, Final Cut, and Resolve.</p>
+          <figure>
+            <img src="images/empty-timeline.png" alt="The Shotblocks timeline on a fresh document" />
+            <figcaption>A fresh timeline: the timecode and utility strip across the top, the tool rail and dB meter down the left, the ruler, and the Inspector on the right. The center prompt invites your first camera.</figcaption>
+          </figure>
+          <figure class="fig-narrow">
+            <img src="images/utility-strip.png" alt="The utility strip toggles" />
+            <figcaption>The utility strip: Loop, Snap, Beat&nbsp;Detection, Markers, and Settings.</figcaption>
+          </figure>
         </section>
 
         <section class="doc-section" id="tracks" data-nav-title="Tracks &amp; headers">
@@ -343,6 +380,10 @@
             <li><strong>Both</strong> have a <strong>lock</strong>. A locked track ignores all edits — its clips can't be moved, trimmed, or deleted until you unlock it.</li>
           </ul>
           <p>When two video shots cover the same frame on different tracks, the one on the <strong>higher track wins</strong> — top track is what you see, exactly like NLE convention.</p>
+          <figure>
+            <img src="images/tracks-headers.png" alt="A locked video track and a muted audio track" />
+            <figcaption>Track states are visible in the headers: V1 is locked (red padlock, hatched clip), and A1 is muted (orange&nbsp;M). The audio has been razored into three clips.</figcaption>
+          </figure>
         </section>
 
         <section class="doc-section" id="navigation" data-nav-title="Zoom &amp; pan">
@@ -383,6 +424,10 @@
           <h3>The active chip (write target)</h3>
           <p>Each side (video and audio) has one <strong>active chip</strong>, shown highlighted in the track headers. It's the target for "cursorless" inserts — the Add&nbsp;Camera button and Paste both put their clip on the active chip's track. Dragging from the Object Manager ignores the chip and drops wherever your cursor is.</p>
 
+          <figure>
+            <img src="images/one-shot.png" alt="A single camera shot on track V1" />
+            <figcaption>A shot on V1. The block is labeled with its camera ("100mm") and carries a camera icon; the V1 header shows its lock, write-target chip, and visibility eye.</figcaption>
+          </figure>
           <div class="note">
             <span class="note__label">Renaming a camera</span>
             Rename a camera in the Object Manager and its shot's label updates to match — the link is by identity, so even two cameras with the same name stay correctly attached.
@@ -391,7 +436,11 @@
 
         <section class="doc-section" id="orphans" data-nav-title="Orphan cameras">
           <h2>Orphan cameras</h2>
-          <p>If you delete a camera that one or more shots still reference, those shots don't vanish — they become <strong>orphans</strong>. An orphan shot turns red with a <em>(missing)</em> label, so you can see at a glance that its source is gone. An orphan can't play back; the viewport holds whatever camera was last live.</p>
+          <p>If you delete a camera that one or more shots still reference, those shots don't vanish — they become <strong>orphans</strong>. An orphan shot turns red with a crossed-out camera icon, so you can see at a glance that its source is gone. An orphan can't play back; the viewport holds whatever camera was last live.</p>
+          <figure>
+            <img src="images/orphan-shot.png" alt="An orphaned shot shown in red beside a healthy purple shot" />
+            <figcaption>The red "RS Camera.1" shot is an orphan — its camera was deleted. The healthy "100mm" shot beside it stays purple.</figcaption>
+          </figure>
           <p>You have three ways to resolve an orphan:</p>
           <ul>
             <li><strong>Undo the deletion</strong> — <kbd>Ctrl</kbd>+<kbd>Z</kbd> brings the camera back and reattaches the shot.</li>
@@ -436,6 +485,10 @@
             <tr><td><strong>Zoom</strong></td><td><kbd>Z</kbd></td><td>Drag to zoom, same as Alt+Right-drag.</td></tr>
             <tr><td><strong>Slip</strong></td><td><kbd>S</kbd></td><td>Drag inside an audio clip to slide the sound under it without moving the clip itself — handy for re-aligning a sound to a beat.</td></tr>
           </table>
+          <figure class="fig-tools">
+            <img src="images/tools.png" alt="The six tools, each shown active in turn" />
+            <figcaption>The tool rail. The active tool is highlighted in purple — shown here stepping through Select, Razor, Pen, Hand, Zoom, and Slip.</figcaption>
+          </figure>
           <div class="tip">
             <span class="tip__label">Pen on the fly</span>
             You don't have to switch to the Pen tool to tweak a volume curve — holding <kbd>Alt</kbd> temporarily acts as the Pen over an audio clip.
@@ -466,6 +519,10 @@
             <li>markers (when markers are visible).</li>
           </ul>
           <p>A yellow line appears wherever the clip is snapping. If you prefer snap off by default, leave the toggle off and hold <kbd>Shift</kbd> during a drag to snap just for that move.</p>
+          <figure>
+            <img src="images/snapping.png" alt="The playhead snapped to a clip edge, with the snap line running through the video shot edge and the seam between two audio clips" />
+            <figcaption>Snapping aligns edit points across tracks. Here the snap line runs through the end of the video shot and the seam between two audio clips below it, so the cut lands exactly on the edge.</figcaption>
+          </figure>
         </section>
 
         <section class="doc-section" id="audio" data-nav-group="Audio" data-nav-title="Importing audio">
@@ -477,6 +534,10 @@
           </div>
           <h3>Waveforms</h3>
           <p>Each audio clip shows its waveform, which stays crisp as you zoom in and out. The waveform is cached in the document, so it redraws instantly on reload without re-analyzing the file. You can hide a clip's waveform with the small toggle at its lower-left corner.</p>
+          <figure>
+            <img src="images/audio-waveform.png" alt="An audio clip with its waveform on track A1" />
+            <figcaption>An audio clip on A1 with its waveform drawn. The small button at the lower-left toggles the waveform's visibility.</figcaption>
+          </figure>
         </section>
 
         <section class="doc-section" id="audio-playback" data-nav-title="Playback &amp; metering">
@@ -494,6 +555,10 @@
 
           <h3>Volume curves (the Pen tool)</h3>
           <p>Switch to the <strong>Pen</strong> tool (<kbd>P</kbd>, or hold <kbd>Alt</kbd>) and click on an audio clip to add level keyframes — points on a volume curve drawn across the clip. Drag a point to change its level or position. Right-click a point for its easing (Linear, Hold, Ease In, Ease Out, Ease In-Out) or to delete it. The curve rides with the audio, so trimming, slipping, or splitting the clip keeps your fades intact.</p>
+          <figure>
+            <img src="images/volume-curve.png" alt="A volume curve drawn on an audio clip with the Pen tool" />
+            <figcaption>A volume curve dipping the level down and back up. The selected keyframe shows its easing handles; the curve follows the audio if you trim or slip the clip.</figcaption>
+          </figure>
 
           <div class="warn">
             <span class="warn__label">No sound? Check the Windows mixer</span>
@@ -509,6 +574,10 @@
             <li>Later clicks just <strong>toggle the grid</strong> on and off — the analysis is kept, so re-showing it is instant.</li>
           </ul>
           <p>With the grid visible, dragged clips snap to beats (as long as <a href="#snapping">Snap</a> is on), so you can land your cuts right on the music. The grid is drawn in quiet white lines so it reads as structure, not as a competing feature on top of your clips.</p>
+          <figure>
+            <img src="images/beat-grid.png" alt="The detected beat grid overlaid on the timeline" />
+            <figcaption>After beat detection, a tempo grid (the vertical dashed lines) overlays the timeline so you can cut to the music.</figcaption>
+          </figure>
         </section>
 
         <section class="doc-section" id="playback" data-nav-group="Playback &amp; range" data-nav-title="Play, loop, scrub">
@@ -558,6 +627,10 @@
           <h3>Individual shots</h3>
           <p>Render each shot as its own file. Click <strong>Add to Queue</strong> and Shotblocks adds one entry per shot to Cinema&nbsp;4D's <strong>Render Queue</strong>, each set to its own camera and frame range. Shotblocks does <em>not</em> start the render — open C4D's Render Queue and fire it when you're ready. Each entry inherits your master render settings, so whatever renderer you've set (Standard, Redshift, Octane, …) is what every shot uses.</p>
           <p>The <strong>Settings</strong> button next to Add&nbsp;to&nbsp;Queue lights up when your master render settings have changed since you last queued. Click it to push the updated settings to the queued shots so they stay in sync.</p>
+          <figure class="fig-narrow">
+            <img src="images/render-section.png" alt="The Inspector's Render section in Individual shots mode, with the mode dropdown, Add to Queue, and the Settings sync button" />
+            <figcaption>The Render section in Individual&nbsp;shots mode: the mode dropdown, <strong>Add&nbsp;to&nbsp;Queue</strong>, and the <strong>Settings</strong> sync button (dimmed here because the queued shots are already in sync).</figcaption>
+          </figure>
 
           <div class="note">
             <span class="note__label">Notes</span>
@@ -568,6 +641,10 @@
         <section class="doc-section" id="settings" data-nav-group="Reference" data-nav-title="Settings">
           <h2>Settings</h2>
           <p>Open Settings from the gear icon in the utility strip.</p>
+          <figure>
+            <img src="images/settings.png" alt="The Settings panel" />
+            <figcaption>The Settings panel, with the default camera type and the "Audio follows C4D timeline" option.</figcaption>
+          </figure>
           <h3>Defaults</h3>
           <p><strong>Default camera type</strong> — the kind of camera the <a href="#cameras">Add&nbsp;Camera</a> button creates. Only types whose renderer is installed appear in the list (so RS&nbsp;Camera shows only when Redshift is present, and so on).</p>
           <h3>Audio</h3>
@@ -578,6 +655,10 @@
           <h2>Camera rig tag</h2>
           <p>Shots play back whatever animation a camera already has. To add <em>procedural</em> motion — physical smoothing, automatic aiming, handheld feel — apply the <strong>Shotblocks</strong> tag to a camera: right-click the camera in the Object Manager and choose <strong>Tags&nbsp;&rarr;&nbsp;Shotblocks</strong>. Its controls appear in the Attribute Manager.</p>
           <p>The tag is <strong>additive</strong>: it layers on top of the camera's existing animation rather than replacing it. Turn the tag off and your original animation is untouched. The controls are grouped:</p>
+          <figure class="fig-rig">
+            <img src="images/rig-tag.png" alt="The Shotblocks camera rig tag in the Cinema 4D Attribute Manager, showing the Damping, Look At, Chase, Framing, Noise, and Zoom groups" />
+            <figcaption>The Shotblocks tag in the Attribute Manager. Every group is collapsible; the <em>Enabled</em> checkbox at the top toggles the whole rig.</figcaption>
+          </figure>
           <ul>
             <li><strong>Damping</strong> — <em>Linear</em> and <em>Angular</em> smoothing (as percentages). Adds weight and momentum, so the camera eases into moves and settles instead of snapping. Defaults to 0% (no smoothing).</li>
             <li><strong>Look At</strong> — aim the camera at a target object, with a <em>Look-At Strength</em> to blend between the camera's own aim and the target, plus <em>Roll</em> and <em>Bank Into Turns</em>.</li>
