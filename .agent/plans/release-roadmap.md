@@ -11,10 +11,13 @@ The cross-version index. Each release has its own detailed roadmap; this is the 
 | Release | Theme | Status | Roadmap |
 |---|---|---|---|
 | **v1** | Timeline tool, complete and polished. Camera shot sequencing, audio, render workflow, manual. | in progress | [v1-release-roadmap.md](v1-release-roadmap.md) |
+| **v1.2** | Live Aim. Mouse-driven live camera aim, recorded to editable keyframes. Phase 1 of live performance capture; pure Python, quick follow-up to v1. | concept (research done) | [live-performance-roadmap.md](live-performance-roadmap.md) |
 | **v1.5** | Object-visibility clips. Extends the timeline to control non-camera object visibility via clip in/out points. One new conceptual primitive on a stable v1 base. | not started | [v1.5-release-roadmap.md](v1.5-release-roadmap.md) |
 | **v2** | Motion layers. Procedural camera animation via Targeting / Movement / Lens / Texture pills on sub-lanes. | not started | [motion-layers-roadmap.md](motion-layers-roadmap.md) |
 
-Releases ship in order. v1.5 depends on v1 shipping. v2 depends on v1.5 shipping. Cross-release work is allowed (e.g. drafting v2 plans during v1 stabilization), but no v1.5 plan begins implementation until v1 ships, and no v2 plan begins until v1.5 ships.
+Releases ship in order: **v1 → v1.2 → v1.5 → v2**. Each depends on the prior shipping. Cross-release work is allowed (e.g. drafting plans during v1 stabilization), but no plan begins implementation until the prior release ships.
+
+v1.2 is a **point release** — a small, Python-only follow-up that ships right behind v1 on the same stable base, so live-aim feels bundled with v1 without holding v1's ship date or reopening "complete" v1. The **game-controller** half of live performance capture (Phase 2, C++/XInput) is deferred to a later increment once the mouse model is proven; see [live-performance-roadmap.md](live-performance-roadmap.md).
 
 ---
 
@@ -36,6 +39,10 @@ The v1.5 framing also lets us make a one-off commitment explicit: object visibil
 ### v1 — Timeline complete
 
 Camera shot sequencing, audio scrubbing with waveforms + beats, markers, in/out range, render-queue integration, the camera workflow (chips + in-timeline camera creation + selection-follows-playhead), and the bundled user manual.
+
+### v1.2 — Live Aim
+
+Turn on the Shotblocks Operator tool and steer a camera's aim live by moving the mouse in the viewport; hit record and the performance bakes to editable keyframes. Camera position stays driven by whatever the user already has (spline/keyframes) — only the aim is performed. Reuses the rig's existing look-at + spring-damper for a smoothed, cinematic feel. Pure Python; no game controller yet (that's a later increment).
 
 ### v1.5 — Object visibility
 

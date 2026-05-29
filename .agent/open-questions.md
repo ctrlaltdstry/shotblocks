@@ -39,6 +39,9 @@ Translational vs. rotational vs. acceleration weights for the motion-energy curv
 ### Preset library — first 12
 What ships in v1? We have a long list of candidates (orbit, dolly, crane, dolly-zoom, push-in, pull-out, whip pan, reveal, parallax, plus motion-graphics-specific ones). **Pick the v1 set when approaching v1 milestone.**
 
+### Live-performance Phase 1 — record-trigger model
+Arm-and-play (capture frame-by-frame against the timeline, beat-grid friendly) vs free real-time (perform in wall-clock, resample after). Recommend prototyping arm-and-play first. **Decide before building the Phase 1 record path.** See the roadmap's Phase 1 open-questions.
+
 ## How to use this file
 
 When you encounter one of these questions during work, link to its entry from your task notes. When you make a decision, update the appropriate context doc *and* remove the entry from here. Do not let resolved questions linger — the file's value is that everything in it is currently unanswered.
