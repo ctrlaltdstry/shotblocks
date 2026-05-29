@@ -68,6 +68,10 @@ export type HostOutbound =
   | { kind: 'undo' }
   | { kind: 'redo' }
   | { kind: 'toggle-play' }
+  // Open the bundled user manual (docs/index.html next to the plugin
+  // DLL) in the OS default browser. C++ resolves the plugin folder and
+  // ShellExecutes the HTML. Fire-and-forget; the ack is ignored.
+  | { kind: 'open-manual' }
   | { kind: 'audio-add'; clipId: number; bytes: string }
   | { kind: 'audio-fetch'; clipId: number }
   | { kind: 'set-play-range'; inFrame: number; outFrame: number }

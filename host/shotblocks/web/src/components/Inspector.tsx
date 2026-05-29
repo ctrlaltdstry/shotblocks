@@ -169,19 +169,17 @@ export function Inspector() {
  *  of the Inspector panel, 10px from each edge. Pre-composed SVG (circle
  *  + border + drop shadow + glyph all baked in) — rendered as <img>, not
  *  a mask. Hover brightens via CSS filter since the SVG fill is hard-
- *  coded. v1 click = placeholder alert; Plan 5 swaps for the manual
- *  launch. */
+ *  coded. Click asks C++ to open the bundled user manual
+ *  (docs/index.html) in the OS default browser. */
 function HelpButton() {
   return (
     <button
       type="button"
       className="inspector-help-button"
-      data-tooltip="Help"
+      data-tooltip="Open user manual"
       data-tooltip-pos="above"
       onMouseDown={(e) => e.preventDefault()}
-      onClick={() => {
-        window.alert('User manual coming in v1.');
-      }}
+      onClick={() => { void send({ kind: 'open-manual' }); }}
     >
       <img src={helpButtonUrl} alt="Help" />
     </button>

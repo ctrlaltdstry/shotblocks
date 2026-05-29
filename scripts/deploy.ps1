@@ -34,12 +34,15 @@ New-Item -ItemType Directory -Path $dest -Force | Out-Null
 #            now live in one shotblocks/ folder under C4D plugins/;
 #            the C++ side adds shotblocks.xdl64 + web/ via a second
 #            robocopy below.
+# /XD docs   excludes the bundled user manual so /MIR doesn't delete it
+#            on the Python deploy. Same reason as web/ — the C++ side
+#            copies docs/ in via its own robocopy below.
 # /XF shotblocks.xdl64
 #            same reason: don't delete the C++ binary on Python deploy.
 # /NFL /NDL suppress per-file/dir output
 # /NJH /NJS suppress job header/summary
 # /NP no progress percentage
-robocopy $source $dest /MIR /XD build web /XF shotblocks.xdl64 /NFL /NDL /NJH /NJS /NP | Out-Null
+robocopy $source $dest /MIR /XD build web docs /XF shotblocks.xdl64 /NFL /NDL /NJH /NJS /NP | Out-Null
 
 # robocopy exit codes 0-7 are success; 8+ are failures
 if ($LASTEXITCODE -ge 8) {
@@ -47,6 +50,25 @@ if ($LASTEXITCODE -ge 8) {
 }
 
 Write-Host "Deployed shotblocks (Python tag) -> $dest"
+
+# --- Bundled user manual ---------------------------------------------------
+# The static HTML manual lives at host/shotblocks/docs/ and ships INTO the
+# deployed plugin folder as docs/ (the C++ side ShellExecutes
+# docs/index.html, resolved relative to the .xdl64). Independent of the
+# C++ build — copy it whether or not a Release build exists, so the manual
+# is present even on a Python-only deploy. /MIR mirrors so removed pages
+# propagate; it only touches $dest\docs, never the Python files
+# (the Python /MIR above excludes docs via /XD).
+$docsSrc = Join-Path $repoRoot "host\shotblocks\docs"
+if (Test-Path $docsSrc) {
+    $docsDest = Join-Path $dest "docs"
+    New-Item -ItemType Directory -Path $docsDest -Force | Out-Null
+    robocopy $docsSrc $docsDest /MIR /NFL /NDL /NJH /NJS /NP | Out-Null
+    if ($LASTEXITCODE -ge 8) {
+        throw "robocopy (docs) failed with exit code $LASTEXITCODE"
+    }
+    Write-Host "Deployed shotblocks (user manual) -> $docsDest"
+}
 
 # --- Shotblocks C++ plugin -------------------------------------------------
 # Copy shotblocks.xdl64 + web/ INTO the same plugins/shotblocks/ folder

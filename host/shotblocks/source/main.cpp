@@ -68,6 +68,7 @@
 #include <unordered_map>
 
 #include <commctrl.h>  // SetWindowSubclass — for the dialog WM_SETCURSOR hook
+#include <shellapi.h>  // ShellExecuteW — open the bundled user manual in the OS browser
 
 #pragma comment(lib, "Ws2_32.lib")
 #pragma comment(lib, "Comctl32.lib")
@@ -1802,6 +1803,7 @@ private:
 			EventAdd();
 			return "{\"ok\":true,\"kind\":\"audio-remove-ack\"}";
 		}
+		if (body.find("\"kind\":\"open-manual\"") != std::string::npos) return HandleOpenManual();
 		if (body.find("\"kind\":\"helper-stats\"") != std::string::npos) return HandleHelperStats();
 		if (body.find("\"kind\":\"helper-compact\"") != std::string::npos) return HandleHelperCompact();
 		if (body.find("\"kind\":\"add-to-queue\"") != std::string::npos) return HandleAddToQueue(body);
@@ -2116,6 +2118,45 @@ private:
 		Int32 y = ParseIntField(body, "y");
 		SetCursorPos((int)x, (int)y);
 		return "{\"ok\":true,\"kind\":\"warp-cursor-ack\"}";
+	}
+
+	// Open the bundled user manual in the OS default browser. The manual
+	// is static HTML shipped inside the plugin folder at docs/index.html
+	// (deploy.ps1 / package.ps1 copy it next to the .xdl64). We resolve
+	// the plugin folder from this DLL's own path — the same trick
+	// EnsureNavigated uses for web/index.html — so it works from whatever
+	// plugins directory the user installed into, not a dev-hardcoded path.
+	// ShellExecuteW("open", <local html path>, ...) launches the file in
+	// the registered default browser. Extracted to keep Dispatch under
+	// Maxon's 600-line source-processor cap.
+	std::string HandleOpenManual()
+	{
+		HMODULE hMod = nullptr;
+		GetModuleHandleExW(
+			GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS |
+			GET_MODULE_HANDLE_EX_FLAG_UNCHANGED_REFCOUNT,
+			(LPCWSTR)&ShotblocksDialog::DispatchHttpStatic,
+			&hMod);
+		wchar_t dll[MAX_PATH] = {0};
+		GetModuleFileNameW(hMod, dll, MAX_PATH);
+		wchar_t* lastSlash = wcsrchr(dll, L'\\');
+		if (lastSlash)
+			*(lastSlash + 1) = 0;
+		wchar_t path[MAX_PATH + 64];
+		swprintf_s(path, MAX_PATH + 64, L"%sdocs\\index.html", dll);
+
+		// Pass the plain filesystem path (not a file:// URL) so the shell
+		// resolves the default browser via the .html association.
+		HINSTANCE rc = ShellExecuteW(nullptr, L"open", path, nullptr, nullptr, SW_SHOWNORMAL);
+		// ShellExecuteW returns a value > 32 on success.
+		if ((INT_PTR)rc <= 32)
+		{
+			GePrint("[Shotblocks/v2] open-manual failed (ShellExecute rc="_s
+				+ maxon::String::IntToString((Int32)(INT_PTR)rc) + ") for "_s
+				+ maxon::String(path));
+			return "{\"ok\":false,\"kind\":\"open-manual-ack\",\"error\":\"shellexecute failed\"}";
+		}
+		return "{\"ok\":true,\"kind\":\"open-manual-ack\"}";
 	}
 
 	// Diag: walk the helper BaseContainer and print per-range byte totals
