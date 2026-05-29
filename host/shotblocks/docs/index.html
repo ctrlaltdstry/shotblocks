@@ -1,0 +1,762 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Shotblocks User Manual</title>
+  <style>
+    /* ---- Design tokens (mirrored from the plugin's theme.css) ---- */
+    :root {
+      --grey-7:  #121212;
+      --grey-10: #1a1a1a;
+      --grey-12: #1f1f1f;
+      --grey-16: #292929;
+      --grey-24: #3d3d3d;
+      --grey-50: #7f7f7f;
+      --grey-80: #cccccc;
+      --white:   #ffffff;
+      --accent:  #824cee;          /* timeline primary-highlight (purple) */
+      --accent-soft: #a47bf2;
+      --audio:   #02b85d;
+      --orphan:  #ff6259;
+      --edge:    #EDA840;
+
+      --sidebar-w: 270px;
+      --content-max: 820px;
+      --header-h: 56px;
+
+      --font-body: Inter, system-ui, -apple-system, "Segoe UI", sans-serif;
+      --font-mono: "JetBrains Mono", ui-monospace, Menlo, Consolas, monospace;
+    }
+
+    * { box-sizing: border-box; }
+
+    html { scroll-behavior: smooth; }
+
+    body {
+      margin: 0;
+      background: var(--grey-10);
+      color: var(--grey-80);
+      font-family: var(--font-body);
+      font-size: 15px;
+      line-height: 1.6;
+      -webkit-font-smoothing: antialiased;
+    }
+
+    /* ---- Layout shell ---- */
+    .layout { display: flex; min-height: 100vh; }
+
+    /* ---- Sidebar ---- */
+    .sidebar {
+      width: var(--sidebar-w);
+      flex: 0 0 var(--sidebar-w);
+      background: var(--grey-12);
+      border-right: 1px solid var(--grey-16);
+      position: sticky;
+      top: 0;
+      height: 100vh;
+      overflow-y: auto;
+      padding: 0 0 40px;
+    }
+    .sidebar__brand {
+      height: var(--header-h);
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      padding: 0 20px;
+      border-bottom: 1px solid var(--grey-16);
+      position: sticky;
+      top: 0;
+      background: var(--grey-12);
+      z-index: 2;
+    }
+    .sidebar__mark {
+      width: 22px; height: 22px;
+      border-radius: 6px;
+      background: var(--accent);
+      flex: 0 0 auto;
+      display: grid; place-items: center;
+      color: var(--white);
+      font-weight: 700; font-size: 13px;
+    }
+    .sidebar__name { color: var(--white); font-weight: 600; font-size: 15px; }
+    .sidebar__ver { color: var(--grey-50); font-size: 11px; font-family: var(--font-mono); }
+
+    .nav { padding: 14px 0 0; }
+    .nav__group-title {
+      padding: 16px 20px 6px;
+      color: var(--grey-50);
+      font-size: 11px;
+      font-weight: 600;
+      letter-spacing: 0.06em;
+      text-transform: uppercase;
+    }
+    .nav__link {
+      display: block;
+      padding: 6px 20px 6px 20px;
+      color: var(--grey-80);
+      text-decoration: none;
+      font-size: 14px;
+      border-left: 2px solid transparent;
+    }
+    .nav__link:hover { color: var(--white); background: rgba(255,255,255,0.03); }
+    .nav__link.is-active {
+      color: var(--white);
+      border-left-color: var(--accent);
+      background: color-mix(in srgb, var(--accent) 10%, transparent);
+    }
+
+    /* ---- Content ---- */
+    .content {
+      flex: 1 1 auto;
+      min-width: 0;
+      padding: 0 48px 120px;
+    }
+    .content__inner { max-width: var(--content-max); margin: 0 auto; }
+
+    .topbar {
+      height: var(--header-h);
+      display: flex;
+      align-items: center;
+      justify-content: flex-end;
+      gap: 14px;
+      border-bottom: 1px solid var(--grey-16);
+      margin: 0 -48px 0;
+      padding: 0 48px;
+      position: sticky; top: 0;
+      background: color-mix(in srgb, var(--grey-10) 92%, transparent);
+      backdrop-filter: blur(6px);
+      z-index: 1;
+    }
+    .topbar__tag {
+      font-family: var(--font-mono);
+      font-size: 11px;
+      color: var(--grey-50);
+      border: 1px solid var(--grey-24);
+      border-radius: 4px;
+      padding: 2px 8px;
+    }
+
+    section.doc-section { padding-top: 40px; scroll-margin-top: 70px; }
+    section.doc-section:first-of-type { padding-top: 28px; }
+
+    h1 { color: var(--white); font-size: 30px; font-weight: 700; line-height: 1.2; margin: 0 0 8px; }
+    h2 {
+      color: var(--white); font-size: 23px; font-weight: 600;
+      margin: 0 0 14px; padding-bottom: 8px;
+      border-bottom: 1px solid var(--grey-16);
+    }
+    h3 { color: var(--white); font-size: 17px; font-weight: 600; margin: 28px 0 8px; }
+    p { margin: 0 0 14px; }
+    .lead { color: var(--grey-50); font-size: 16px; margin-bottom: 22px; }
+
+    a { color: var(--accent-soft); }
+    ul, ol { margin: 0 0 16px; padding-left: 22px; }
+    li { margin: 4px 0; }
+    li::marker { color: var(--grey-50); }
+    strong { color: var(--grey-80); font-weight: 600; }
+
+    code {
+      font-family: var(--font-mono);
+      font-size: 0.86em;
+      background: var(--grey-16);
+      border: 1px solid var(--grey-24);
+      border-radius: 4px;
+      padding: 1px 6px;
+      color: var(--grey-80);
+    }
+
+    /* Keyboard key */
+    kbd {
+      font-family: var(--font-mono);
+      font-size: 12px;
+      background: var(--grey-16);
+      border: 1px solid var(--grey-24);
+      border-bottom-width: 2px;
+      border-radius: 5px;
+      padding: 2px 7px;
+      color: var(--white);
+      white-space: nowrap;
+    }
+
+    /* Callout box */
+    .note, .warn, .tip {
+      border-radius: 6px;
+      padding: 12px 16px;
+      margin: 16px 0;
+      border: 1px solid var(--grey-24);
+      background: var(--grey-12);
+      font-size: 14px;
+    }
+    .note { border-left: 3px solid var(--accent); }
+    .tip  { border-left: 3px solid var(--audio); }
+    .warn { border-left: 3px solid var(--edge); }
+    .note__label, .warn__label, .tip__label {
+      display: block; font-weight: 600; color: var(--white);
+      font-size: 12px; letter-spacing: 0.04em; text-transform: uppercase;
+      margin-bottom: 4px;
+    }
+
+    /* Tables (used by the keyboard reference) */
+    table { width: 100%; border-collapse: collapse; margin: 12px 0 20px; font-size: 14px; }
+    th, td { text-align: left; padding: 8px 12px; border-bottom: 1px solid var(--grey-16); }
+    th { color: var(--grey-50); font-weight: 600; font-size: 12px; text-transform: uppercase; letter-spacing: 0.04em; }
+    td:first-child { white-space: nowrap; }
+
+    .placeholder-body { color: var(--grey-50); font-style: italic; }
+
+    .footer {
+      margin-top: 60px; padding-top: 20px;
+      border-top: 1px solid var(--grey-16);
+      color: var(--grey-50); font-size: 13px;
+    }
+
+    /* Sidebar scrollbar — subtle */
+    .sidebar::-webkit-scrollbar { width: 8px; }
+    .sidebar::-webkit-scrollbar-thumb { background: var(--grey-24); border-radius: 4px; }
+    .sidebar::-webkit-scrollbar-track { background: transparent; }
+  </style>
+</head>
+<body>
+  <div class="layout">
+    <!-- ============ SIDEBAR ============ -->
+    <aside class="sidebar" id="sidebar">
+      <div class="sidebar__brand">
+        <div class="sidebar__mark">S</div>
+        <div>
+          <div class="sidebar__name">Shotblocks</div>
+          <div class="sidebar__ver" id="brand-version">v1.0.0&nbsp;beta&nbsp;&middot;&nbsp;Manual</div>
+        </div>
+      </div>
+      <nav class="nav" id="nav"><!-- built from the section list by script --></nav>
+    </aside>
+
+    <!-- ============ CONTENT ============ -->
+    <main class="content">
+      <div class="topbar">
+        <span class="topbar__tag" id="version-tag">v1.0.0&nbsp;beta</span>
+      </div>
+      <div class="content__inner" id="content">
+        <!-- Sections are authored here. Each <section class="doc-section">
+             with an id + data-nav-title is auto-listed in the sidebar.
+             data-nav-group starts a new sidebar group at that section.
+             Commit 2 ships the chrome + placeholder bodies; Commit 3
+             fills in the real manual text. -->
+
+        <section class="doc-section" id="overview" data-nav-group="Getting started" data-nav-title="Overview">
+          <h1>Shotblocks User Manual</h1>
+          <p class="lead">A timeline-based shot sequencer for camera animation in Cinema&nbsp;4D&nbsp;2026.</p>
+          <p>Shotblocks gives Cinema&nbsp;4D a proper editing timeline for your cameras. Instead of juggling a Stage object, render takes, and a tangle of keyframes, you arrange your shots as blocks on a track — drag to reorder, trim the cuts, and scrub through the whole sequence as one continuous edit. Drop in a music track and you get waveforms, a live level meter, and automatic beat detection to cut against.</p>
+          <p>The signature idea is simple: <strong>your cameras are your shots.</strong> Any camera in your scene — one you keyframed by hand, one driven by a spline, or a fresh one Shotblocks makes for you — becomes a shot the moment you drag it onto the timeline. As the playhead moves across the timeline, the viewport switches to whichever camera owns that frame. There are no in-between states: cuts are hard cuts, exactly one camera is live at any frame.</p>
+          <h3>What you can do with it</h3>
+          <ul>
+            <li><strong>Sequence cameras</strong> on a multi-track timeline with hard cuts, trims, roll edits, and ripple.</li>
+            <li><strong>Create cameras in place</strong> from the current viewport, or drag existing ones in from the Object Manager.</li>
+            <li><strong>Work to music</strong> — import audio, see the waveform, read a live dB meter, detect beats, and snap your cuts to them.</li>
+            <li><strong>Render the sequence</strong> as a whole through C4D's normal render paths, or push individual shots to the Render Queue.</li>
+            <li><strong>Add procedural motion</strong> to any camera with the Shotblocks rig tag — spring smoothing, look-at, handheld noise, and zoom.</li>
+          </ul>
+          <div class="note">
+            <span class="note__label">Scope</span>
+            Shotblocks is Windows-only and targets Cinema&nbsp;4D&nbsp;2026. This is a beta release — see the <a href="#release-notes">Release notes</a> for what's included.
+          </div>
+        </section>
+
+        <section class="doc-section" id="install" data-nav-title="Installation">
+          <h2>Installation</h2>
+          <p>Shotblocks installs as a single plugin folder. You have two ways to install it.</p>
+
+          <h3>Option A — the installer (recommended)</h3>
+          <ol>
+            <li>Run <code>shotblocks-setup.exe</code>.</li>
+            <li>The installer detects your Cinema&nbsp;4D&nbsp;2026 plugins folder. Confirm it (or browse to it if you keep plugins somewhere custom), then click <strong>Install</strong>.</li>
+            <li><strong>Restart Cinema&nbsp;4D</strong> if it was running.</li>
+          </ol>
+
+          <div class="warn">
+            <span class="warn__label">One-time Windows warning</span>
+            Because this beta isn't code-signed yet, Windows SmartScreen shows a blue <em>"Windows protected your PC"</em> box the first time you run the installer. This is expected for an unsigned beta and does not mean the file is unsafe. Click <strong>More info</strong>, then <strong>Run anyway</strong>. If you'd rather skip the warning entirely, use the zip (Option B) instead. A signed installer is planned for the public release.
+          </div>
+
+          <h3>Option B — the zip (manual install)</h3>
+          <ol>
+            <li>Unzip <code>shotblocks.zip</code>. Inside is a single <code>shotblocks</code> folder.</li>
+            <li>Copy that whole folder into your Cinema&nbsp;4D&nbsp;2026 <code>plugins</code> directory. The usual location is:
+              <br /><code>%APPDATA%\Maxon\Maxon Cinema 4D 2026_&lt;id&gt;\plugins\</code>
+              <br />(the <code>&lt;id&gt;</code> suffix is specific to your install).</li>
+            <li><strong>Restart Cinema&nbsp;4D.</strong></li>
+          </ol>
+          <p>If you downloaded a checksum (<code>.sha256</code>) file alongside the package, you can verify the download's integrity before installing.</p>
+
+          <h3>Confirming it loaded</h3>
+          <p>Open <strong>Extensions&nbsp;&rarr;&nbsp;Console</strong> in Cinema&nbsp;4D. You should see a load line confirming the Shotblocks camera rig tag registered, and the timeline plugin's own load line. If the plugin doesn't appear, see <a href="#troubleshooting">Troubleshooting</a>.</p>
+        </section>
+
+        <section class="doc-section" id="first-run" data-nav-title="First-time workflow">
+          <h2>First-time workflow</h2>
+          <p>Here's the fastest path from a fresh scene to a playable sequence.</p>
+          <ol>
+            <li><strong>Open the timeline.</strong> From the menu, choose <strong>Extensions&nbsp;&rarr;&nbsp;Shotblocks</strong>. The Shotblocks panel opens; dock it wherever you like — it behaves like any other C4D window.</li>
+            <li><strong>Add your first camera.</strong> On an empty timeline you'll see a prompt to drop a camera. You have two options:
+              <ul>
+                <li>Frame up your shot in the viewport, then click <strong>Add Camera</strong> — Shotblocks creates a camera matching your current view and drops a shot at the playhead.</li>
+                <li>Or drag an existing camera from the Object Manager onto the timeline.</li>
+              </ul>
+            </li>
+            <li><strong>Add more shots.</strong> Repeat — each camera becomes a block. Drag blocks to arrange them; drag their edges to set where each cut lands.</li>
+            <li><strong>Scrub.</strong> Drag in the ruler at the top. The viewport follows the playhead, switching cameras at each cut.</li>
+            <li><strong>Play.</strong> Press <kbd>Space</kbd> to play the sequence. Press it again to stop.</li>
+          </ol>
+          <div class="tip">
+            <span class="tip__label">Tip</span>
+            Everything you build is saved inside your <code>.c4d</code> document automatically — there's no separate Shotblocks file to manage. Just save your scene as normal.
+          </div>
+        </section>
+
+        <section class="doc-section" id="timeline" data-nav-group="The timeline" data-nav-title="Layout overview">
+          <h2>Layout overview</h2>
+          <p>The Shotblocks window has a few regions:</p>
+          <ul>
+            <li><strong>Timecode</strong> — top bar, shows the current playhead frame.</li>
+            <li><strong>Utility strip</strong> — the row of toggle icons above the ruler: Loop, Snap, Beat&nbsp;Detection, Markers, and Settings.</li>
+            <li><strong>Ruler</strong> — the frame scale across the top. Drag in it to scrub. The play-range handles live at its edges.</li>
+            <li><strong>Tool rail</strong> — the left column. The tool palette (Select, Razor, Pen, Hand, Zoom, Slip) sits at the top; the dB meter and audio-scrub toggle sit below it.</li>
+            <li><strong>Track headers</strong> — the labels down the left of the tracks, with each track's controls.</li>
+            <li><strong>The stage</strong> — the main area where your shot blocks and audio waveforms live, with the playhead running through it.</li>
+            <li><strong>Inspector</strong> — the panel on the right. In v1 it holds the render settings. The <strong>?</strong> button at its bottom-right opens this manual.</li>
+          </ul>
+          <p>Video tracks grow <em>upward</em> from the center; audio tracks grow <em>downward</em>, with a thin divider line between them — the same arrangement as Premiere, Final Cut, and Resolve.</p>
+        </section>
+
+        <section class="doc-section" id="tracks" data-nav-title="Tracks &amp; headers">
+          <h2>Tracks &amp; headers</h2>
+          <p>There are two kinds of track: <strong>video tracks</strong> (V1, V2, …) hold camera shots, and <strong>audio tracks</strong> (A1, A2, …) hold sound. You always have at least V1 and A1.</p>
+
+          <h3>Adding and removing tracks</h3>
+          <p>You don't add tracks from a menu — you make them by dragging. Drag a shot past the outermost track on its side and a new track appears to hold it. To remove tracks, right-click a track header and choose <strong>Delete Track</strong> or <strong>Delete Empty Tracks</strong>. Tracks renumber themselves afterward.</p>
+
+          <h3>Track header controls</h3>
+          <p>Each header has a <strong>chip</strong> showing the track name (V1, A2, …). The chip is also the <em>write target</em>: the active chip (highlighted) is where the Add&nbsp;Camera button and Paste put new clips. Click a chip to make it active. Double-click a track's name to rename it.</p>
+          <ul>
+            <li><strong>Video tracks</strong> have an <strong>eye</strong> toggle — turn it off and that track's cameras won't route to the viewport (useful for parking alternate takes above your main edit).</li>
+            <li><strong>Audio tracks</strong> have <strong>mute</strong> and <strong>solo</strong>. Mute silences a track; solo isolates it (if any track is soloed, only soloed tracks are heard).</li>
+            <li><strong>Both</strong> have a <strong>lock</strong>. A locked track ignores all edits — its clips can't be moved, trimmed, or deleted until you unlock it.</li>
+          </ul>
+          <p>When two video shots cover the same frame on different tracks, the one on the <strong>higher track wins</strong> — top track is what you see, exactly like NLE convention.</p>
+        </section>
+
+        <section class="doc-section" id="navigation" data-nav-title="Zoom &amp; pan">
+          <h2>Zoom &amp; pan</h2>
+          <p>Navigation matches Cinema&nbsp;4D's viewport gestures, so it should already feel familiar.</p>
+          <table>
+            <tr><th>Gesture</th><th>Action</th></tr>
+            <tr><td><kbd>Alt</kbd> + <strong>Right-drag</strong></td><td>Zoom in/out around the cursor. Drag right to zoom in, left to zoom out.</td></tr>
+            <tr><td><strong>Middle-drag</strong></td><td>Pan. Horizontal pans through time; vertical reapportions space between the video and audio sides.</td></tr>
+            <tr><td><kbd>Alt</kbd> + <kbd>Shift</kbd> + <strong>Middle-drag</strong></td><td>Pan only the side (video or audio) your cursor started on, leaving the other side put.</td></tr>
+          </table>
+          <p>You can also use the <a href="#tools">Hand and Zoom tools</a> if you prefer a tool-based workflow, or roll the mouse wheel to scroll.</p>
+          <h3>The video / audio divider</h3>
+          <p>The line between the video and audio sides isn't draggable. To give one side more room, middle-drag vertically — the divider shifts to reapportion the space.</p>
+          <h3>Scrollbars</h3>
+          <p>Thin overlay scrollbars appear on an edge only when that direction actually has content scrolled out of view. They pan only — zoom stays on the Alt+Right-drag gesture above.</p>
+        </section>
+
+        <section class="doc-section" id="cameras" data-nav-group="Cameras" data-nav-title="Adding cameras">
+          <h2>Adding cameras</h2>
+          <p>A shot is just a reference to a camera over a frame range. There are two ways to create one.</p>
+
+          <h3>Drag from the Object Manager</h3>
+          <p>Drag any camera from the Object Manager onto a video track. Drop it where you want it — it becomes a shot at the cursor's frame. If the camera already has animation (keyframes or a spline), Shotblocks reads that animation's frame range and sizes the shot to fit.</p>
+
+          <h3>The Add Camera button</h3>
+          <p>Frame up your shot in the viewport, then click <strong>Add Camera</strong> (it appears as an empty-state prompt, and as a persistent button near the Inspector). Shotblocks:</p>
+          <ul>
+            <li>Creates a new camera matching your current editor view — same position, rotation, and lens — so the shot looks exactly like what you're seeing.</li>
+            <li>Drops a shot for it at the playhead, on the active video chip's track. If the playhead sits inside an existing shot, the new shot is placed in the nearest open space.</li>
+            <li>Makes it the live camera and selects it in the Object Manager.</li>
+          </ul>
+          <p>One press of <kbd>Ctrl</kbd>+<kbd>Z</kbd> removes the shot; a second press removes the camera too.</p>
+
+          <h3>Which camera type gets created</h3>
+          <p>The Add&nbsp;Camera button creates whatever camera type you've chosen in <a href="#settings">Settings&nbsp;&rarr;&nbsp;Defaults</a>. Only camera types whose renderer is installed in your C4D session are offered — for example, the Redshift camera only appears if Redshift is present.</p>
+
+          <h3>The active chip (write target)</h3>
+          <p>Each side (video and audio) has one <strong>active chip</strong>, shown highlighted in the track headers. It's the target for "cursorless" inserts — the Add&nbsp;Camera button and Paste both put their clip on the active chip's track. Dragging from the Object Manager ignores the chip and drops wherever your cursor is.</p>
+
+          <div class="note">
+            <span class="note__label">Renaming a camera</span>
+            Rename a camera in the Object Manager and its shot's label updates to match — the link is by identity, so even two cameras with the same name stay correctly attached.
+          </div>
+        </section>
+
+        <section class="doc-section" id="orphans" data-nav-title="Orphan cameras">
+          <h2>Orphan cameras</h2>
+          <p>If you delete a camera that one or more shots still reference, those shots don't vanish — they become <strong>orphans</strong>. An orphan shot turns red with a <em>(missing)</em> label, so you can see at a glance that its source is gone. An orphan can't play back; the viewport holds whatever camera was last live.</p>
+          <p>You have three ways to resolve an orphan:</p>
+          <ul>
+            <li><strong>Undo the deletion</strong> — <kbd>Ctrl</kbd>+<kbd>Z</kbd> brings the camera back and reattaches the shot.</li>
+            <li><strong>Relink to another camera</strong> — drag a different camera from the Object Manager onto the orphan shot. It adopts the new camera while keeping its position and length.</li>
+            <li><strong>Remove the shot</strong> — right-click it and delete it.</li>
+          </ul>
+          <div class="note">
+            <span class="note__label">Why orphans stick around</span>
+            Orphan shots are kept on purpose, even across save and reload — silently dropping them would be a good way to lose work. Shotblocks won't auto-reattach a deleted camera to a same-named survivor either; the red state is your signal that something changed.
+          </div>
+        </section>
+
+        <section class="doc-section" id="editing" data-nav-group="Editing clips" data-nav-title="Move, trim, roll">
+          <h2>Move, trim, roll</h2>
+          <p>Editing follows the standard non-linear editor model. Where you grab a clip decides what you do — the cursor changes shape to tell you which edit is under your pointer.</p>
+
+          <h3>Move</h3>
+          <p>Drag a clip's body to slide it. Horizontal drag changes its position in time; drag it up or down to move it to another track. Drag past the outermost track to spawn a new one.</p>
+
+          <h3>Trim</h3>
+          <p>Grab a clip's left or right edge and drag to change where that cut lands — the clip gets longer or shorter, the opposite edge stays put. (Audio clips trim against the underlying media: you can only extend as far as there's sound to reveal.)</p>
+
+          <h3>Roll</h3>
+          <p>Where two clips meet edge-to-edge, the seam is divided into three zones. Hover near the left clip to trim its right edge; near the right clip to trim its left edge; right in the middle to <strong>roll</strong> — both edges move together, so the cut shifts without leaving a gap. The cursor switches to a roll arrow in the middle zone.</p>
+
+          <h3>What happens when clips overlap</h3>
+          <p>On the same track, dropping or dragging a clip into space that's already occupied <strong>replaces</strong> — the moved clip wins, trimming or removing whatever it lands on. Hold <kbd>Shift</kbd> while dragging to <strong>ripple</strong> instead: the neighbors slide out of the way to make room. Across different tracks, overlap is fine — the higher track simply wins at that frame.</p>
+
+          <h3>Nudging</h3>
+          <p>With clips selected, the arrow keys nudge them: <kbd>&larr;</kbd>/<kbd>&rarr;</kbd> by one frame, <kbd>Shift</kbd>+arrow by ten. The bracket keys snap clips to the playhead — see the <a href="#keyboard">Keyboard reference</a>.</p>
+        </section>
+
+        <section class="doc-section" id="tools" data-nav-title="The tools">
+          <h2>The tools</h2>
+          <p>Six tools live in the left rail. Each has a one-key shortcut; the tool stays active until you pick another (Premiere-style).</p>
+          <table>
+            <tr><th>Tool</th><th>Key</th><th>What it does</th></tr>
+            <tr><td><strong>Select</strong></td><td><kbd>V</kbd></td><td>The default. Move, trim, and roll clips; select and marquee.</td></tr>
+            <tr><td><strong>Razor</strong></td><td><kbd>B</kbd></td><td>Click an audio clip to split it at that point. (Video shots are already hard cuts, so the razor applies to audio.)</td></tr>
+            <tr><td><strong>Pen</strong></td><td><kbd>P</kbd></td><td>Draw and edit the volume curve on audio clips. See <a href="#audio-playback">Playback &amp; metering</a>.</td></tr>
+            <tr><td><strong>Hand</strong></td><td><kbd>H</kbd></td><td>Drag to pan, same as a middle-drag.</td></tr>
+            <tr><td><strong>Zoom</strong></td><td><kbd>Z</kbd></td><td>Drag to zoom, same as Alt+Right-drag.</td></tr>
+            <tr><td><strong>Slip</strong></td><td><kbd>S</kbd></td><td>Drag inside an audio clip to slide the sound under it without moving the clip itself — handy for re-aligning a sound to a beat.</td></tr>
+          </table>
+          <div class="tip">
+            <span class="tip__label">Pen on the fly</span>
+            You don't have to switch to the Pen tool to tweak a volume curve — holding <kbd>Alt</kbd> temporarily acts as the Pen over an audio clip.
+          </div>
+        </section>
+
+        <section class="doc-section" id="selection" data-nav-title="Selection &amp; clipboard">
+          <h2>Selection &amp; clipboard</h2>
+          <p>Click a clip to select it. <kbd>Shift</kbd>-click (or <kbd>Ctrl</kbd>-click) to add or remove clips from the selection. Drag a box across empty timeline space to marquee-select everything it touches.</p>
+          <p>Selected clips move together as a group, and the standard clipboard works:</p>
+          <table>
+            <tr><th>Action</th><th>Shortcut</th></tr>
+            <tr><td>Cut</td><td><kbd>Ctrl</kbd>+<kbd>X</kbd></td></tr>
+            <tr><td>Copy</td><td><kbd>Ctrl</kbd>+<kbd>C</kbd></td></tr>
+            <tr><td>Paste</td><td><kbd>Ctrl</kbd>+<kbd>V</kbd></td></tr>
+            <tr><td>Delete</td><td><kbd>Delete</kbd> or <kbd>Backspace</kbd></td></tr>
+          </table>
+          <p>Paste drops onto the active chip's track at the playhead. You can also right-click a clip for these actions plus <strong>Split at Playhead</strong> and <strong>Lock</strong>/<strong>Unlock</strong>. A locked clip (or any clip on a locked track) ignores edits until unlocked.</p>
+        </section>
+
+        <section class="doc-section" id="snapping" data-nav-title="Snapping">
+          <h2>Snapping</h2>
+          <p>Snapping pulls a clip you're dragging toward nearby edit points so cuts line up cleanly. Turn it on with the <strong>Snap</strong> button in the utility strip (or press <kbd>N</kbd>). When on, a dragged clip magnetizes to:</p>
+          <ul>
+            <li>the edges of other clips, on any track;</li>
+            <li>the playhead;</li>
+            <li>detected beats (when the beat grid is visible);</li>
+            <li>markers (when markers are visible).</li>
+          </ul>
+          <p>A yellow line appears wherever the clip is snapping. If you prefer snap off by default, leave the toggle off and hold <kbd>Shift</kbd> during a drag to snap just for that move.</p>
+        </section>
+
+        <section class="doc-section" id="audio" data-nav-group="Audio" data-nav-title="Importing audio">
+          <h2>Importing audio</h2>
+          <p>Drag a <code>.wav</code> or <code>.mp3</code> file from Windows Explorer onto an audio track. Shotblocks reads it, lays down a clip, and draws the waveform.</p>
+          <div class="note">
+            <span class="note__label">Audio comes from files, not the Object Manager</span>
+            Drop audio from the file system, not from C4D's Object Manager. The Object Manager is for cameras; dropping audio there does nothing. (This is a deliberate split — the timeline embeds the audio's bytes into your document so the sound travels with the scene.)
+          </div>
+          <h3>Waveforms</h3>
+          <p>Each audio clip shows its waveform, which stays crisp as you zoom in and out. The waveform is cached in the document, so it redraws instantly on reload without re-analyzing the file. You can hide a clip's waveform with the small toggle at its lower-left corner.</p>
+        </section>
+
+        <section class="doc-section" id="audio-playback" data-nav-title="Playback &amp; metering">
+          <h2>Playback &amp; metering</h2>
+          <p>Audio plays along with the sequence when you press <kbd>Space</kbd>, and follows your scrubbing.</p>
+
+          <h3>Audio scrubbing</h3>
+          <p>The <strong>audio-scrub</strong> toggle (the skim icon at the top of the dB-meter card in the left rail) makes the timeline play short blips of sound as you drag the playhead — useful for finding an exact moment. Turn it off for silent scrubbing.</p>
+
+          <h3>The dB meter</h3>
+          <p>The dB meter in the left rail shows the live output level — two bars for left and right — both during playback and while you scrub. It's a quick read on whether your mix is hot or quiet.</p>
+
+          <h3>Mute and solo</h3>
+          <p>Use the mute and solo controls in each audio track's header to silence or isolate tracks. If any track is soloed, you'll only hear soloed tracks.</p>
+
+          <h3>Volume curves (the Pen tool)</h3>
+          <p>Switch to the <strong>Pen</strong> tool (<kbd>P</kbd>, or hold <kbd>Alt</kbd>) and click on an audio clip to add level keyframes — points on a volume curve drawn across the clip. Drag a point to change its level or position. Right-click a point for its easing (Linear, Hold, Ease In, Ease Out, Ease In-Out) or to delete it. The curve rides with the audio, so trimming, slipping, or splitting the clip keeps your fades intact.</p>
+
+          <div class="warn">
+            <span class="warn__label">No sound? Check the Windows mixer</span>
+            The timeline's audio plays through a separate <em>"Microsoft Edge WebView2"</em> entry in the Windows Volume Mixer. If the timeline is silent, open the Volume Mixer and make sure that entry isn't muted or turned down — it's the most common cause of silent playback, and it's not a Shotblocks bug.
+          </div>
+        </section>
+
+        <section class="doc-section" id="beats" data-nav-title="Beat detection">
+          <h2>Beat detection</h2>
+          <p>Click the <strong>Beat Detection</strong> button in the utility strip and Shotblocks analyzes your audio, then overlays a tempo grid on the timeline showing the song's structure — bars, beats, and the larger section boundaries.</p>
+          <ul>
+            <li>The <strong>first click</strong> runs the analysis and shows the grid.</li>
+            <li>Later clicks just <strong>toggle the grid</strong> on and off — the analysis is kept, so re-showing it is instant.</li>
+          </ul>
+          <p>With the grid visible, dragged clips snap to beats (as long as <a href="#snapping">Snap</a> is on), so you can land your cuts right on the music. The grid is drawn in quiet white lines so it reads as structure, not as a competing feature on top of your clips.</p>
+        </section>
+
+        <section class="doc-section" id="playback" data-nav-group="Playback &amp; range" data-nav-title="Play, loop, scrub">
+          <h2>Play, loop, scrub</h2>
+          <p><kbd>Space</kbd> plays and stops. Playback uses Cinema&nbsp;4D's own transport, so simulations, Alembic caches, and everything else play exactly as they do natively — the viewport just follows your camera cuts as it goes.</p>
+          <p><strong>Scrub</strong> by dragging in the ruler. The playhead and viewport follow in real time, switching cameras at each cut.</p>
+          <h3>Loop</h3>
+          <p>The <strong>Loop</strong> toggle in the utility strip (or <kbd>Shift</kbd>+<kbd>L</kbd>) makes playback wrap around within the play range instead of stopping at the end. It stays in sync with C4D's own loop button, so toggling either one updates both.</p>
+          <h3>Working in C4D's native timeline</h3>
+          <p>You can scrub or play from C4D's own timeline too, and the Shotblocks playhead stays in sync. By default the timeline's audio only plays while you're working in Shotblocks; the <a href="#settings">Audio follows C4D timeline</a> setting lets the audio play during native C4D scrub and playback as well.</p>
+        </section>
+
+        <section class="doc-section" id="range" data-nav-title="Play range">
+          <h2>Play range</h2>
+          <p>The play range is an in/out region that bounds playback. It's always visible as a bar at the top of the timeline, with a chevron handle at each end. The range affects <em>playback only</em> — clips outside it are dimmed but stay fully editable, and you can scrub anywhere.</p>
+          <h3>Setting the range</h3>
+          <ul>
+            <li>Drag either <strong>chevron handle</strong> to move the in or out point.</li>
+            <li>Drag the <strong>bar between them</strong> to slide the whole range, keeping its length.</li>
+          </ul>
+          <table>
+            <tr><th>Hotkey</th><th>Action</th></tr>
+            <tr><td><kbd>I</kbd></td><td>Set the in point to the playhead.</td></tr>
+            <tr><td><kbd>O</kbd></td><td>Set the out point to the playhead.</td></tr>
+            <tr><td><kbd>/</kbd></td><td>Reset the range to the whole timeline.</td></tr>
+            <tr><td><kbd>?</kbd> (Shift+/)</td><td>Set the range to the current selection (or all clips if nothing is selected).</td></tr>
+          </table>
+        </section>
+
+        <section class="doc-section" id="markers" data-nav-title="Markers">
+          <h2>Markers</h2>
+          <p>Markers are reference pins on the ruler — handy for tagging a moment to cut on. Press <kbd>M</kbd> to drop one at the playhead. Markers persist with your scene, and clips snap to them when <a href="#snapping">Snap</a> and marker visibility are both on.</p>
+          <ul>
+            <li><strong>Show/hide</strong> all markers with the Markers toggle in the utility strip (or <kbd>Shift</kbd>+<kbd>M</kbd>).</li>
+            <li><strong>Delete one</strong> by right-clicking it on the ruler.</li>
+            <li><strong>Delete all</strong> by right-clicking empty ruler space and choosing Delete All Markers.</li>
+          </ul>
+        </section>
+
+        <section class="doc-section" id="render" data-nav-group="Rendering" data-nav-title="Render workflow">
+          <h2>Render workflow</h2>
+          <p>The Inspector's <strong>Render</strong> section has a mode dropdown with two ways to render your sequence.</p>
+
+          <h3>Whole sequence</h3>
+          <p>Render the entire edit as one continuous movie, with the cameras cutting at your shot boundaries — through Cinema&nbsp;4D's normal <strong>Render to Picture Viewer</strong>. You don't even need the Shotblocks window open: the camera switching is baked into a hidden helper that activates automatically whenever a render runs. Just render as you normally would; your master render settings (renderer, resolution, output path, frame range) are used as-is.</p>
+
+          <h3>Individual shots</h3>
+          <p>Render each shot as its own file. Click <strong>Add to Queue</strong> and Shotblocks adds one entry per shot to Cinema&nbsp;4D's <strong>Render Queue</strong>, each set to its own camera and frame range. Shotblocks does <em>not</em> start the render — open C4D's Render Queue and fire it when you're ready. Each entry inherits your master render settings, so whatever renderer you've set (Standard, Redshift, Octane, …) is what every shot uses.</p>
+          <p>The <strong>Settings</strong> button next to Add&nbsp;to&nbsp;Queue lights up when your master render settings have changed since you last queued. Click it to push the updated settings to the queued shots so they stay in sync.</p>
+
+          <div class="note">
+            <span class="note__label">Notes</span>
+            Audio is never rendered — it's editor preview only. The play range doesn't affect renders; each queued shot renders its own range.
+          </div>
+        </section>
+
+        <section class="doc-section" id="settings" data-nav-group="Reference" data-nav-title="Settings">
+          <h2>Settings</h2>
+          <p>Open Settings from the gear icon in the utility strip.</p>
+          <h3>Defaults</h3>
+          <p><strong>Default camera type</strong> — the kind of camera the <a href="#cameras">Add&nbsp;Camera</a> button creates. Only types whose renderer is installed appear in the list (so RS&nbsp;Camera shows only when Redshift is present, and so on).</p>
+          <h3>Audio</h3>
+          <p><strong>Audio follows C4D timeline</strong> — when off (the default), the timeline's audio plays only while you're working inside Shotblocks; scrubbing or playing C4D's native timeline stays silent. Turn it on to hear audio during native C4D playback too. Either way, the playhead stays in sync.</p>
+        </section>
+
+        <section class="doc-section" id="rig-tag" data-nav-title="Camera rig tag">
+          <h2>Camera rig tag</h2>
+          <p>Shots play back whatever animation a camera already has. To add <em>procedural</em> motion — physical smoothing, automatic aiming, handheld feel — apply the <strong>Shotblocks</strong> tag to a camera: right-click the camera in the Object Manager and choose <strong>Tags&nbsp;&rarr;&nbsp;Shotblocks</strong>. Its controls appear in the Attribute Manager.</p>
+          <p>The tag is <strong>additive</strong>: it layers on top of the camera's existing animation rather than replacing it. Turn the tag off and your original animation is untouched. The controls are grouped:</p>
+          <ul>
+            <li><strong>Damping</strong> — <em>Linear</em> and <em>Angular</em> smoothing (as percentages). Adds weight and momentum, so the camera eases into moves and settles instead of snapping. Defaults to 0% (no smoothing).</li>
+            <li><strong>Look At</strong> — aim the camera at a target object, with a <em>Look-At Strength</em> to blend between the camera's own aim and the target, plus <em>Roll</em> and <em>Bank Into Turns</em>.</li>
+            <li><strong>Framing</strong> — offsets the aim to compose the subject off-center.</li>
+            <li><strong>Noise</strong> — <em>Handheld Noise</em> for an organic operator feel: <em>Shake Amount</em>, <em>Drift Speed</em>, a <em>Walk Cycle</em> with step rate, and a <em>Seed</em> to vary the pattern.</li>
+            <li><strong>Zoom</strong> — punch-in moves: <em>Frequency</em>, <em>Amount</em>, <em>Hold</em>, <em>Snap In</em>, <em>Pull Back</em>, and <em>Return</em>.</li>
+            <li><strong>Chase</strong> — make the camera pursue a moving target object with its own momentum, trailing and overshooting like a real operator following the action: <em>Follow Distance</em>, <em>Velocity Smoothing</em>, <em>Swing Speed</em>, height/side offsets, and an optional aim-lead.</li>
+          </ul>
+          <div class="note">
+            <span class="note__label">Optional</span>
+            The rig tag is entirely optional. Cameras without it play their own animation as-is — the tag just unlocks the procedural extras on top.
+          </div>
+        </section>
+
+        <section class="doc-section" id="keyboard" data-nav-title="Keyboard reference">
+          <h2>Keyboard reference</h2>
+          <p>Every shortcut has a mouse equivalent — keys are accelerators, never the only way to do something.</p>
+
+          <h3>Playback &amp; range</h3>
+          <table>
+            <tr><th>Key</th><th>Action</th></tr>
+            <tr><td><kbd>Space</kbd></td><td>Play / stop</td></tr>
+            <tr><td><kbd>I</kbd></td><td>Set play-range in point to the playhead</td></tr>
+            <tr><td><kbd>O</kbd></td><td>Set play-range out point to the playhead</td></tr>
+            <tr><td><kbd>/</kbd></td><td>Reset play range to the whole timeline</td></tr>
+            <tr><td><kbd>?</kbd></td><td>Set play range to the selection (or all clips)</td></tr>
+            <tr><td><kbd>Shift</kbd>+<kbd>L</kbd></td><td>Toggle Loop</td></tr>
+          </table>
+
+          <h3>Tools</h3>
+          <table>
+            <tr><th>Key</th><th>Tool</th></tr>
+            <tr><td><kbd>V</kbd></td><td>Select</td></tr>
+            <tr><td><kbd>B</kbd></td><td>Razor</td></tr>
+            <tr><td><kbd>P</kbd></td><td>Pen</td></tr>
+            <tr><td><kbd>H</kbd></td><td>Hand</td></tr>
+            <tr><td><kbd>Z</kbd></td><td>Zoom</td></tr>
+            <tr><td><kbd>S</kbd></td><td>Slip</td></tr>
+          </table>
+
+          <h3>Editing</h3>
+          <table>
+            <tr><th>Key</th><th>Action</th></tr>
+            <tr><td><kbd>Ctrl</kbd>+<kbd>Z</kbd></td><td>Undo</td></tr>
+            <tr><td><kbd>Ctrl</kbd>+<kbd>Shift</kbd>+<kbd>Z</kbd> / <kbd>Ctrl</kbd>+<kbd>Y</kbd></td><td>Redo</td></tr>
+            <tr><td><kbd>Ctrl</kbd>+<kbd>X</kbd> / <kbd>C</kbd> / <kbd>V</kbd></td><td>Cut / Copy / Paste</td></tr>
+            <tr><td><kbd>Delete</kbd> / <kbd>Backspace</kbd></td><td>Delete selection</td></tr>
+            <tr><td><kbd>&larr;</kbd> / <kbd>&rarr;</kbd></td><td>Nudge selection 1 frame (<kbd>Shift</kbd> = 10)</td></tr>
+            <tr><td><kbd>[</kbd> / <kbd>]</kbd></td><td>Move selected clip so its start / end lands on the playhead</td></tr>
+            <tr><td><kbd>Alt</kbd>+<kbd>[</kbd> / <kbd>Alt</kbd>+<kbd>]</kbd></td><td>Trim selected clip's in / out edge to the playhead</td></tr>
+          </table>
+
+          <h3>Markers &amp; toggles</h3>
+          <table>
+            <tr><th>Key</th><th>Action</th></tr>
+            <tr><td><kbd>M</kbd></td><td>Drop a marker at the playhead</td></tr>
+            <tr><td><kbd>Shift</kbd>+<kbd>M</kbd></td><td>Show / hide markers</td></tr>
+            <tr><td><kbd>N</kbd></td><td>Toggle Snap</td></tr>
+          </table>
+        </section>
+
+        <section class="doc-section" id="persistence" data-nav-title="Saving &amp; loading">
+          <h2>Saving &amp; loading</h2>
+          <p>Everything Shotblocks builds lives <strong>inside your <code>.c4d</code> document</strong> — shots, tracks, markers, play range, volume curves, render mode, and even the imported audio's bytes and waveforms. There's no sidecar file. Save your scene as usual and it all comes back when you reopen it.</p>
+          <p>Your work auto-saves into the document as you go, so you rarely need to think about it. Undo and redo (<kbd>Ctrl</kbd>+<kbd>Z</kbd> / <kbd>Ctrl</kbd>+<kbd>Y</kbd>) flow through Cinema&nbsp;4D's normal undo stack, covering timeline edits alongside the rest of your scene.</p>
+          <div class="note">
+            <span class="note__label">Uninstalling is safe</span>
+            Because your timeline data lives in the document, removing the plugin never loses your work — though you'll need Shotblocks installed to edit a sequence again.
+          </div>
+        </section>
+
+        <section class="doc-section" id="troubleshooting" data-nav-title="Troubleshooting">
+          <h2>Troubleshooting</h2>
+
+          <h3>The timeline audio is silent</h3>
+          <p>Open the Windows <strong>Volume Mixer</strong> and look for a <em>"Microsoft Edge WebView2"</em> entry — the timeline plays through it. Make sure it isn't muted or turned down. This is by far the most common cause of silent playback.</p>
+
+          <h3>Undo (<kbd>Ctrl</kbd>+<kbd>Z</kbd>) doesn't seem to work in the timeline</h3>
+          <p>It does — Shotblocks forwards undo and redo to Cinema&nbsp;4D's main undo stack. If a click didn't register, make sure the Shotblocks panel has focus (click in it once) and try again.</p>
+
+          <h3>The plugin didn't load</h3>
+          <p>Open <strong>Extensions&nbsp;&rarr;&nbsp;Console</strong> and look for the Shotblocks load lines. If they're missing, confirm the <code>shotblocks</code> folder is in your Cinema&nbsp;4D&nbsp;2026 plugins directory (see <a href="#install">Installation</a>) and that you restarted C4D after installing.</p>
+
+          <h3>A scene won't open</h3>
+          <p>To rule the plugin in or out, try opening the scene on a machine (or session) without Shotblocks installed. If it opens fine there, the issue is plugin-related — let us know what you were doing when it broke.</p>
+
+          <h3>A shot turned red and won't play</h3>
+          <p>Its camera was deleted — it's an orphan. See <a href="#orphans">Orphan cameras</a> for how to undo, relink, or remove it.</p>
+        </section>
+
+        <section class="doc-section" id="release-notes" data-nav-group="About" data-nav-title="Release notes">
+          <h2>Release notes</h2>
+
+          <h3>v1.0.0 (beta)</h3>
+          <p>The first Shotblocks release: a complete, polished camera-sequencing timeline for Cinema&nbsp;4D&nbsp;2026 on Windows. This beta includes:</p>
+          <ul>
+            <li><strong>The timeline</strong> — multi-track shot sequencing with hard cuts; move, trim, roll, ripple, slip; replace/ripple overlap handling; top-track-wins resolution.</li>
+            <li><strong>Cameras</strong> — drag from the Object Manager or create in place with Add&nbsp;Camera (inherits your viewport view and lens); per-side active chips; selection follows the playhead; orphan detection and relink when a camera is deleted.</li>
+            <li><strong>Audio</strong> — drag-in WAV/MP3, zoom-adaptive waveforms, a live stereo dB meter, audio scrubbing, per-track mute/solo, pen-tool volume curves, and automatic beat detection with a snap-to-beat grid.</li>
+            <li><strong>Playback &amp; range</strong> — native-transport playback, loop, a draggable play range with I/O hotkeys, markers, and an "audio follows C4D timeline" option.</li>
+            <li><strong>Rendering</strong> — whole-sequence rendering through C4D's normal render paths (no dialog needed), or per-shot entries pushed to the Render Queue with settings sync.</li>
+            <li><strong>The camera rig tag</strong> — optional procedural motion: damping, look-at, framing, handheld noise, zoom, and chase-a-target.</li>
+            <li><strong>This manual</strong> — opened any time from the <strong>?</strong> button in the Inspector.</li>
+          </ul>
+          <div class="note">
+            <span class="note__label">Beta</span>
+            This is a beta build for early feedback. It targets Cinema&nbsp;4D&nbsp;2026 on Windows only. The installer isn't code-signed yet, so expect the one-time Windows warning covered under <a href="#install">Installation</a>.
+          </div>
+        </section>
+
+        <div class="footer">
+          Shotblocks — Cinema&nbsp;4D&nbsp;2026 plugin. This manual ships with the plugin and is offline.
+        </div>
+      </div>
+    </main>
+  </div>
+
+  <script>
+    // Build the sidebar nav from the authored sections. Each
+    // <section class="doc-section"> contributes one link (data-nav-title);
+    // a data-nav-group attribute starts a new sidebar group heading.
+    (function buildNav() {
+      var nav = document.getElementById('nav');
+      var sections = document.querySelectorAll('section.doc-section');
+      sections.forEach(function (sec) {
+        var group = sec.getAttribute('data-nav-group');
+        if (group) {
+          var gt = document.createElement('div');
+          gt.className = 'nav__group-title';
+          gt.textContent = group;
+          nav.appendChild(gt);
+        }
+        var a = document.createElement('a');
+        a.className = 'nav__link';
+        a.href = '#' + sec.id;
+        a.dataset.target = sec.id;
+        a.textContent = sec.getAttribute('data-nav-title') || sec.id;
+        nav.appendChild(a);
+      });
+    })();
+
+    // Scroll-spy: highlight the nav link for the section currently in
+    // view. Uses IntersectionObserver against the section that's closest
+    // to the top of the viewport.
+    (function scrollSpy() {
+      var links = {};
+      document.querySelectorAll('.nav__link').forEach(function (a) {
+        links[a.dataset.target] = a;
+      });
+      var visible = new Set();
+      function setActive(id) {
+        document.querySelectorAll('.nav__link.is-active').forEach(function (a) {
+          a.classList.remove('is-active');
+        });
+        if (links[id]) {
+          links[id].classList.add('is-active');
+          // Keep the active link in view within the sidebar.
+          links[id].scrollIntoView({ block: 'nearest' });
+        }
+      }
+      var obs = new IntersectionObserver(function (entries) {
+        entries.forEach(function (e) {
+          if (e.isIntersecting) visible.add(e.target.id);
+          else visible.delete(e.target.id);
+        });
+        // Pick the topmost visible section.
+        var topId = null, topY = Infinity;
+        visible.forEach(function (id) {
+          var el = document.getElementById(id);
+          if (!el) return;
+          var y = el.getBoundingClientRect().top;
+          if (y < topY) { topY = y; topId = id; }
+        });
+        if (topId) setActive(topId);
+      }, { rootMargin: '-60px 0px -65% 0px', threshold: 0 });
+      document.querySelectorAll('section.doc-section').forEach(function (s) {
+        obs.observe(s);
+      });
+    })();
+  </script>
+</body>
+</html>
