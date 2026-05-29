@@ -43,6 +43,31 @@ export function useKeyboard(): void {
         return;
       }
 
+      // Bracket edits relative to the playhead (After Effects model):
+      //   Alt+[  trim the IN  point to the playhead (edge moves, length changes)
+      //   Alt+]  trim the OUT point to the playhead
+      //   [      move the WHOLE clip so its START lands on the playhead
+      //   ]      move the WHOLE clip so its END   lands on the playhead
+      // All four act on every selected clip (locked tracks/clips are
+      // skipped by the store actions). No-op with an empty selection.
+      // Checked before the bare-key tool shortcuts so the brackets
+      // aren't swallowed.
+      if (!mod && (ev.key === '[' || ev.key === ']')) {
+        const sel = useStore.getState().selectedClipIds;
+        if (sel.size === 0) return;
+        ev.preventDefault();
+        ev.stopPropagation();
+        const st = useStore.getState();
+        const frame = Math.max(0, st.scrubFrame ?? st.currentFrame);
+        const edge: 'in' | 'out' = ev.key === '[' ? 'in' : 'out';
+        if (ev.altKey) {
+          trimSelectionToPlayhead(sel, edge, frame);
+        } else {
+          moveSelectionToPlayhead(sel, edge, frame);
+        }
+        return;
+      }
+
       // Cut / Copy / Paste — timeline-local clipboard. Pure JS-side,
       // no C4D round-trip. WebView2 normally lets these through when
       // no input/contenteditable has focus.
@@ -247,6 +272,52 @@ function deleteSelection(ids: Set<number>) {
     audioTracks: a,
     selectedClipIds: new Set<number>(),
   });
+}
+
+/** Locate a clip across both sides. Returns the clip plus its track id
+ *  string ('V2' / 'A1') so the store actions can be addressed. */
+function findClipWithTrack(id: number):
+  { clip: import('./store').Clip; trackId: string } | null {
+  const s = useStore.getState();
+  for (const t of s.videoTracks) {
+    const clip = t.clips.find((c) => c.id === id);
+    if (clip) return { clip, trackId: 'V' + t.id };
+  }
+  for (const t of s.audioTracks) {
+    const clip = t.clips.find((c) => c.id === id);
+    if (clip) return { clip, trackId: 'A' + t.id };
+  }
+  return null;
+}
+
+/** Alt+[ / Alt+]: trim each selected clip's in/out edge to `frame`.
+ *  Reuses the store's resizeClip — same media-window, MIN_CLIP_FRAMES,
+ *  locked-track, and collision rules as the edge-drag. A frame outside
+ *  the clip's valid range is clamped by resizeClip (no-op if it can't
+ *  move). */
+function trimSelectionToPlayhead(ids: Set<number>, edge: 'in' | 'out', frame: number) {
+  const resizeClip = useStore.getState().resizeClip;
+  for (const id of ids) {
+    const found = findClipWithTrack(id);
+    if (!found) continue;
+    resizeClip(id, found.trackId, edge === 'in' ? 'left' : 'right', frame);
+  }
+}
+
+/** [ / ]: slide each selected clip (length unchanged) so its start
+ *  (edge='in') or end (edge='out') lands on `frame`. Reuses the store's
+ *  moveClip, which handles clamping + collision. For 'out' we target an
+ *  inFrame of frame - duration so the out edge hits the playhead. */
+function moveSelectionToPlayhead(ids: Set<number>, edge: 'in' | 'out', frame: number) {
+  const moveClip = useStore.getState().moveClip;
+  for (const id of ids) {
+    const found = findClipWithTrack(id);
+    if (!found) continue;
+    const dur = found.clip.outFrame - found.clip.inFrame;
+    const newIn = edge === 'in' ? frame : frame - dur;
+    if (newIn < 0) continue; // can't place the clip before frame 0
+    moveClip(id, found.trackId, found.trackId, newIn);
+  }
 }
 
 /** Shift every selected clip by `delta` frames. Clamps so no clip
