@@ -37,8 +37,10 @@ from math import pi, sin
 
 
 # ---------------------------------------------------------------------------
-# Profile ids — match the SHOTBLOCKS_NOISE_PROFILE_* cycle constants
-# in tshotblocks.h.
+# Profile ids. The tag now exposes noise as a simple on/off
+# (SHOTBLOCKS_NOISE_ENABLED) rather than a profile cycle — there's only
+# one real profile (Handheld). PROFILE_OFF is kept as the module's
+# all-zeros sentinel; the tag passes PROFILE_HANDHELD when enabled.
 # ---------------------------------------------------------------------------
 
 PROFILE_OFF      = 0

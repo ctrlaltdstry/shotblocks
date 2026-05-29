@@ -4,9 +4,8 @@
 enum
 {
     SHOTBLOCKS_ENABLED              = 1000,
-    SHOTBLOCKS_MODE                 = 1001,
-    SHOTBLOCKS_MODE_ADDITIVE        = 0,
-    SHOTBLOCKS_MODE_REPLACE         = 1,
+    // 1001 was SHOTBLOCKS_MODE (additive/replace cycle). Replace mode
+    // was never built; the rig is additive-only. ID retired, not reused.
     SHOTBLOCKS_DAMPING_POS          = 1002,
     SHOTBLOCKS_DAMPING_ROT          = 1003,
     SHOTBLOCKS_SUBSTEP_THRESHOLD    = 1006,
@@ -16,9 +15,7 @@ enum
     SHOTBLOCKS_LOOK_AT_STRENGTH     = 1022,
     SHOTBLOCKS_LOOK_AT_ROLL         = 1023,
     SHOTBLOCKS_BANK_INTO_TURNS      = 1024,
-    SHOTBLOCKS_NOISE_PROFILE        = 1030,
-    SHOTBLOCKS_NOISE_PROFILE_OFF        = 0,
-    SHOTBLOCKS_NOISE_PROFILE_HANDHELD   = 1,
+    SHOTBLOCKS_NOISE_ENABLED        = 1030,  // was SHOTBLOCKS_NOISE_PROFILE (off/handheld cycle); only one profile, so it's a bool now
     SHOTBLOCKS_NOISE_STRENGTH       = 1031,
     SHOTBLOCKS_NOISE_SEED           = 1032,
     SHOTBLOCKS_NOISE_WALKING        = 1033,

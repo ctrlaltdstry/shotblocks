@@ -7,17 +7,15 @@ spring-damper. The user's camera stays at the scene root; the tag is
 visible directly on the camera in the OM. No rig nulls, no
 reparenting, no buried-tag problem.
 
-Two modes:
-- Additive: read the user's keyframed pose at frame N, run the
-  spring against it, write the smoothed result back. The user's
-  keyframes are never modified; disabling the tag immediately
-  reveals the original animation.
-- Replace (deferred to v11): driven by presets / look-at / etc.,
-  none of which exist yet. The mode parameter is selectable in AM
-  but the Execute path short-circuits with a one-line warning.
+The rig is **additive**: it reads the user's keyframed pose at
+frame N, runs the spring against it, and writes the smoothed
+result back. The user's keyframes are never modified; disabling
+the tag immediately reveals the original animation. (A "replace"
+mode driven by presets was once stubbed in the AM but never built;
+it was removed — the rig is additive-only.)
 
-Execution priority: post-animation (TAG_EXPRESSION). In additive
-mode that's required so we read the evaluated keyframe value.
+Execution priority: post-animation (TAG_EXPRESSION) — required so
+we read the evaluated keyframe value.
 """
 
 import c4d
@@ -35,9 +33,8 @@ import sb_rig_zoom
 
 # Tag parameter IDs (match res/description/tshotblocks.h)
 SHOTBLOCKS_ENABLED              = 1000
-SHOTBLOCKS_MODE                 = 1001
-SHOTBLOCKS_MODE_ADDITIVE        = 0
-SHOTBLOCKS_MODE_REPLACE         = 1
+# 1001 was SHOTBLOCKS_MODE (additive/replace). Replace was never built;
+# the rig is additive-only. ID retired, not reused.
 SHOTBLOCKS_DAMPING_POS          = 1002
 SHOTBLOCKS_DAMPING_ROT          = 1003
 SHOTBLOCKS_SUBSTEP_THRESHOLD    = 1006
@@ -47,7 +44,7 @@ SHOTBLOCKS_UP_TARGET            = 1021
 SHOTBLOCKS_LOOK_AT_STRENGTH     = 1022
 SHOTBLOCKS_LOOK_AT_ROLL         = 1023  # bank offset in radians (param is degrees in .res; C4D converts)
 SHOTBLOCKS_BANK_INTO_TURNS      = 1024
-SHOTBLOCKS_NOISE_PROFILE        = 1030
+SHOTBLOCKS_NOISE_ENABLED        = 1030  # bool; was a profile cycle, now just on/off (single Handheld profile)
 SHOTBLOCKS_NOISE_STRENGTH       = 1031
 SHOTBLOCKS_NOISE_SEED           = 1032
 SHOTBLOCKS_NOISE_WALKING        = 1033
@@ -171,7 +168,6 @@ def push_overrides(tag, overrides):
     passing the shot's `rig_state` dict (or None for no overrides).
     Override keys (any subset):
       - damping_pos, damping_rot, damping_focal, damping_focus  (float)
-      - mode_override: "additive" | "replace" | None
     """
     if tag is None:
         return
@@ -187,17 +183,6 @@ def _read_damping(tag, st, key, override_key):
         if v is not None:
             return float(v)
     return float(tag[key])
-
-
-def _read_mode(tag, st):
-    ov = st.get("overrides")
-    if ov is not None:
-        mo = ov.get("mode_override")
-        if mo == "additive":
-            return SHOTBLOCKS_MODE_ADDITIVE
-        if mo == "replace":
-            return SHOTBLOCKS_MODE_REPLACE
-    return int(tag[SHOTBLOCKS_MODE])
 
 
 def _frame_offset_descid(tag):
@@ -320,15 +305,6 @@ def _read_frame_offset(tag):
     return -float(v.x), -float(v.y)
 
 
-def _camera_has_animation(cam):
-    """True when the camera carries any animation tracks. Used by the
-    mode-on-apply heuristic: animated → additive, fresh → replace.
-    """
-    if cam is None:
-        return False
-    return cam.GetFirstCTrack() is not None
-
-
 class ShotblocksTag(c4d.plugins.TagData):
 
     # ------------------------------------------------------------------
@@ -337,15 +313,17 @@ class ShotblocksTag(c4d.plugins.TagData):
 
     def Init(self, node):
         node[SHOTBLOCKS_ENABLED]            = True
-        node[SHOTBLOCKS_MODE]               = SHOTBLOCKS_MODE_ADDITIVE
-        node[SHOTBLOCKS_DAMPING_POS]        = 0.5
-        node[SHOTBLOCKS_DAMPING_ROT]        = 0.5
+        # Damping is a 0..1 fraction stored behind a PERCENT slider
+        # (0..100% display). Default 0% = stiff, tracks keyframes 1:1;
+        # higher % = more smoothing/lag. Linear = position, Angular = rotation.
+        node[SHOTBLOCKS_DAMPING_POS]        = 0.0
+        node[SHOTBLOCKS_DAMPING_ROT]        = 0.0
         node[SHOTBLOCKS_SUBSTEP_THRESHOLD]  = 60.0
         node[SHOTBLOCKS_RESET_ON_BOUNDARY]  = True
         node[SHOTBLOCKS_LOOK_AT_STRENGTH]   = 1.0
         node[SHOTBLOCKS_LOOK_AT_ROLL]       = 0.0
         node[SHOTBLOCKS_BANK_INTO_TURNS]    = False
-        node[SHOTBLOCKS_NOISE_PROFILE]      = sb_rig_noise.PROFILE_OFF
+        node[SHOTBLOCKS_NOISE_ENABLED]      = False
         node[SHOTBLOCKS_NOISE_STRENGTH]     = 0.5
         node[SHOTBLOCKS_NOISE_SEED]         = 0
         node[SHOTBLOCKS_NOISE_WALKING]      = False
@@ -371,10 +349,6 @@ class ShotblocksTag(c4d.plugins.TagData):
             if type == c4d.MSG_MENUPREPARE:
                 # Fired when the tag is applied via the Tags menu.
                 self._on_tag_applied(node)
-            elif type == c4d.MSG_DESCRIPTION_POSTSETPARAMETER:
-                desc_id = data.get("descid") if isinstance(data, dict) else None
-                if desc_id is not None:
-                    self._on_param_changed(node, desc_id[0].id)
         except Exception as e:
             print("[Shotblocks] Tag.Message raised: {}".format(e))
         return True
@@ -395,24 +369,6 @@ class ShotblocksTag(c4d.plugins.TagData):
             return
         # Add the Frame Offset UserData slot (2D Vector Field).
         _ensure_frame_offset_userdata(tag)
-        # Mode heuristic: animated -> additive, fresh -> replace.
-        if _camera_has_animation(cam):
-            tag[SHOTBLOCKS_MODE] = SHOTBLOCKS_MODE_ADDITIVE
-            print(
-                "[Shotblocks] Tag added in ADDITIVE mode "
-                "(camera has existing animation). "
-                "Switch to REPLACE in the tag parameters when "
-                "presets land in v11."
-            )
-        else:
-            tag[SHOTBLOCKS_MODE] = SHOTBLOCKS_MODE_REPLACE
-
-    def _on_param_changed(self, tag, param_id):
-        if param_id == SHOTBLOCKS_MODE:
-            # Mode flip: snap the spring on the next Execute so the
-            # user doesn't see a wind-up artifact.
-            st = _state_for(tag)
-            st["reset_pending"] = True
 
     # ------------------------------------------------------------------
     # Per-frame execution
@@ -482,11 +438,6 @@ class ShotblocksTag(c4d.plugins.TagData):
         #     which is now the spring's smoothed value, not the
         #     keyframe → target snaps to the spring itself → it
         #     converges to whatever we just wrote and stops smoothing.
-        # Resolve mode and look-at target. Replace mode without a
-        # look-at target is idle — there's nothing driving the
-        # camera, so we don't write anything and print a one-line
-        # warning.
-        mode = _read_mode(tag, st)
         look_at_target = tag[SHOTBLOCKS_LOOK_AT_TARGET]
         up_target      = tag[SHOTBLOCKS_UP_TARGET]
 
@@ -523,17 +474,6 @@ class ShotblocksTag(c4d.plugins.TagData):
                 _write_back(cam, pos, rot)
             _apply_quick_zoom(tag, st, cam, doc, time, fps)
             return c4d.EXECUTIONRESULT_OK
-        if mode == SHOTBLOCKS_MODE_REPLACE and look_at_target is None:
-            if not st.get("_replace_warned"):
-                print(
-                    "[Shotblocks] Replace mode with no Target set — "
-                    "tag is idle. Set a Target object (or future "
-                    "preset) to drive the camera."
-                )
-                st["_replace_warned"] = True
-            spring["last_frame"] = cur_frame
-            return c4d.EXECUTIONRESULT_OK
-        st["_replace_warned"] = False
 
         # On reset, the camera's current world matrix (and local
         # channels) still hold the spring's last write — typically a
@@ -596,8 +536,7 @@ class ShotblocksTag(c4d.plugins.TagData):
                     offset_u=ou, offset_v=ov, doc=doc)
                 if la_hpb is not None:
                     strength = float(tag[SHOTBLOCKS_LOOK_AT_STRENGTH])
-                    s = 1.0 if mode == SHOTBLOCKS_MODE_REPLACE else (
-                        max(0.0, min(1.0, strength)))
+                    s = max(0.0, min(1.0, strength))
                     if s >= 1.0:
                         target_rot = la_hpb
                     elif s > 0.0:
@@ -659,10 +598,7 @@ class ShotblocksTag(c4d.plugins.TagData):
                 offset_u=ou, offset_v=ov, doc=doc)
             if la_hpb is not None:
                 strength = float(tag[SHOTBLOCKS_LOOK_AT_STRENGTH])
-                if mode == SHOTBLOCKS_MODE_REPLACE:
-                    s = 1.0
-                else:
-                    s = max(0.0, min(1.0, strength))
+                s = max(0.0, min(1.0, strength))
                 if s >= 1.0:
                     target_rot = la_hpb
                 elif s > 0.0:
@@ -1263,12 +1199,11 @@ def _sample_noise_world(tag, st, cur_frame, fps, cam, look_at_target, doc):
 
     `rot_*` are already in radians.
 
-    Short-circuits to all-zeros when profile=Off or strength=0 —
-    that's the "byte-for-byte identical to current behavior"
-    guarantee for Profile = Off.
+    Short-circuits to all-zeros when noise is disabled or strength=0 —
+    that's the "byte-for-byte identical to current behavior" guarantee
+    when Handheld Noise is off.
     """
-    profile = int(tag[SHOTBLOCKS_NOISE_PROFILE])
-    if profile == sb_rig_noise.PROFILE_OFF:
+    if not bool(tag[SHOTBLOCKS_NOISE_ENABLED]):
         return _ZERO3, _ZERO3, _ZERO3, _ZERO3
     strength = float(tag[SHOTBLOCKS_NOISE_STRENGTH] or 0.0)
     if strength <= 0.0:
@@ -1289,7 +1224,7 @@ def _sample_noise_world(tag, st, cur_frame, fps, cam, look_at_target, doc):
     step_rate = float(tag[SHOTBLOCKS_NOISE_STEP_RATE] or 1.8)
     speed = float(tag[SHOTBLOCKS_NOISE_SPEED] or 1.0)
     sample = sb_rig_noise.sample_profile(
-        profile, cur_frame, fps, seed,
+        sb_rig_noise.PROFILE_HANDHELD, cur_frame, fps, seed,
         walking=walking, step_rate_hz=step_rate, speed=speed)
 
     # Convert position-fraction → world units.
