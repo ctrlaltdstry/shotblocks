@@ -38,6 +38,11 @@ export type HostInbound =
   | { kind: 'hello'; port: number }
   | { kind: 'tick'; frame: number; fps: number; playing: boolean; pluginPlaying: boolean }
   | { kind: 'doc-info'; fps: number; docFrames: number; playRangeIn: number; playRangeOut: number }
+  // C4D's native loop button changed (C4D -> ShotBlocks sync). C++
+  // polls IsCommandChecked(12427) in its Timer and posts this only on
+  // change. JS mirrors it into the store's loopEnabled; it must NOT
+  // re-send set-loop or the two sides ping-pong.
+  | { kind: 'loop-state'; enabled: boolean }
   | { kind: 'om-hover';  viewportX: number; viewportY: number; items: OmItem[] }
   | { kind: 'om-drop';   viewportX: number; viewportY: number; items: OmItem[] }
   | { kind: 'om-cancel' }

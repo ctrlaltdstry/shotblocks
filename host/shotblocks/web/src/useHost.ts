@@ -14,6 +14,12 @@ export function useHost(): void {
         case 'doc-info':
           useStore.getState().setDocInfo(msg.fps, msg.docFrames, msg.playRangeIn, msg.playRangeOut);
           break;
+        case 'loop-state':
+          // C4D's native loop button changed — mirror into the store
+          // only. Do NOT send set-loop back; C++ already owns this state
+          // and re-sending would ping-pong with the Timer poll.
+          useStore.getState().setLoopEnabled(msg.enabled);
+          break;
         case 'cameras':
           useStore.getState().setCameraStatuses(msg.items);
           break;

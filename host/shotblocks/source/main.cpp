@@ -840,6 +840,26 @@ public:
 		// playhead via the EVMSG_TIMECHANGED tick. The fps-cadence Timer
 		// bump is gone; this Timer stays at idle 250ms cadence.
 		PostTick();
+
+		// Loop-state poll (C4D -> ShotBlocks direction). C4D's loop is a
+		// toggle command (12427 = continuous loop ON); read it cheaply
+		// every tick and push to JS only when it CHANGES, so clicking
+		// C4D's own loop buttons updates the ShotBlocks toggle. The
+		// set-loop handler pre-writes _lastLoopChecked on the JS->C4D
+		// path, so a ShotBlocks-initiated toggle doesn't echo back here.
+		// _lastLoopChecked starts at -1 so the first tick always pushes
+		// the current C4D state, bootstrapping the toggle on connect.
+		{
+			Int32 nowOn = IsCommandChecked(12427) ? 1 : 0;
+			if (nowOn != _lastLoopChecked)
+			{
+				_lastLoopChecked = nowOn;
+				if (_htmlView)
+					_htmlView->PostWebMessage(maxon::String(
+						nowOn ? "{\"kind\":\"loop-state\",\"enabled\":true}"
+						      : "{\"kind\":\"loop-state\",\"enabled\":false}"));
+			}
+		}
 	}
 
 	// Object Manager → timeline drag handler.
@@ -1674,13 +1694,7 @@ private:
 			return "{\"ok\":true,\"kind\":\"set-play-range-ack\"}";
 		}
 		if (body.find("\"kind\":\"set-doc-frames\"") != std::string::npos) return HandleSetDocFrames(body);
-		if (body.find("\"kind\":\"set-loop\"") != std::string::npos)
-		{
-			// Cache v2's loop flag. Read by the playback timer at the
-			// end-of-range boundary to decide between wrap and stop.
-			_v2LoopEnabled = body.find("\"enabled\":true") != std::string::npos;
-			return "{\"ok\":true,\"kind\":\"set-loop-ack\"}";
-		}
+		if (body.find("\"kind\":\"set-loop\"") != std::string::npos) return HandleSetLoop(body);
 		if (body.find("\"kind\":\"warp-cursor\"") != std::string::npos) return HandleWarpCursor(body);
 		if (body.find("\"kind\":\"get-camera-types\"") != std::string::npos) return HandleGetCameraTypes();
 		if (body.find("\"kind\":\"create-camera\"") != std::string::npos) return HandleCreateCamera(body);
@@ -2025,6 +2039,28 @@ private:
 			PostDocInfo();
 		}
 		return "{\"ok\":true,\"kind\":\"set-doc-frames-ack\"}";
+	}
+
+	// Handler for `set-loop` (ShotBlocks -> C4D loop sync). Caches v2's
+	// loop flag AND mirrors it onto C4D's native loop buttons so the two
+	// stay in sync. C4D's loop is two mutually-exclusive TOGGLE commands
+	// (probed this session):
+	//   12426 = "loop with 1" button = loop OFF (play once)
+	//   12427 = plain loop button    = loop ON  (continuous)
+	// CallCommand TOGGLES, so guard with IsCommandChecked to avoid
+	// flipping an already-correct state into the wrong one. Extracted
+	// from Dispatch to stay under the sourceprocessor's 600-line cap.
+	std::string HandleSetLoop(const std::string& body)
+	{
+		const Bool enabled = body.find("\"enabled\":true") != std::string::npos;
+		_v2LoopEnabled = enabled;
+		const Int32 LOOP_ON = 12427, LOOP_OFF = 12426;
+		if (enabled  && !IsCommandChecked(LOOP_ON))  CallCommand(LOOP_ON);
+		if (!enabled && !IsCommandChecked(LOOP_OFF)) CallCommand(LOOP_OFF);
+		// Record the state we just set so the Timer poll doesn't echo
+		// this same change straight back to JS as a redundant message.
+		_lastLoopChecked = enabled ? 1 : 0;
+		return "{\"ok\":true,\"kind\":\"set-loop-ack\"}";
 	}
 
 	// of truth. individual-shots will land in Commit 10. Factored
@@ -3359,6 +3395,11 @@ private:
 	Int32                _v2RangeIn{0};
 	Int32                _v2RangeOut{1 << 30};
 	Bool                 _v2LoopEnabled{false};
+	// Last loop on/off (IsCommandChecked(12427)) the Timer pushed to JS.
+	// -1 = unknown, so the first Timer tick bootstraps the ShotBlocks
+	// toggle to C4D's current loop state. Also pre-written by the
+	// set-loop handler to suppress the echo on JS-initiated toggles.
+	Int32                _lastLoopChecked{-1};
 
 	// Render-settings drift detection. Snapshot of the master
 	// RenderData's container, taken at the end of every Add-to-Queue
