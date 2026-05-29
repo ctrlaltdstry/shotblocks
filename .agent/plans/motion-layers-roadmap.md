@@ -10,6 +10,8 @@ The full sequence of plans that ship the motion-layers feature. Each plan is its
 
 **Primary verb:** "where is the camera looking." Targeting ships first because it's the highest-leverage thing the tool does.
 
+> **Chase pill engine may pre-exist:** a velocity-relative "Chase / Follow Target" behavior is specced as a **pre-v2 rig-tag feature** in [rig-chase-follow.md](rig-chase-follow.md), built as a pure-function module (`sb_rig_follow.py`) specifically so the v2 Targeting "Chase" pill can drive the *same engine* instead of reimplementing it. If that foundation has shipped before Targeting plans start, the pill is a new front-end over existing math, not new math.
+
 ## Architectural reference docs (read before any plan)
 
 - `.agent/layer-model.md` — composition math (SUM vs CROSSFADE), pure-function-of-frame model, stateful end-holds, easing
