@@ -32,6 +32,9 @@ scenes/ES_*.mp3
 .vscode/
 .idea/
 
+# Claude Code local harness config
+.claude/
+
 # Generated thumbnails (regenerable; uncomment if you want to exclude)
 # presets/**/*.gif
 # presets/**/*.png
