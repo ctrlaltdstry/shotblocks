@@ -1391,15 +1391,25 @@ private:
 						bd->SetParameter(ConstDescIDLevel(BASEDRAW_DATA_CAMERA, 0, 0), data, DESCFLAGS_SET::NONE);
 					}
 					// Dirty the cameras so the dependency graph rebuilds their
-					// world matrices at the current time on next ExecutePasses.
+					// world matrices at the current time on the next pass.
 					if (prevCam) prevCam->SetDirty(DIRTYFLAGS::MATRIX | DIRTYFLAGS::CACHE);
 					if (cam)     cam->SetDirty(DIRTYFLAGS::MATRIX | DIRTYFLAGS::CACHE);
-					// Force animation + expression + cache rebuild at the
-					// current time. SetTime alone doesn't — per the 2026 SDK
-					// docs, the canonical "behave like a real scrub" sequence
-					// is SetTime → ExecutePasses → DrawViews → EventAdd.
-					doc->ExecutePasses(nullptr, true, true, true, BUILDFLAGS::INTERACTIVEEDITOR);
-					DrawViews(DRAWFLAGS::ONLY_ACTIVE_VIEW | DRAWFLAGS::NO_THREAD | DRAWFLAGS::FORCEFULLREDRAW);
+					// Repaint via animation-flagged EventAdd ONLY — the
+					// async, sim-safe path C4D's own scrub uses. We do NOT
+					// call ExecutePasses(caches=true) + a synchronous
+					// DrawViews here: on a scene with a simulation / Alembic
+					// cache, fast scrubbing fires set-active-camera rapidly,
+					// and a forced cache-rebuilding ExecutePasses re-entered
+					// the sim cache build mid-build and CRASHED C4D
+					// (reproduced twice; crash stack in c4d_simulation /
+					// io_alembic). The reverse-scrub repaint correctness this
+					// handler needs comes from the SetParameter
+					// (BASEDRAW_DATA_CAMERA) invalidation above, NOT from
+					// ExecutePasses — bugs.md proved ExecutePasses "did not
+					// provide a behavioral fix" for the reverse-scrub case.
+					// Same lesson as the playback fix: never force per-frame
+					// ExecutePasses/DrawViews on sim/Alembic scenes; hand the
+					// redraw to C4D's own evaluation loop.
 					EventAdd(EVENT::ANIMATE);
 					changed = true;
 				}
