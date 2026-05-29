@@ -10,6 +10,57 @@ work).
 
 ---
 
+## uncached simulations don't run during v2 (spacebar) playback
+
+**Symptoms.** With an *uncached* simulation in the scene (cloth, soft
+body, particles, Pyro, dynamics, etc.):
+1. Hitting **spacebar** to play in the Shotblocks v2 timeline plays the
+   camera/animation but the **simulation does not advance** — it sits
+   frozen at its initial/cached state.
+2. If the user instead presses **C4D's native play button**, the
+   simulation runs correctly. But if they then **click/scrub the v2
+   playhead**, the simulation **freezes** at that frame while the camera
+   animation keeps moving.
+
+**Mechanism (understood, not a mystery).** v2-owned playback does not run
+C4D's native sequential play loop. The dialog `Timer` advances time by
+calling **`doc->SetTime(frame+1) → ExecutePasses(INTERACTIVEEDITOR) →
+DrawViews`** each tick (see `host/shotblocks/source/main.cpp` ~line 1445
+and the `_v2Playing` Timer block ~line 3340). That is a **per-frame seek**,
+not a play. Simulation solvers only step forward during C4D's native
+sequential playback (the solver integrates frame-to-frame from a known
+state); a direct `SetTime` jump does **not** tick the solver, so an
+uncached sim has nothing driving it and freezes. The camera keeps moving
+because the rig tag's `Execute` evaluates procedurally at *any* time, with
+no dependence on sequential stepping. Same reason scrubbing the v2 playhead
+after native play freezes the sim: the v2 seek replaces native stepping.
+
+**Severity / context.** Low for the common workflow — users typically
+**cache simulations before doing camera work**, and a cached sim plays back
+fine under v2 seek (it's reading baked frames, not solving). So this only
+bites someone animating cameras over a live, uncached sim. Flagged by Mike
+2026-05-28 as "worth investigating, not blocking."
+
+**Decision deferred — do we even want to fix this?** Two open options, not
+yet chosen:
+- **Leave as-is** and document "cache your simulation before using the
+  Shotblocks timeline" in the user manual. Cheap, matches real workflow.
+- **Tie v2 playback to the simulation** — drive playback through C4D's
+  native sequential play (or step the solver) instead of per-frame
+  `SetTime` seeks, so uncached sims run. Bigger change; risks the v2
+  loop/range/scrub ownership the timer currently controls
+  ([[project_v2_playback_owned]]), and may conflict with how v2 owns the
+  transport. Investigate cost before committing.
+
+**What to check first if picked up.** Whether C4D 2026 exposes an API to
+advance the simulation solver alongside a `SetTime` seek (an
+`ExecutePasses` flag, a scene-hook tick, or a documented
+"play simulation" call). If there's a flag that steps sims on
+`ExecutePasses`, this could be a small fix; if it requires running the
+native play loop, it's an architectural change to v2 transport.
+
+---
+
 ## clip minimum size scales with timeline length (small-clip handles break)
 
 **Symptoms.** With a long timeline (e.g. 2000 frames), a clip can
