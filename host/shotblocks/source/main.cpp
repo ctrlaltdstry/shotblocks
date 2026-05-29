@@ -1333,11 +1333,19 @@ private:
 		}
 		if (body.find("\"kind\":\"scrub-begin\"") != std::string::npos)
 		{
-			// User grabbed the v2 playhead during playback. Stop C4D's
-			// native animation so the playhead holds where they scrub
-			// (the seek messages then move it). _v2Playing stays true so
-			// scrub-end knows to resume.
-			if (_v2Playing && !_v2ScrubPaused)
+			// User grabbed the v2 playhead. If transport is actually
+			// running, freeze it so the playhead holds wherever this
+			// scrub puts it; scrub-end then resumes. We query C4D's REAL
+			// transport state (CheckIsRunning) rather than trusting
+			// _v2Playing — that flag only flips in toggle-play and goes
+			// STALE when native playback stops on its own (range end with
+			// loop off, or stopped via C4D's own transport). A stale-true
+			// _v2Playing made a plain scrub set _v2ScrubPaused, and
+			// scrub-end then auto-started playback the user never asked
+			// for. Reconcile the flag to reality here too.
+			const Bool reallyRunning = CheckIsRunning(CHECKISRUNNING::ANIMATIONRUNNING);
+			_v2Playing = reallyRunning;
+			if (reallyRunning && !_v2ScrubPaused)
 			{
 				_v2ScrubPaused = true;
 				BaseDocument* doc = GetActiveDocument();
