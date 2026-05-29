@@ -287,11 +287,13 @@ def _read_frame_offset(tag):
     UserData slot. Falls back to (0, 0) if the slot isn't present
     (e.g. tag loaded from an older save before user-data was added).
 
-    Both axes are inverted from the raw slot value: the joystick's
-    convention is "drag the dot to where you want the *subject* to
-    appear in the frame," but the offset math expresses "where to
-    nudge the aim point," which is the opposite sign. Inverting
-    here keeps the math unchanged and the widget intuitive.
+    The joystick convention is "drag the dot to where you want the
+    *subject* to appear in the frame." The vertical axis is inverted
+    from the raw slot value to match that intent; the horizontal axis
+    is NOT — passing v.x straight through is what makes "drag right ->
+    subject sits right." (Previously both axes were negated, which
+    compounded with the subtraction in _apply_frame_offset to flip the
+    horizontal feel: dragging the dot right pushed the subject left.)
     """
     desc_id = _frame_offset_descid(tag)
     if desc_id is None:
@@ -302,7 +304,7 @@ def _read_frame_offset(tag):
         return 0.0, 0.0
     if v is None:
         return 0.0, 0.0
-    return -float(v.x), -float(v.y)
+    return float(v.x), -float(v.y)
 
 
 class ShotblocksTag(c4d.plugins.TagData):
