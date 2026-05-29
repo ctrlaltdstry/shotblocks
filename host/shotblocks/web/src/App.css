@@ -99,41 +99,15 @@ body.is-resizing-headers .body { transition: none; }
   box-sizing: border-box;
   user-select: none;
 }
-/* Inner glyph — two -45deg pills stacked, per Figma 357:875. Outer
-   wrapper is positioned so the glyph as a whole sits centered in the
-   39x39 card. Each pill-wrap is a 14.483x14.483 flex-center box; the
-   pill inside is rotated -45deg so the rotation centers on the
-   pill's own bounding box. The second pill-wrap is offset
-   (+1.93, +7.99) from the first per Figma's coordinates. Total
-   glyph bounding ~17x22. */
+/* Inner glyph — the new Figma mark (357:878): two rounded pills with a
+   dot, from icons/motion-library.svg. The SVG carries its own grey-50
+   fill, so it's a plain <img> sized to the icon's 22x15 aspect. */
 .motion-library-btn__glyph {
-  position: relative;
-  width: 17px;
-  height: 22px;
+  width: 22px;
+  height: 15px;
   flex-shrink: 0;
-}
-.motion-library-btn__pill-wrap {
-  position: absolute;
-  width: 14.483px;
-  height: 14.483px;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-}
-.motion-library-btn__pill-wrap--top {
-  left: 0;
-  top: 0;
-}
-.motion-library-btn__pill-wrap--bot {
-  left: 1.93px;
-  top: 7.99px;
-}
-.motion-library-btn__pill {
-  width: 15.02px;
-  height: 5.462px;
-  background: var(--color-grey-50);
-  border-radius: 5px;
-  transform: rotate(-45deg);
+  display: block;
+  user-select: none;
 }
 
 /* row 1, col 2 — utilities strip. Per Figma 400:1909 (asset
