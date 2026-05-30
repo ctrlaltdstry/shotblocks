@@ -1,10 +1,27 @@
 # v1 Plan 6 — Beta installer + distributable package
 
 > **Release:** v1 — see [v1-release-roadmap.md](v1-release-roadmap.md)
-> **Status:** not started — spun up 2026-05-29 from a question Mike
-> raised while finishing the user manual (Plan 5). Sequenced AFTER
-> Plan 5 ships (manual first; each ships clean and atomic).
+> **Status:** SHIPPED 2026-05-30. Commits `450580e` (package.ps1),
+> `5178110` (Inno Setup .iss), `dbff0af` (manual install section).
 > **Plan owner:** Mike + Claude
+
+> **Shipped artifacts** (produced into the gitignored `dist/`, not committed):
+> - `scripts/package.ps1` → clean `dist/shotblocks/` tree (47 files) +
+>   `shotblocks-v1.0.0-beta.zip` + `.sha256` + `README.txt`. Verified: the
+>   packaged tree loads in C4D (HTTP listener, web bundle, all 9 cursors).
+> - `scripts/shotblocks.iss` → `shotblocks-v1.0.0-beta-setup.exe` via Inno
+>   Setup 6.7.3 (installed via winget `JRSoftware.InnoSetup`). Per-user
+>   install, globs the `Maxon Cinema 4D 2026_*` hash for the plugins folder,
+>   registers an uninstaller + Start-menu manual shortcut. Verified: compiles;
+>   silent install extracts all 47 files with uninstaller registered.
+>
+> **Build sequence to cut a release:**
+> 1. `powershell -ExecutionPolicy Bypass -File scripts\package.ps1`
+> 2. `"%LOCALAPPDATA%\Programs\Inno Setup 6\ISCC.exe" scripts\shotblocks.iss`
+>
+> **Still open before public release:** code-signing cert (Tier 2 EV), where
+> downloads are hosted (GitHub Releases — see open question (d)), and wiring
+> the .zip into the website's email-gate (website-plan-1 Phase 3).
 
 Package Shotblocks as a one-click Windows installer for the beta
 release, instead of the "copy the folder into your plugins directory"
