@@ -725,7 +725,12 @@ body.is-resizing-headers .body { transition: none; }
 .track-header__chip {
   flex: 0 0 36px;
   width: 36px;
-  height: 63px;
+  /* Height fills the full track height so the chip — the write-target
+     "track target" — spans the header edge-to-edge and scales with the
+     lane on vertical zoom. The -1px accounts for the header's 0.5px
+     border (box-sizing: border-box). Per-side overrides below feed the
+     right --*-track-h var. */
+  height: calc(var(--track-h) - 1px);
   padding: 0;
   border: 0;
   border-radius: 4px;
@@ -740,6 +745,8 @@ body.is-resizing-headers .body { transition: none; }
   align-items: center;
   justify-content: center;
 }
+.track-header.is-video .track-header__chip { height: calc(var(--video-track-h) - 1px); }
+.track-header.is-audio .track-header__chip { height: calc(var(--audio-track-h) - 1px); }
 .track-header__chip.is-active {
   background: var(--color-timeline-primary-highlight);
   color: var(--color-grey-white);
