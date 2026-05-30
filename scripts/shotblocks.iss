@@ -19,6 +19,8 @@
 #define AppURL "https://mkslate.com"
 ; Staged clean tree, relative to this .iss file (scripts/ -> ..\dist\shotblocks).
 #define StageDir "..\dist\shotblocks"
+; Branding assets live under host\shotblocks\ (committed, unlike dist\).
+#define IconFile "..\host\shotblocks\installer-icon.ico"
 
 [Setup]
 AppName={#AppName}
@@ -26,6 +28,14 @@ AppVersion={#AppVersion}
 AppVerName={#AppName} {#AppVersion}
 AppPublisher={#AppPublisher}
 AppPublisherURL={#AppURL}
+; Branding. SetupIconFile is the .exe's own icon (Explorer / downloads /
+; taskbar) - a multi-res .ico generated from SB_UM_Icon.png.
+SetupIconFile={#IconFile}
+; Wizard graphics (the in-window images). BMP only; 1x + 2x supplied so Inno
+; auto-picks for the user's DPI. Sidebar = welcome/finished left panel,
+; corner = top-right of interior pages.
+WizardImageFile=..\host\shotblocks\wizard-sidebar.bmp,..\host\shotblocks\wizard-sidebar2x.bmp
+WizardSmallImageFile=..\host\shotblocks\wizard-corner.bmp,..\host\shotblocks\wizard-corner2x.bmp
 ; No admin: the per-user C4D prefs plugins folder needs no elevation, which
 ; matches Maxon's recommendation for third-party plugins.
 PrivilegesRequired=lowest
