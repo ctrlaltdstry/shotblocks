@@ -43,6 +43,10 @@ SolidCompression=yes
 WizardStyle=modern
 ; The plugin tree is small; show a license/info page with the unsigned note.
 DirExistsWarning=no
+; Always re-run folder detection. Without this, Inno remembers the last
+; install dir per AppId (UsePreviousAppDir defaults to yes) and silently
+; ignores DefaultDirName / our detection code on a reinstall.
+UsePreviousAppDir=no
 AppId={{6F2A1C84-2E3D-4B7A-9C1E-7B0C5A9E4D21}}
 
 [Files]
@@ -63,40 +67,56 @@ WelcomeLabel2=This will install [name/ver] into your Cinema 4D 2026 plugins fold
 { --- C4D 2026 plugins-folder detection ---------------------------------
   The per-user prefs path has an install-specific build-hash suffix
   (e.g. "Maxon Cinema 4D 2026_1ABCDC12") that differs per machine, so we
-  cannot hardcode it. Glob %APPDATA%\Maxon\Maxon Cinema 4D 2026_* and take
-  the first match's plugins\ subfolder. Falls back to a sensible default
-  the user can override by browsing. }
+  cannot hardcode it. We glob %APPDATA%\Maxon\Maxon Cinema 4D 2026_*.
+
+  There can be MORE THAN ONE match: alongside the real active prefs
+  folder, C4D may keep a stripped secondary profile with a "_p" suffix
+  (and others). Picking the first match can land in the wrong one - the
+  plugin then never loads even though the installer "succeeds".
+
+  So we score candidates and pick the best:
+    3 = has settings.userinstallation.json  (the live active install)
+    2 = has a non-empty prefs\ subfolder     (a real, used profile)
+    1 = exists but looks bare                (last resort)
+  Within a tie we prefer one that already has a plugins\ folder. The
+  authoritative marker is settings.userinstallation.json - it sits in the
+  active install root and not in the "_p" secondary profile. }
+
+function ScorePrefsFolder(Dir: String): Integer;
+begin
+  Result := 1;
+  if FileExists(Dir + '\settings.userinstallation.json') then
+    Result := 3
+  else if DirExists(Dir + '\prefs') then
+    Result := 2;
+end;
 
 function FindC4DPrefsPlugins(): String;
 var
-  MaxonDir: String;
+  MaxonDir, Dir: String;
   FindRec: TFindRec;
-  Candidate: String;
+  Score, BestScore: Integer;
 begin
   Result := '';
+  BestScore := -1;
   MaxonDir := ExpandConstant('{userappdata}\Maxon');
   if not DirExists(MaxonDir) then
     Exit;
-  { Look for a "Maxon Cinema 4D 2026_*" subfolder. }
   if FindFirst(MaxonDir + '\Maxon Cinema 4D 2026_*', FindRec) then
   begin
     try
       repeat
-        { Directories only; skip . and .. }
         if (FindRec.Attributes and FILE_ATTRIBUTE_DIRECTORY) <> 0 then
         begin
-          Candidate := MaxonDir + '\' + FindRec.Name + '\plugins';
-          if DirExists(Candidate) then
+          Dir := MaxonDir + '\' + FindRec.Name;
+          Score := ScorePrefsFolder(Dir);
+          { Prefer a higher score; on a tie prefer one that already has a
+            plugins\ subfolder (an in-use install). }
+          if (Score > BestScore)
+             or ((Score = BestScore) and DirExists(Dir + '\plugins')) then
           begin
-            Result := Candidate;
-            Exit;
-          end
-          else
-          begin
-            { Prefs folder exists but no plugins subfolder yet - still a
-              valid target; the installer will create plugins\shotblocks. }
-            Result := MaxonDir + '\' + FindRec.Name + '\plugins';
-            { keep scanning in case a later match has an existing plugins\ }
+            BestScore := Score;
+            Result := Dir + '\plugins';
           end;
         end;
       until not FindNext(FindRec);
