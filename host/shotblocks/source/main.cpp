@@ -1509,6 +1509,14 @@ private:
 			doc->AddUndo(UNDOTYPE::CHANGE_SMALL, helper);
 			bc->SetString(BCKEY_CLIPS_JSON, maxon::String(json.c_str()));
 
+			// Keyframes-travel-with-clip: a clip move attaches per-clip
+			// frame deltas to this save, and we shift the referenced
+			// cameras' keyframes INSIDE this same undo block — so one Ctrl+Z
+			// undoes both the clip-position change and the keyframe shift.
+			// JS fires the move-save immediately (not debounced) so there's
+			// no visible lag between the clip jumping and the keys following.
+			ApplyKeyframeShiftsFromBody(doc, body);
+
 			// Free bytes for media orphaned by this edit (e.g. an audio
 			// clip was deleted). Done INSIDE this undo block so the clip-
 			// JSON change and the byte removal are one atomic undo step —
@@ -2445,6 +2453,119 @@ private:
 	// the camera appears in the OM (and its params populate the AM).
 	// objectId of 0 means "no selection change" — JS uses that for
 	// orphan clips (no live camera to select) and gap cases.
+	// Shift one clip's referenced camera's keyframes (object tracks + every
+	// tag's tracks) by `deltaFrames`, so the animation travels with the clip
+	// when it moves on the timeline. Does NOT open its own undo block — the
+	// caller (HandleSaveState) brackets this inside the SAME StartUndo/EndUndo
+	// as the clip-position write, so one Ctrl+Z undoes the move AND the
+	// keyframe shift together. Adds its own AddUndo(CHANGE, cam/tag) entries
+	// into that open block.
+	//
+	// `refCount` = how many clips reference this objectId. >1 means a shared
+	// camera; we skip rather than corrupt the other clip's animation
+	// (constitution: a camera can appear in two shots at non-overlapping
+	// ranges). Returns keys moved (0 on skip).
+	Int32 ApplyKeyframeShift(BaseDocument* doc, Int32 objectId,
+	                         Int32 deltaFrames, Int32 refCount)
+	{
+		if (!doc || deltaFrames == 0)
+			return 0;
+		if (refCount > 1)
+		{
+			GePrint("[Shotblocks] keyframe shift: camera shared by "_s +
+				maxon::String::IntToString(refCount) +
+				" clips — skipping to avoid corrupting the other clip's animation."_s);
+			return 0;
+		}
+		BaseObject* cam = ResolveCameraForObjectId(doc, objectId);
+		if (!cam)
+			return 0;
+
+		Int32 fps = doc->GetFps();
+		if (fps <= 0)
+			fps = 24;
+
+		Int32 keysMoved = 0;
+		auto shiftTracks = [&](CTrack* head)
+		{
+			for (CTrack* t = head; t; t = t->GetNext())
+			{
+				CCurve* c = t->GetCurve(CCURVE::CURVE, false);
+				if (!c)
+					continue;
+				Int32 n = c->GetKeyCount();
+				// SetTime can re-sort the curve. A uniform offset keeps
+				// relative order, but iterate in the safe direction so an
+				// intermediate state never makes two keys momentarily cross:
+				// reverse for a positive shift (latest first), forward for a
+				// negative shift (earliest first).
+				if (deltaFrames > 0)
+				{
+					for (Int32 i = n - 1; i >= 0; --i)
+					{
+						CKey* k = c->GetKey(i);
+						if (!k)
+							continue;
+						k->SetTime(c, k->GetTime() + BaseTime(deltaFrames, fps));
+						++keysMoved;
+					}
+				}
+				else
+				{
+					for (Int32 i = 0; i < n; ++i)
+					{
+						CKey* k = c->GetKey(i);
+						if (!k)
+							continue;
+						k->SetTime(c, k->GetTime() + BaseTime(deltaFrames, fps));
+						++keysMoved;
+					}
+				}
+			}
+		};
+
+		// Caller owns the StartUndo/EndUndo; we only register the objects.
+		doc->AddUndo(UNDOTYPE::CHANGE, cam);
+		shiftTracks(cam->GetFirstCTrack());
+		for (BaseTag* tag = cam->GetFirstTag(); tag; tag = tag->GetNext())
+		{
+			doc->AddUndo(UNDOTYPE::CHANGE, tag);
+			shiftTracks(tag->GetFirstCTrack());
+		}
+		cam->SetDirty(DIRTYFLAGS::MATRIX | DIRTYFLAGS::CACHE);
+		return keysMoved;
+	}
+
+	// Parse the optional "keyframeShifts":[{"objectId":N,"deltaFrames":D,
+	// "refCount":R},...] array from a save-state body and apply each shift.
+	// MUST be called inside the save-state StartUndo/EndUndo block.
+	void ApplyKeyframeShiftsFromBody(BaseDocument* doc, const std::string& body)
+	{
+		auto arr = body.find("\"keyframeShifts\"");
+		if (arr == std::string::npos)
+			return;
+		auto lb = body.find('[', arr);
+		auto rb = (lb == std::string::npos) ? std::string::npos : body.find(']', lb);
+		if (lb == std::string::npos || rb == std::string::npos)
+			return;
+		std::string::size_type p = lb + 1;
+		while (p < rb)
+		{
+			auto ob = body.find('{', p);
+			if (ob == std::string::npos || ob >= rb)
+				break;
+			auto oe = body.find('}', ob);
+			if (oe == std::string::npos || oe > rb)
+				break;
+			std::string obj = body.substr(ob, oe - ob + 1);
+			Int32 objectId    = ParseIntField(obj, "objectId");
+			Int32 deltaFrames = ParseIntField(obj, "deltaFrames");
+			Int32 refCount    = ParseIntField(obj, "refCount");
+			ApplyKeyframeShift(doc, objectId, deltaFrames, refCount);
+			p = oe + 1;
+		}
+	}
+
 	std::string HandleSelectInOm(const std::string& body)
 	{
 		Int32 objectId = ParseIntField(body, "objectId");

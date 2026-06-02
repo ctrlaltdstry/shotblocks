@@ -63,7 +63,11 @@ export type HostOutbound =
   | { kind: 'scrub-end' }
   | { kind: 'tool'; id: string }
   | { kind: 'set-active-camera'; objectId: number }
-  | { kind: 'save-state'; json: string; objectIds: number[]; removeAudioMedia?: number[] }
+  | { kind: 'save-state'; json: string; objectIds: number[]; removeAudioMedia?: number[];
+      // Per-clip-move camera keyframe shifts, applied by C++ inside the
+      // save-state undo block so a clip move + its keyframe shift are one
+      // Ctrl+Z. refCount guards shared cameras (C++ skips when >1).
+      keyframeShifts?: { objectId: number; deltaFrames: number; refCount: number }[] }
   | { kind: 'load-state' }
   | { kind: 'undo' }
   | { kind: 'redo' }

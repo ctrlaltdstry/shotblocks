@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useRef, type PointerEventHandler, type RefObject } from 'react';
 import { gsap } from 'gsap';
 import { useStore, magneticSnap, audioPeakDocFrames, isTrackLocked, SNAP_PIXEL_RADIUS, clipEdgeZonePx, type Clip } from './store';
+import { flushKeyframeShifts } from './usePersistence';
 import { DRAG_THRESHOLD_PX, type DragRef } from './hooks/clipDrag/types';
 import { resolveLane } from './hooks/clipDrag/resolveLane';
 import { startSlipDrag } from './hooks/clipDrag/startSlipDrag';
@@ -45,6 +46,11 @@ export function useClipDrag(
     groupIds: null,
     rippleMode: false,
   });
+
+  // Pre-drag inFrame + objectId of every clip that may move this drag,
+  // keyed by clip id. Captured at pointer-down (see onDown), consumed in
+  // endDrag to shift each moved clip's camera keyframes by its delta.
+  const keyframeShiftBaseline = useRef<Map<number, { objectId: number; inFrame: number }>>(new Map());
 
   // The latest `onDown` from the effect closure — exposed via a ref so
   // the hook can return a STABLE React callback that always invokes the
@@ -101,6 +107,40 @@ export function useClipDrag(
         useStore.getState().moveClip(clip.id, trackId, dest.trackId, dest.inFrame, snapFrames, 'replace');
       }
       clearTransform();
+
+      // Shift each moved clip's camera keyframes so the animation travels
+      // with the clip. Runs AFTER the store commit above, so we read final
+      // positions. For each baselined clip, delta = finalInFrame - preIn.
+      // refCount across ALL video clips guards shared cameras (C++ skips
+      // when >1). Audio clips never enter the baseline (no objectId).
+      // flushKeyframeShifts queues these and fires an immediate save-state
+      // so C++ applies the shift in the SAME undo block as the clip-position
+      // change — one Ctrl+Z undoes both.
+      if (wasActive && commit) {
+        const st = useStore.getState();
+        const baseline = keyframeShiftBaseline.current;
+        if (baseline.size > 0) {
+          const curIn = new Map<number, number>();
+          const refCounts = new Map<number, number>();
+          for (const t of st.videoTracks) {
+            for (const c of t.clips) {
+              curIn.set(c.id, c.inFrame);
+              if (c.objectId)
+                refCounts.set(c.objectId, (refCounts.get(c.objectId) ?? 0) + 1);
+            }
+          }
+          const shifts: { objectId: number; deltaFrames: number; refCount: number }[] = [];
+          for (const [clipId, base] of baseline) {
+            const finalIn = curIn.get(clipId);
+            if (finalIn === undefined) continue;          // clip gone (shouldn't happen)
+            const deltaFrames = finalIn - base.inFrame;
+            if (deltaFrames === 0) continue;
+            shifts.push({ objectId: base.objectId, deltaFrames, refCount: refCounts.get(base.objectId) ?? 1 });
+          }
+          if (shifts.length > 0) flushKeyframeShifts(shifts);
+        }
+      }
+      keyframeShiftBaseline.current = new Map();
     }
 
     function onMove(ev: PointerEvent) {
@@ -528,6 +568,26 @@ export function useClipDrag(
       // selection changes mid-drag don't reshape the group.
       const selSnapshot = liveStore.selectedClipIds;
       const isGroupDrag = selSnapshot.size > 1 && selSnapshot.has(clip.id);
+
+      // Snapshot the pre-drag inFrame of every clip that may move, keyed
+      // by clip id, so endDrag can compute each clip's true frame delta
+      // and shift its camera's keyframes to match. Captured here (never
+      // reset mid-drag, unlike dragRef.startInFrame which the ripple
+      // toggle re-anchors) so the delta is measured from the real origin.
+      // Only video clips carry a camera (objectId); audio clips have none.
+      keyframeShiftBaseline.current = (() => {
+        const m = new Map<number, { objectId: number; inFrame: number }>();
+        const allTracks = side === 'video' ? liveStore.videoTracks : liveStore.audioTracks;
+        const movingIds = isGroupDrag ? selSnapshot : new Set([clip.id]);
+        for (const t of allTracks) {
+          for (const c of t.clips) {
+            if (movingIds.has(c.id) && c.objectId)
+              m.set(c.id, { objectId: c.objectId, inFrame: c.inFrame });
+          }
+        }
+        return m;
+      })();
+
       dragRef.current = {
         active: false,
         pointerId: ev.pointerId,

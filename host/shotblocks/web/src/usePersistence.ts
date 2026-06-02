@@ -183,7 +183,6 @@ export function usePersistence(): void {
 
   // Subscribe to clip-list changes → debounced save + audio cleanup.
   useEffect(() => {
-    let timer: ReturnType<typeof setTimeout> | null = null;
     const unsub = useStore.subscribe((s, prev) => {
       // Only save if persisted state actually changed (Zustand fires
       // for ANY state change). Reference equality is fine because
@@ -231,12 +230,11 @@ export function usePersistence(): void {
         skipNextSave.current = false;
         return;
       }
-      if (timer) clearTimeout(timer);
-      timer = setTimeout(saveToHost, SAVE_DEBOUNCE_MS);
+      scheduleSave();
     });
     return () => {
       unsub();
-      if (timer) clearTimeout(timer);
+      cancelPendingSave();
     };
   }, []);
 }
@@ -434,6 +432,56 @@ async function loadFromHost(skipNextSave: React.MutableRefObject<boolean>) {
 // step — clip metadata and its bytes restore together on Ctrl+Z.
 const pendingAudioRemoval = new Set<number>();
 
+// Module-scoped debounce timer for the clip-list save. Lifted out of the
+// useEffect so flushKeyframeShifts can CANCEL a pending debounced save
+// before firing its own immediate one — otherwise a clip move produces
+// TWO save-states (the immediate keyframe-shift save, then the redundant
+// debounced position save 250ms later), and the redundant one is an extra,
+// empty-looking undo step.
+let saveTimer: ReturnType<typeof setTimeout> | null = null;
+function scheduleSave(): void {
+  if (saveTimer) clearTimeout(saveTimer);
+  saveTimer = setTimeout(() => { saveTimer = null; saveToHost(); }, SAVE_DEBOUNCE_MS);
+}
+function cancelPendingSave(): void {
+  if (saveTimer) { clearTimeout(saveTimer); saveTimer = null; }
+}
+
+// Pending camera-keyframe shifts to apply on the NEXT save-state. A clip
+// move queues one entry per moved clip (keyed by objectId so repeated
+// nudges of the same clip before a save collapse into the latest delta...
+// actually they ACCUMULATE: two 10-frame drags = a 20-frame total shift,
+// matching the clip's net move). C++ applies these INSIDE the save-state
+// undo block, so the clip move + keyframe shift are one Ctrl+Z. See
+// flushKeyframeShifts.
+const pendingKeyframeShifts = new Map<number, { deltaFrames: number; refCount: number }>();
+
+/** Queue keyframe shifts for moved clips and persist immediately (bypass
+ *  the 250ms debounce) so the keys follow the clip with no visible lag,
+ *  in the same undo step as the clip-position save. Called from
+ *  useClipDrag on a clip-move commit. */
+export function flushKeyframeShifts(
+  shifts: { objectId: number; deltaFrames: number; refCount: number }[],
+): void {
+  for (const s of shifts) {
+    if (s.objectId <= 0 || s.deltaFrames === 0) continue;
+    const prev = pendingKeyframeShifts.get(s.objectId);
+    pendingKeyframeShifts.set(s.objectId, {
+      deltaFrames: (prev?.deltaFrames ?? 0) + s.deltaFrames,
+      refCount: s.refCount,
+    });
+  }
+  if (pendingKeyframeShifts.size > 0) {
+    // Cancel the debounced position-save the clip move just scheduled, so
+    // we don't fire TWO save-states (this immediate one WITH the shift,
+    // then a redundant debounced one 250ms later with an empty shift list
+    // — which showed up as an extra, empty-looking undo step). This single
+    // immediate save carries both the new clip position and the shift.
+    cancelPendingSave();
+    saveToHost();
+  }
+}
+
 function saveToHost() {
   const s = useStore.getState();
   // Strip transient fields — only persist what defines the timeline.
@@ -518,7 +566,13 @@ function saveToHost() {
   // undo block as this save so delete is one undo step.
   const removeAudioMedia = [...pendingAudioRemoval];
   pendingAudioRemoval.clear();
-  void send({ kind: 'save-state', json, objectIds, removeAudioMedia });
+  // Camera keyframe shifts from clip moves — C++ applies them inside the
+  // same undo block so the clip move + keyframe shift are one Ctrl+Z.
+  const keyframeShifts = [...pendingKeyframeShifts.entries()].map(
+    ([objectId, v]) => ({ objectId, deltaFrames: v.deltaFrames, refCount: v.refCount }),
+  );
+  pendingKeyframeShifts.clear();
+  void send({ kind: 'save-state', json, objectIds, removeAudioMedia, keyframeShifts });
   // Plan 4.1 — push the per-boundary camera event list so C++ can
   // rebuild the hidden Stage helper's animation track. Same cadence
   // as save-state (250ms debounce). The Stage stays dormant during
