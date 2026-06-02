@@ -43,7 +43,7 @@ export function useMarquee(lanesAreaRef: RefObject<HTMLDivElement | null>): void
       }
       const x0 = startX - rect.left;
       const y0 = startY - rect.top;
-      useStore.getState().setMarquee({ x0, y0, x1, y1 });
+      useStore.getState().setMarquee({ x0, y0, x1, y1, mode });
       if (mode === 'keyframe') {
         const hits = keyDotsInRect(el!, x0, y0, x1, y1);
         const next = additive ? new Set(baseKeyCols) : new Set<string>();

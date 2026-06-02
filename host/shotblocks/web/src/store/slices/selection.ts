@@ -12,14 +12,14 @@ import { replaceOverlap } from '../clipMath';
  *  cross-slice `get`. */
 export interface SelectionSlice {
   selectedClipIds: Set<number>;
-  marquee: { x0: number; y0: number; x1: number; y1: number } | null;
+  marquee: { x0: number; y0: number; x1: number; y1: number; mode?: 'clip' | 'keyframe' } | null;
   dragClip: { clipId: number; fromTrackId: string } | null;
   edgeHover: Set<string>;
   clipboard: ClipboardEntry[];
 
   setSelectedClip: (clipId: number | null, additive?: boolean) => void;
   setSelectedClipIds: (ids: Set<number>) => void;
-  setMarquee: (rect: { x0: number; y0: number; x1: number; y1: number } | null) => void;
+  setMarquee: (rect: { x0: number; y0: number; x1: number; y1: number; mode?: 'clip' | 'keyframe' } | null) => void;
   setDragClip: (drag: { clipId: number; fromTrackId: string } | null) => void;
   setEdgeHover: (edges: Set<string>) => void;
 

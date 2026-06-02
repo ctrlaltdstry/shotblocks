@@ -20,6 +20,12 @@
      primary-highlight blue so we can recolor without affecting the
      rest of the "selected" UI. */
   --color-audio-kf-accent:               #ff9500;
+  /* Keyframe-dot marquee accent — Maxon blue (design-system accent).
+     The clip-mode marquee uses the purple primary-highlight, but a
+     purple box over the purple video clips vanishes; the keyframe-dot
+     marquee runs OVER the clips, so it gets the contrasting blue.
+     Same rationale as the audio-kf orange above. */
+  --color-keyframe-marquee:              #2C7CD3;
   /* Audio fill #01904b (Figma 440:2618). Selected variant is the same
      base bumped ~30% brighter for visual feedback (no Figma reference
      for the selected state yet). Border on shot-block.is-audio is

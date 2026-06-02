@@ -1,8 +1,9 @@
 import { useStore } from '../store';
 
-/** Marquee selection rectangle. 1px primary-highlight-blue outline,
- *  drawn in lanes-area-relative coordinates. Only renders while the
- *  user is actively dragging. */
+/** Marquee selection rectangle, drawn in lanes-area-relative
+ *  coordinates. Only renders while the user is actively dragging. The
+ *  clip-mode marquee is purple (over the dark canvas); the keyframe-mode
+ *  marquee is blue (over the purple clips, where purple would vanish). */
 export function MarqueeOverlay() {
   const m = useStore((s) => s.marquee);
   if (!m) return null;
@@ -12,7 +13,7 @@ export function MarqueeOverlay() {
   const height = Math.abs(m.y1 - m.y0);
   return (
     <div
-      className="marquee-rect"
+      className={'marquee-rect' + (m.mode === 'keyframe' ? ' is-keyframe' : '')}
       style={{ left: left + 'px', top: top + 'px', width: width + 'px', height: height + 'px' }}
     />
   );

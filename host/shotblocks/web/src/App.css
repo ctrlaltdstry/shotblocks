@@ -1275,6 +1275,12 @@ body.is-hand-panning * {
   background: color-mix(in srgb, var(--color-timeline-primary-highlight) 12%, transparent);
   z-index: 5;
 }
+/* Keyframe-dot marquee runs over the purple video clips, where the
+   purple primary-highlight box vanishes — use the contrasting blue. */
+.marquee-rect.is-keyframe {
+  border-color: var(--color-keyframe-marquee);
+  background: color-mix(in srgb, var(--color-keyframe-marquee) 12%, transparent);
+}
 
 /* When the doc has zero clips, hide the track-list chrome — the
    headers column, the V/A divider, and the per-track-header chrome

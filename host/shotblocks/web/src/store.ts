@@ -317,7 +317,9 @@ export interface State {
   // Live marquee selection rectangle. Non-null while the user is
   // drawing a marquee on empty .lanes-area space. Coordinates are in
   // lanes-area-relative pixels (origin at top-left of .lanes-area).
-  marquee: { x0: number; y0: number; x1: number; y1: number } | null;
+  // `mode` distinguishes the clip marquee (purple, over the dark
+  // canvas) from the keyframe-dot marquee (blue, over the clips).
+  marquee: { x0: number; y0: number; x1: number; y1: number; mode?: 'clip' | 'keyframe' } | null;
 
   // Razor tool cut-line preview. While the razor tool is active and
   // the pointer is hovering over a clip, this holds the cursor's
@@ -450,7 +452,7 @@ export interface State {
    *  programmatic batch (Select-All, etc.). */
   setSelectedClipIds: (ids: Set<number>) => void;
 
-  setMarquee: (rect: { x0: number; y0: number; x1: number; y1: number } | null) => void;
+  setMarquee: (rect: { x0: number; y0: number; x1: number; y1: number; mode?: 'clip' | 'keyframe' } | null) => void;
 
   /** Move an existing clip to (possibly the same) track at a desired
    *  inFrame. Uses findFreeSlot (with the moving clip excluded from
