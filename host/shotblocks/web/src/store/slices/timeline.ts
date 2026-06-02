@@ -208,8 +208,19 @@ export const createTimelineSlice: StateCreator<State, [], [], TimelineSlice> = (
       if (mutated) videoTracks = next;
     }
 
-    if (orphansSame && namesSame && keysSame && videoTracks === s.videoTracks) return s;
+    // Hand off the Alt-retime live preview: once the rescaled keyTimes
+    // arrive from C++ (keysSame === false after a retime save), clear
+    // retimingClipId so KeyframeTicks switches from its held drag-start
+    // fractions back to the absolute mapping — which now computes the
+    // SAME positions (retime preserves fraction-of-clip), so the handoff
+    // is seamless with no snap-back. Mirrors the scrub frame-echo handoff:
+    // don't drop the optimistic state until the authoritative echo lands.
+    const clearRetiming = !keysSame && s.retimingClipId !== null;
+
+    if (orphansSame && namesSame && keysSame && !clearRetiming
+        && videoTracks === s.videoTracks) return s;
     return {
+      ...(clearRetiming ? { retimingClipId: null } : {}),
       orphanObjectIds: orphansSame ? s.orphanObjectIds : nextOrphans,
       cameraNames: namesSame ? s.cameraNames : nextNames,
       cameraKeyTimes: keysSame ? s.cameraKeyTimes : nextKeyTimes,

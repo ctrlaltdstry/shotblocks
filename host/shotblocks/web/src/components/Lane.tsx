@@ -302,6 +302,11 @@ export function Lane({ track, side }: { track: Track; side: 'video' | 'audio' })
             // survives a mid-drag Alt release; the hover-derived flag would
             // drop it). Cleared in onTrimPointerEnd.
             setRetimeDragging(trimRef.current.retime);
+            // Tell KeyframeTicks to preview the rescale live for this clip
+            // (it holds dot fractions while the clip stretches). Cleared in
+            // onTrimPointerEnd, after C++ has rescaled the real keys.
+            if (trimRef.current.retime)
+              useStore.getState().setRetimingClipId(clipId);
             try { ev.currentTarget.setPointerCapture(ev.pointerId); } catch { /* noop */ }
             // Select the clip we're trimming (visual feedback during drag).
             setSelectedClip(clipId);
@@ -386,17 +391,24 @@ export function Lane({ track, side }: { track: Track; side: 'video' | 'audio' })
     // an out-edge drag pins the in-point; an in-edge drag pins the out-
     // point. flushKeyframeRetimes fires an immediate save so C++ rescales
     // the keys in the SAME undo block as the clip in/out write (one Ctrl+Z).
-    if (!t.retime || t.objectId <= 0) return;
+    //
+    // The live-preview handoff: when a real rescale WILL be sent, the
+    // rescaled-keys `cameras` echo clears retimingClipId (seamless — see
+    // setCameraStatuses). In every NON-rescale path (not retiming, no clip,
+    // no-op duration, or a shared camera C++ will skip) no echo comes, so
+    // we must clear the preview here or the dots stay frozen.
+    const clearPreviewNow = () => useStore.getState().setRetimingClipId(null);
+    if (!t.retime || t.objectId <= 0) { clearPreviewNow(); return; }
     const st = useStore.getState();
     let finalClip: Clip | undefined;
     for (const trk of st.videoTracks) {
       const c = trk.clips.find((cl) => cl.id === t.clipId);
       if (c) { finalClip = c; break; }
     }
-    if (!finalClip) return;
+    if (!finalClip) { clearPreviewNow(); return; }
     const oldDur = t.origOutFrame - t.origInFrame;
     const newDur = finalClip.outFrame - finalClip.inFrame;
-    if (oldDur <= 0 || newDur <= 0 || oldDur === newDur) return;
+    if (oldDur <= 0 || newDur <= 0 || oldDur === newDur) { clearPreviewNow(); return; }
     // Anchor = the non-moving edge, in DOCUMENT frames. The dragged edge's
     // frame changed; the other one is unchanged from the original.
     const anchorFrame = t.edge === 'right' ? t.origInFrame : t.origOutFrame;
@@ -406,6 +418,10 @@ export function Lane({ track, side }: { track: Track; side: 'video' | 'audio' })
     for (const trk of st.videoTracks)
       for (const c of trk.clips)
         if (c.objectId === t.objectId) refCount++;
+    // Shared camera → C++ skips the rescale → no keys-changed echo will
+    // arrive to hand off the preview, so clear it now (the unmoved keys
+    // against the new window are the truthful display).
+    if (refCount > 1) clearPreviewNow();
     flushKeyframeRetimes([{ objectId: t.objectId, anchorFrame, oldDur, newDur, refCount }]);
   }
 

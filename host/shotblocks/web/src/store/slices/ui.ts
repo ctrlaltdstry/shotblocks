@@ -67,6 +67,13 @@ export interface UiSlice {
    *  through the C++ host so it survives the drag, exactly like
    *  rollEditActive does for the roll cursor. */
   retimeHoverActive: boolean;
+  /** Clip id currently being Alt-retimed (its edge dragged with Alt),
+   *  or null. Lets KeyframeTicks PREVIEW the rescale live: under retime a
+   *  key's fraction-of-clip is invariant, so while this is set the dots
+   *  hold their drag-start fractions and the clip stretches around them
+   *  — instead of drifting (their true frames haven't moved yet; C++
+   *  rescales them only on drag-release). Cleared on trim-end. */
+  retimingClipId: number | null;
   rangeHandleDragging: boolean;
   /** True while a Hand-tool pan drag is in flight. Drives the
    *  cursor swap from open-hand → closed-hand for the duration of
@@ -112,6 +119,7 @@ export interface UiSlice {
   setSlipDragging: (on: boolean) => void;
   setRollEditActive: (on: boolean) => void;
   setRetimeHoverActive: (on: boolean) => void;
+  setRetimingClipId: (id: number | null) => void;
   setRangeHandleDragging: (on: boolean) => void;
   setHandPanning: (on: boolean) => void;
   setSpawnGhost: (ghost: { side: 'video' | 'audio'; trackId: string } | null) => void;
@@ -149,6 +157,7 @@ export const createUiSlice: StateCreator<State, [], [], UiSlice> = (set) => ({
   slipDragging: false,
   rollEditActive: false,
   retimeHoverActive: false,
+  retimingClipId: null,
   rangeHandleDragging: false,
   handPanning: false,
   spawnGhost: null,
@@ -198,6 +207,7 @@ export const createUiSlice: StateCreator<State, [], [], UiSlice> = (set) => ({
   setSlipDragging: (on) => set({ slipDragging: on }),
   setRollEditActive: (on) => set((s) => (s.rollEditActive === on ? s : { rollEditActive: on })),
   setRetimeHoverActive: (on) => set((s) => (s.retimeHoverActive === on ? s : { retimeHoverActive: on })),
+  setRetimingClipId: (id) => set((s) => (s.retimingClipId === id ? s : { retimingClipId: id })),
   setRangeHandleDragging: (on) => set((s) => (s.rangeHandleDragging === on ? s : { rangeHandleDragging: on })),
   setHandPanning: (on) => set((s) => (s.handPanning === on ? s : { handPanning: on })),
   setSpawnGhost: (ghost) => set((s) => {

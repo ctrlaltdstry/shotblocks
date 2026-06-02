@@ -275,6 +275,12 @@ export interface State {
   // the C++ host (survives the drag, same as rollEditActive).
   retimeHoverActive: boolean;
 
+  // Clip id currently being Alt-retimed, or null. KeyframeTicks previews
+  // the rescale live while this is set (dots hold their drag-start
+  // fraction-of-clip; the clip stretches around them). Cleared on
+  // trim-end, when C++ has rescaled the real keys.
+  retimingClipId: number | null;
+
   // True while a play-range handle is being dragged. RangeBar sets
   // it so useToolCursor keeps the play-range cursor for the whole
   // drag even if the pointer strays off the small chevron handle.
@@ -422,6 +428,7 @@ export interface State {
   setSlipDragging: (on: boolean) => void;
   setRollEditActive: (on: boolean) => void;
   setRetimeHoverActive: (on: boolean) => void;
+  setRetimingClipId: (id: number | null) => void;
   setRangeHandleDragging: (on: boolean) => void;
   setHandPanning: (on: boolean) => void;
   setSpawnGhost: (ghost: { side: 'video' | 'audio'; trackId: string } | null) => void;
