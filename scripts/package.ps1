@@ -93,10 +93,12 @@ robocopy $webDist $webStage /MIR /XF *.cssurl.txt .gitignore /NFL /NDL /NJH /NJS
 if ($LASTEXITCODE -ge 8) { throw "robocopy (web) failed ($LASTEXITCODE)" }
 
 # Bundled user manual: ships inside the plugin so the Help button's
-# docs/index.html resolves relative to the .xdl64.
+# docs/index.html resolves relative to the .xdl64. Exclude _*-prefixed
+# scratch files (manual-authoring working files: _batch*.xml, _scrub.py,
+# _sections_*.json, etc.) so they never leak into the shipped package.
 $docsStage = Join-Path $stage "docs"
 New-Item -ItemType Directory -Path $docsStage -Force | Out-Null
-robocopy $docsSrc $docsStage /MIR /NFL /NDL /NJH /NJS /NP | Out-Null
+robocopy $docsSrc $docsStage /MIR /XF _* /NFL /NDL /NJH /NJS /NP | Out-Null
 if ($LASTEXITCODE -ge 8) { throw "robocopy (docs) failed ($LASTEXITCODE)" }
 
 Write-Host "Staged clean tree -> $stage"
