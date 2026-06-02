@@ -61,6 +61,20 @@ dot pulls to it with a yellow line; Snap off (and no Shift) = no pull.
   key), or only clip edits? Recommend: yes, playhead too — it's the most
   useful place to land on a key.
 
+### Part 1b — marquee color: blue, not purple (quick polish)
+
+The keyframe marquee rect gets LOST over the purple video clips. The
+`.marquee-rect` (App.css ~L1271) uses `--color-timeline-primary-highlight`
+which is `#824cee` (purple, the brand accent) — so a purple box over
+purple clips is invisible. `useMarquee` already tracks `mode` ('clip' vs
+'keyframe'). Fix: when in keyframe mode, add a modifier class (e.g.
+`.marquee-rect.is-keyframe`) and color it BLUE (use a clearly-blue value,
+e.g. Maxon blue `#2C7CD3` from the design system, or a brighter cyan-blue
+that pops on purple) for both the 1px border and the ~12% fill. The clip-
+mode marquee (over the dark canvas) can stay purple — it's only the
+over-clips keyframe marquee that needs the contrast. `MarqueeOverlay` /
+`useMarquee` set the class based on the active mode.
+
 ---
 
 ## Part 2 — Slip tool on camera clips
