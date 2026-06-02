@@ -1,24 +1,24 @@
-# Packages Shotblocks into a clean, standalone distributable for the beta
+# Packages Shotblocks into a clean, standalone distributable for the
 # release. Unlike scripts/deploy.ps1 (which mirrors straight into the live
 # C4D prefs folder for the dev loop), this produces a shippable tree:
 #
 #   dist/shotblocks/                 <- the clean plugin folder a user drops
 #                                       into their C4D plugins/ directory
-#   dist/shotblocks-v<ver>-beta.zip  <- zipped tree + README for manual install
-#   dist/shotblocks-v<ver>-beta.zip.sha256
+#   dist/shotblocks-v<ver>.zip       <- zipped tree + README for manual install
+#   dist/shotblocks-v<ver>.zip.sha256
 #
 # The .exe installer is built separately by the Inno Setup script
 # (scripts/shotblocks.iss) which consumes dist/shotblocks/.
 #
 # Usage:
 #   powershell -ExecutionPolicy Bypass -File scripts\package.ps1
-#   powershell -ExecutionPolicy Bypass -File scripts\package.ps1 -Version 1.0.0-beta -SkipBuild
+#   powershell -ExecutionPolicy Bypass -File scripts\package.ps1 -Version 1.0.0 -SkipBuild
 
 [CmdletBinding()]
 param(
     # Version string stamped into artifact filenames. Keep in sync with the
-    # manual's release-notes version ("v1.0.0 beta").
-    [string]$Version = "1.0.0-beta",
+    # manual's release-notes version ("v1.0.0") and shotblocks.iss.
+    [string]$Version = "1.0.0",
     # Skip the C++ / web rebuild and package whatever is already built.
     # Useful for iterating on the packaging itself.
     [switch]$SkipBuild
@@ -105,7 +105,7 @@ Write-Host "Staged clean tree -> $stage"
 
 # --- 4. README for the zip (manual-install instructions) ------------------
 $readme = @"
-Shotblocks v$Version (beta) - Cinema 4D 2026 plugin (Windows)
+Shotblocks v$Version - Cinema 4D 2026 plugin (Windows)
 
 MANUAL INSTALL
   1. Copy the "shotblocks" folder (next to this README) into your
@@ -123,7 +123,7 @@ The plugin is just a folder - no registry changes, no services. To
 uninstall, delete the "shotblocks" folder and restart C4D. Your timeline
 data lives inside each .c4d document, so removing the plugin loses no work.
 
-WINDOWS WARNING (.exe installer only): the beta installer is unsigned, so
+WINDOWS WARNING (.exe installer only): the installer is unsigned, so
 Windows SmartScreen may show "Windows protected your PC". Click "More info"
 then "Run anyway". The .zip (this file) avoids that prompt entirely.
 

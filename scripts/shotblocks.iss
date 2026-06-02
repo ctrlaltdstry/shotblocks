@@ -1,4 +1,4 @@
-; Inno Setup script for the Shotblocks beta installer.
+; Inno Setup script for the Shotblocks installer.
 ;
 ; Wraps the clean tree produced by scripts/package.ps1 (dist/shotblocks/)
 ; into a one-click .exe that drops the plugin into the user's Cinema 4D
@@ -8,13 +8,14 @@
 ;
 ; Build (after installing Inno Setup 6 and running package.ps1):
 ;   "C:\Program Files (x86)\Inno Setup 6\ISCC.exe" scripts\shotblocks.iss
-; Output: dist\shotblocks-v1.0.0-beta-setup.exe
+; Output: dist\shotblocks-v1.0.0-setup.exe
 ;
-; UNSIGNED for the beta - SmartScreen will show a one-time warning.
-; See .agent/plans/v1-plan-6-beta-installer.md for the trust rationale.
+; UNSIGNED - SmartScreen will show a one-time warning (EV cert deferred
+; to a later release). See .agent/plans/v1-plan-6-beta-installer.md for
+; the trust rationale.
 
 #define AppName "Shotblocks"
-#define AppVersion "1.0.0-beta"
+#define AppVersion "1.0.0"
 #define AppPublisher "mkslate"
 #define AppURL "https://mkslate.com"
 ; Staged clean tree, relative to this .iss file (scripts/ -> ..\dist\shotblocks).
