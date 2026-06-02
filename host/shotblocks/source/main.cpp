@@ -830,6 +830,24 @@ public:
 		// moment playback stops.
 		if (!_v2Playing)
 			PushRenderSettingsDrift(GetActiveDocument());
+
+		// Poll the keyframe fingerprint and re-push cameras when it moves.
+		// Catches keyframe edits C4D didn't deliver a usable EVMSG_CHANGE
+		// for: edits made while this dialog was backgrounded (the change
+		// reached the dope sheet, not us), or edits whose EVMSG_CHANGE
+		// fired before the camera's CTracks settled (PostCameras then
+		// re-gathered stale keys, and the dots only refreshed once a later
+		// event — e.g. selecting the camera in the OM — fired). Same idle
+		// 250ms cadence; skipped during playback (keys don't change then).
+		if (!_v2Playing && _htmlView && _navigated)
+		{
+			UInt sig = KeyframeSignature(GetActiveDocument());
+			if (sig != _lastKeySig)
+			{
+				_lastKeySig = sig;
+				PostCameras();
+			}
+		}
 		// Playback is driven by C4D's native transport (RunAnimation),
 		// NOT by advancing doc->SetTime from this Timer. The hand-rolled
 		// per-frame seek couldn't redraw heavy sim/Alembic scenes
@@ -3444,6 +3462,41 @@ private:
 			walk(tag->GetFirstCTrack());
 	}
 
+	// Cheap fingerprint of every linked camera's keyframe state, polled on
+	// the Timer to catch keyframe edits C4D doesn't announce. Deleting keys
+	// in the timeline DOES fire EVMSG_CHANGE, but at that instant the
+	// camera's CTracks haven't settled yet, so PostCameras re-gathers the
+	// STALE (pre-delete) keys — the dots only refreshed once a LATER event
+	// (e.g. selecting the camera in the OM) fired a fresh change after the
+	// tracks updated. Same class of gap as render-settings drift (see
+	// Timer): poll a signature and re-push cameras when it moves. The
+	// signature mixes each camera's key count + the sum of key frames, so
+	// add / delete / move all change it without serializing anything heavy.
+	UInt KeyframeSignature(BaseDocument* doc)
+	{
+		if (!doc)
+			return 0;
+		Int32 fps = doc->GetFps();
+		if (fps <= 0)
+			fps = 24;
+		UInt sig = 1469598103934665603ULL;   // FNV-ish seed
+		auto mix = [&](UInt v) { sig = (sig ^ v) * 1099511628211ULL; };
+		for (auto& kv : _cameraLinks)
+		{
+			BaseObject* op = kv.second
+				? static_cast<BaseObject*>(kv.second->GetLink(doc)) : nullptr;
+			mix((UInt)(UInt32)kv.first);
+			if (!op)
+				continue;
+			std::set<Int32> frames;
+			GatherKeyTimes(op, fps, frames);
+			mix((UInt)frames.size());
+			for (Int32 f : frames)
+				mix((UInt)(UInt32)f);
+		}
+		return sig;
+	}
+
 	void PostCameras()
 	{
 		if (!_htmlView || !_navigated)
@@ -3706,6 +3759,11 @@ private:
 	bool                 _jsHandshakeDone;
 	bool                 _hoverActive;
 	Float                _lastTimeChangedTickMs;
+	// Last keyframe fingerprint pushed to JS. The Timer re-pushes cameras
+	// when this moves, catching keyframe edits made while the dialog was
+	// in the background (its EVMSG_CHANGE was missed/coalesced) or before
+	// C4D's tracks settled. 1 = "never computed" so the first poll pushes.
+	UInt                 _lastKeySig{1};
 
 	LocalHttpServer      _server;
 	UInt16               _httpPort;
