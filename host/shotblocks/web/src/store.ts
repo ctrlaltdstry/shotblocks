@@ -264,6 +264,11 @@ export interface State {
   // via the C++ host.
   rollEditActive: boolean;
 
+  // True while the pointer is over a video-clip trim edge with Alt held,
+  // or an Alt-retime drag is running. Drives the retime cursor through
+  // the C++ host (survives the drag, same as rollEditActive).
+  retimeHoverActive: boolean;
+
   // True while a play-range handle is being dragged. RangeBar sets
   // it so useToolCursor keeps the play-range cursor for the whole
   // drag even if the pointer strays off the small chevron handle.
@@ -410,6 +415,7 @@ export interface State {
   setDragClip: (drag: { clipId: number; fromTrackId: string } | null) => void;
   setSlipDragging: (on: boolean) => void;
   setRollEditActive: (on: boolean) => void;
+  setRetimeHoverActive: (on: boolean) => void;
   setRangeHandleDragging: (on: boolean) => void;
   setHandPanning: (on: boolean) => void;
   setSpawnGhost: (ghost: { side: 'video' | 'audio'; trackId: string } | null) => void;

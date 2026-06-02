@@ -482,6 +482,44 @@ export function flushKeyframeShifts(
   }
 }
 
+// Pending camera-keyframe retimes (Alt-edge-drag) for the NEXT save-state.
+// Sibling of pendingKeyframeShifts: a SHIFT offsets keys for a body move;
+// a RETIME rescales them for an edge trim. Keyed by objectId, LATEST WINS
+// (not accumulated — each edge-drag commit carries the clip's final
+// old/new duration, not an incremental delta, so a re-retime of the same
+// clip supersedes the earlier one rather than compounding). C++ applies
+// these inside the save-state undo block, same one-Ctrl-Z guarantee.
+const pendingKeyframeRetimes = new Map<
+  number,
+  { anchorFrame: number; oldDur: number; newDur: number; refCount: number }
+>();
+
+/** Queue camera-keyframe retimes for Alt-trimmed clips and persist
+ *  immediately (bypass the 250ms debounce) so the rescaled keys follow
+ *  the trim with no visible lag, in the same undo step as the clip
+ *  in/out save. Called from Lane.tsx on an Alt-edge-drag commit. Mirrors
+ *  flushKeyframeShifts. */
+export function flushKeyframeRetimes(
+  retimes: { objectId: number; anchorFrame: number; oldDur: number; newDur: number; refCount: number }[],
+): void {
+  for (const r of retimes) {
+    if (r.objectId <= 0 || r.oldDur <= 0 || r.newDur <= 0 || r.oldDur === r.newDur) continue;
+    pendingKeyframeRetimes.set(r.objectId, {
+      anchorFrame: r.anchorFrame,
+      oldDur: r.oldDur,
+      newDur: r.newDur,
+      refCount: r.refCount,
+    });
+  }
+  if (pendingKeyframeRetimes.size > 0) {
+    // Same rationale as flushKeyframeShifts: cancel the debounced trim
+    // save so the immediate one WITH the retime is the only save-state
+    // (one undo step), not a redundant pair.
+    cancelPendingSave();
+    saveToHost();
+  }
+}
+
 function saveToHost() {
   const s = useStore.getState();
   // Strip transient fields — only persist what defines the timeline.
@@ -572,7 +610,15 @@ function saveToHost() {
     ([objectId, v]) => ({ objectId, deltaFrames: v.deltaFrames, refCount: v.refCount }),
   );
   pendingKeyframeShifts.clear();
-  void send({ kind: 'save-state', json, objectIds, removeAudioMedia, keyframeShifts });
+  // Camera keyframe retimes from Alt-edge-drags — same in-block-undo
+  // contract as the shifts; C++ rescales the keys around the anchor edge.
+  const keyframeRetimes = [...pendingKeyframeRetimes.entries()].map(
+    ([objectId, v]) => ({
+      objectId, anchorFrame: v.anchorFrame, oldDur: v.oldDur, newDur: v.newDur, refCount: v.refCount,
+    }),
+  );
+  pendingKeyframeRetimes.clear();
+  void send({ kind: 'save-state', json, objectIds, removeAudioMedia, keyframeShifts, keyframeRetimes });
   // Plan 4.1 — push the per-boundary camera event list so C++ can
   // rebuild the hidden Stage helper's animation track. Same cadence
   // as save-state (250ms debounce). The Stage stays dormant during

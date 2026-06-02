@@ -67,7 +67,13 @@ export type HostOutbound =
       // Per-clip-move camera keyframe shifts, applied by C++ inside the
       // save-state undo block so a clip move + its keyframe shift are one
       // Ctrl+Z. refCount guards shared cameras (C++ skips when >1).
-      keyframeShifts?: { objectId: number; deltaFrames: number; refCount: number }[] }
+      keyframeShifts?: { objectId: number; deltaFrames: number; refCount: number }[];
+      // Per-clip Alt-edge-drag camera keyframe retimes — rescale the keys
+      // around the non-moving anchor edge so the motion fills the clip's
+      // new duration. Applied by C++ in the SAME save-state undo block as
+      // the trim (one Ctrl+Z). All frame counts are integers; C++ rounds
+      // each rescaled key to a whole frame. refCount guards shared cameras.
+      keyframeRetimes?: { objectId: number; anchorFrame: number; oldDur: number; newDur: number; refCount: number }[] }
   | { kind: 'load-state' }
   | { kind: 'undo' }
   | { kind: 'redo' }
@@ -86,7 +92,7 @@ export type HostOutbound =
   | { kind: 'set-doc-frames'; frames: number }
   | { kind: 'set-loop'; enabled: boolean }
   | { kind: 'warp-cursor'; x: number; y: number }
-  | { kind: 'set-cursor-mode'; mode: 'slip' | 'razor' | 'pen' | 'select' | 'av-split' | 'roll' | 'play-range' | 'hand' | 'hand-grab' | 'zoom' | 'default' }
+  | { kind: 'set-cursor-mode'; mode: 'slip' | 'razor' | 'pen' | 'select' | 'av-split' | 'roll' | 'retime' | 'play-range' | 'hand' | 'hand-grab' | 'zoom' | 'default' }
   | { kind: 'sync-render-settings' }
   | { kind: 'add-to-queue'; mode: 'whole-sequence' }
   | { kind: 'add-to-queue';

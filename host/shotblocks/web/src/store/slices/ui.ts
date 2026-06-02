@@ -62,6 +62,11 @@ export interface UiSlice {
   isHydrated: boolean;
   slipDragging: boolean;
   rollEditActive: boolean;
+  /** True while the pointer is over a video-clip trim edge with Alt
+   *  held (or an Alt-retime drag is running). Drives the retime cursor
+   *  through the C++ host so it survives the drag, exactly like
+   *  rollEditActive does for the roll cursor. */
+  retimeHoverActive: boolean;
   rangeHandleDragging: boolean;
   /** True while a Hand-tool pan drag is in flight. Drives the
    *  cursor swap from open-hand → closed-hand for the duration of
@@ -106,6 +111,7 @@ export interface UiSlice {
   setHydrated: (on: boolean) => void;
   setSlipDragging: (on: boolean) => void;
   setRollEditActive: (on: boolean) => void;
+  setRetimeHoverActive: (on: boolean) => void;
   setRangeHandleDragging: (on: boolean) => void;
   setHandPanning: (on: boolean) => void;
   setSpawnGhost: (ghost: { side: 'video' | 'audio'; trackId: string } | null) => void;
@@ -142,6 +148,7 @@ export const createUiSlice: StateCreator<State, [], [], UiSlice> = (set) => ({
   isHydrated: false,
   slipDragging: false,
   rollEditActive: false,
+  retimeHoverActive: false,
   rangeHandleDragging: false,
   handPanning: false,
   spawnGhost: null,
@@ -190,6 +197,7 @@ export const createUiSlice: StateCreator<State, [], [], UiSlice> = (set) => ({
   setHydrated: (on) => set((s) => (s.isHydrated === on ? s : { isHydrated: on })),
   setSlipDragging: (on) => set({ slipDragging: on }),
   setRollEditActive: (on) => set((s) => (s.rollEditActive === on ? s : { rollEditActive: on })),
+  setRetimeHoverActive: (on) => set((s) => (s.retimeHoverActive === on ? s : { retimeHoverActive: on })),
   setRangeHandleDragging: (on) => set((s) => (s.rangeHandleDragging === on ? s : { rangeHandleDragging: on })),
   setHandPanning: (on) => set((s) => (s.handPanning === on ? s : { handPanning: on })),
   setSpawnGhost: (ghost) => set((s) => {

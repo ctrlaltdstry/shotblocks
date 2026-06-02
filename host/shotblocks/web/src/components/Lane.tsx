@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from 'react';
 import { useStore, magneticSnap, audioPeakDocFrames, SNAP_PIXEL_RADIUS, clipEdgeZonePx } from '../store';
-import type { Track } from '../store';
+import type { Track, Clip } from '../store';
+import { flushKeyframeRetimes } from '../usePersistence';
 import { ShotBlock } from './ShotBlock';
 import { useElementSize } from '../useElementSize';
 
@@ -32,7 +33,13 @@ export function Lane({ track, side }: { track: Track; side: 'video' | 'audio' })
   const setSelectedClip = useStore((s) => s.setSelectedClip);
   const resizeClip = useStore((s) => s.resizeClip);
   const setSnapIndicatorFrames = useStore((s) => s.setSnapIndicatorFrames);
+  const altHeld = useStore((s) => s.altHeld);
   const [cursorMode, setCursorMode] = useState<CursorMode>('default');
+  // Retime intent for the cursor: hovering a video-clip trim edge with
+  // Alt held, OR an Alt-retime drag in flight. Audio edges never retime
+  // (no keyframes), so the video gate keeps the cursor honest there.
+  const [retimeDragging, setRetimeDragging] = useState(false);
+  const retimeActive = (cursorMode === 'trim' && altHeld && side === 'video') || retimeDragging;
   const visibleSpan = Math.max(1, h.vMax - h.vMin);
   const thin = laneHeight > 0 && laneHeight < THIN_THRESHOLD_PX;
   const trackId = (side === 'video' ? 'V' : 'A') + track.id;
@@ -69,6 +76,14 @@ export function Lane({ track, side }: { track: Track; side: 'video' | 'audio' })
     origOutFrame: number;
     startClientX: number;
     pxPerFrame: number;
+    // Alt-retime intent, latched at pointer-down. When true, the commit
+    // rescales the clip's camera keyframes around the non-moving edge so
+    // the motion fills the new duration (vs. the default window-only trim
+    // which leaves keys untouched). Latched at gesture start — not read
+    // live — so releasing Alt just before mouseup doesn't silently drop
+    // the retime the cursor promised while Alt was held.
+    retime: boolean;
+    objectId: number;   // referenced camera; 0 = no camera (orphan)
   } | null>(null);
 
   // Rolling-edit drag state. Two adjacent clips at a seam — leftClip's
@@ -277,7 +292,16 @@ export function Lane({ track, side }: { track: Track; side: 'video' | 'audio' })
               origOutFrame: clip.outFrame,
               startClientX: ev.clientX,
               pxPerFrame,
+              // Latch the retime intent: Alt held at press = retime this
+              // edit's keyframes (only meaningful on video clips with a
+              // camera; audio clips carry no keyframes so retime is inert).
+              retime: ev.altKey && side === 'video' && (clip.objectId ?? 0) > 0,
+              objectId: clip.objectId ?? 0,
             };
+            // Keep the retime cursor pinned for the whole drag (the latch
+            // survives a mid-drag Alt release; the hover-derived flag would
+            // drop it). Cleared in onTrimPointerEnd.
+            setRetimeDragging(trimRef.current.retime);
             try { ev.currentTarget.setPointerCapture(ev.pointerId); } catch { /* noop */ }
             // Select the clip we're trimming (visual feedback during drag).
             setSelectedClip(clipId);
@@ -352,7 +376,37 @@ export function Lane({ track, side }: { track: Track; side: 'video' | 'audio' })
     t.active = false;
     trimRef.current = null;
     setSnapIndicatorFrames([]);
+    setRetimeDragging(false);
     try { ev.currentTarget.releasePointerCapture(ev.pointerId); } catch { /* noop */ }
+
+    // Alt-retime commit: rescale the trimmed clip's camera keyframes so the
+    // motion fills the clip's NEW duration. Read the FINAL clip from the
+    // store (resizeClip clamped + overlap-resolved during the drag) so the
+    // duration is the real one. The anchor is the edge that did NOT move —
+    // an out-edge drag pins the in-point; an in-edge drag pins the out-
+    // point. flushKeyframeRetimes fires an immediate save so C++ rescales
+    // the keys in the SAME undo block as the clip in/out write (one Ctrl+Z).
+    if (!t.retime || t.objectId <= 0) return;
+    const st = useStore.getState();
+    let finalClip: Clip | undefined;
+    for (const trk of st.videoTracks) {
+      const c = trk.clips.find((cl) => cl.id === t.clipId);
+      if (c) { finalClip = c; break; }
+    }
+    if (!finalClip) return;
+    const oldDur = t.origOutFrame - t.origInFrame;
+    const newDur = finalClip.outFrame - finalClip.inFrame;
+    if (oldDur <= 0 || newDur <= 0 || oldDur === newDur) return;
+    // Anchor = the non-moving edge, in DOCUMENT frames. The dragged edge's
+    // frame changed; the other one is unchanged from the original.
+    const anchorFrame = t.edge === 'right' ? t.origInFrame : t.origOutFrame;
+    // refCount across ALL video clips — a camera shared by two clips is
+    // skipped by C++ (rescaling would warp the other clip's animation).
+    let refCount = 0;
+    for (const trk of st.videoTracks)
+      for (const c of trk.clips)
+        if (c.objectId === t.objectId) refCount++;
+    flushKeyframeRetimes([{ objectId: t.objectId, anchorFrame, oldDur, newDur, refCount }]);
   }
 
   function onRollPointerMove(ev: React.PointerEvent<HTMLDivElement>) {
@@ -419,11 +473,29 @@ export function Lane({ track, side }: { track: Track; side: 'video' | 'audio' })
     }
   }, [cursorMode]);
 
+  // Same mirror for the Alt-retime cursor — useToolCursor forces it
+  // through the C++ host so it survives the drag (a CSS cursor alone
+  // loses to C4D's WM_SETCURSOR mid-drag, same as roll).
+  useEffect(() => {
+    if (retimeActive) {
+      useStore.getState().setRetimeHoverActive(true);
+      return () => useStore.getState().setRetimeHoverActive(false);
+    }
+  }, [retimeActive]);
+
   // Cursor: ew-resize for single-edge trim; the custom roll-edit
   // cursor (data-URI, matching the C++ roll.cur) for a rolling edit.
   const ROLL_CURSOR =
     'url("data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAACAAAAAgCAYAAABzenr0AAACOElEQVR4nO1WPYsTURQ99zIzJOTDLFgEkigGEdRSsp1r7MQ+/gOxEFH8wiosg1VSKrNotcoWrm4KswpW/oWgEtDOHyA2CQlxlXFPfCNhcSZ+TARlDgzz4M7cc9575973gAQJEvyDEAA3AXT5FpFgfKPRaMjC2dPpdJ6Eg8FgxxDPjnMLFwCgQjLf9/1AQDBW1fIiiQ8CyKrqgQgB/CYDIFYhWQBXyuXyCwBrqnooTAAAxu7zWxG5ZP79Iyw7jrPuuu6b0Wj0mSSWZZ0IEyAi09hkMvnSbDZfAXgI4OTvEO8HcKtWq73s9/sffQNDeCpiBb7HiF6v94E5WCEAluayfssznfWjdrvd50z8GQSEEQK6swII5vA87102m90QkeVIAblczt6d/d1Op/PejxnMCeBOoVCwQgXYts0av53JZJ57nvc2rhVotVp9x3G2RcSN7BX5fN4WkdN0O4Bt7h/3cY+ArQgBW7MC6B/jAcbWTG57nhVsVT0K4JqIbFIIHc2ZGKefixAwjY3H4x3XdV87jvMMwBOakDmLxeJc8inq9bpYlrVPRM7QE0xaKpXYBx6r6kpEI2IVbJqe8ZR7LiJnU6nUkjlDfhlcjSMALpuaXg1q/UcCGBOR1d2G9ADARVU9XK1Ww033kxCaU0SOsR3P64SqyrPiuDFb/Kej6ffd4XD4KRAQjE1s4aiYJe7uedbjPoTCwKW9AOAegOsArooIx+f/1n2AFcKGVeGbD/fdNLHF34gSJPjv8BWapcIsthuGngAAAABJRU5ErkJggg==") 16 16, col-resize';
-  const cursor = cursorMode === 'trim' ? 'ew-resize'
+  // Alt-retime cursor — Mike's double-chevron stretch glyph with a clock
+  // ("stretch time"), distinct from the plain trim ew-resize. Matches the
+  // C++ retime.cur (the drag-survival layer); this CSS form covers hover.
+  // Both regenerate from <repo>/Cursors/Retime tool.png via
+  // web/public/cursors/_make_retime_cur.py.
+  const RETIME_CURSOR =
+    'url("data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAACAAAAAgCAYAAABzenr0AAAEZUlEQVR4nO1VbUhbVxh+zvXcm3tzb6Imfi1zBONk0lJkZIGOFSm1pYLd3Cb+GaOwD3/4AeqcsKGi/6SMjY39b7t13a+p07EynPuxDmHCzKww8QthEle7rSmkicYmN2e82Y0E6/zofo35wMkN9/14nvO+7zkXOMIRjvAfALPWo8b+K+Sks7B0HukfCHYTKGW92y3uQJAsYg7A2EUYI7vlsy02G/39/ZkchxaRYwWeAnBLluU/ALxm2bgkSaBlCXOmA3L+Lpa1ngTwFYCfANRZvrSRA4FbATWqqt4fGhoSc3NzQlGUMIA8y1YL4Etd1/90Op33ANwE0CqEkCz75319feLGjRuisLAwDuBFSyA/DHmEyIUQD0ZHR03O+XplZaUbwDtlZWXiypUrIhQKiXA4LMbHx8W5c+cEgJGuri4dwFh3d7cphIgHg8GUx+NJAHhlPxE5VtmzyZNDQ0MpVVWFLMvvKYrSSOSrq6tmKBRKNDU1pYQQtIjsQUNDA4m4ZLfb3wCw0dPTk84xMzOTKi0tTQJ41drgQ/MiETnn/BSRj4yMZMgFkQMYzc/PPwHg2+vXrxNhcmxsTFRVVYl4PC42NzfJP7W+vm4ahnGPc/6sLMuXAGz29vaSzVxYWEj5fD7K1WGJ2J5eRuRer1flnP8yPDxMAYlr164Ju91O/RvOy8urAlCi6/rd27dvC9M0UxMTE+Ls2bNiB1KnT58mkpcCgYBbluWPAPze2dmZ3tDy8rLw+XwmgKczp0PKqLhz506hJElPHDt2LEWG6elpbGxs3He73R9HIpFbAPIZY3bOefoE0JqcnERrayva2towPz+fzqPrOgkoCgaDdysqKt4HsDo1NYVYLMbKyspMl8tFnMctAWz7p7i4uAjA1+Xl5WJpaYl6anZ0dFCy72pra50ul+txxtjq+Ph4uudra2uCJr2lpUU0NzeL2dlZEYvFRElJCcW8IMsypf2QhjMajZrxeNysq6sj24rT6XwmU31kD6GiKM8D+JlELC4upkW0t7dT0ITf7y8A8FlNTU26RTtrTyUeGBgg3wWPx/MUgE8uXLhAM2JubW2Z9B/Ab4qitANw7CaAoGqa1kAiaGAsEQmqBGNs1DCMegDr9fX1Ynl5OZVIJNKnIBwOpwYHBwXnfEtRlLcYY4Pkk0wmE5FIxDx//jyR/6ppWicAOsq7gllPW7aIlZWVZDQaTaqqSgN5gnP+NiVzOBypM2fOCNqZx+MhgnuMscsFBQUVAL65evWqGYlEEtXV1WRb0jStFYBrB9dDYDsr4fV6RSAQENa1+pjD4XCrqnoRwKcAfgDwI92KnPN3FUWpbGxspDP+QW5urigqKkq3xGazvZ65sg/yhWQZEYqivGzd6d9LkvQmvSOD3++XVVX1OhyOk4ZhPGcYRqXb7c7u60kAlwF8Icvyxb16vh8UXdePO53OAH0HDpAkY8vRNK3UZrOVA9D2imP7StifLBtiD1/xqALYAQj2ijtMzBGO8D/EXxG08Upgz8snAAAAAElFTkSuQmCC") 16 16, ew-resize';
+  const cursor = retimeActive ? RETIME_CURSOR
+              : cursorMode === 'trim' ? 'ew-resize'
               : cursorMode === 'roll' ? ROLL_CURSOR
               : undefined;
 

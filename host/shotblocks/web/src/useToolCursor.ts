@@ -19,7 +19,7 @@ import { send } from './lib/host';
  *  Adding a future tool cursor = one more case here + a `.cur` file
  *  + a mode id in the C++ CursorMode enum.
  */
-type CursorMode = 'slip' | 'razor' | 'pen' | 'select' | 'av-split' | 'roll' | 'play-range' | 'hand' | 'hand-grab' | 'zoom' | 'default';
+type CursorMode = 'slip' | 'razor' | 'pen' | 'select' | 'av-split' | 'roll' | 'retime' | 'play-range' | 'hand' | 'hand-grab' | 'zoom' | 'default';
 
 export function useToolCursor(): void {
   useEffect(() => {
@@ -60,6 +60,14 @@ export function useToolCursor(): void {
       // a roll drag is running.
       if (s.rollEditActive) {
         return 'roll';
+      }
+      // Alt-retime: pointer over a video-clip trim edge with Alt held,
+      // or an Alt-retime drag in flight. The Lane sets retimeHoverActive.
+      // Checked before the pen case below (pen also keys off altHeld but
+      // only over AUDIO clips, so they never actually collide — this just
+      // makes the precedence explicit).
+      if (s.retimeHoverActive) {
+        return 'retime';
       }
       // Play-range chevron handles — show the play-range cursor over
       // a handle, or for the whole duration of a handle drag.
@@ -127,9 +135,23 @@ export function useToolCursor(): void {
     }
 
     function reevaluate() {
+      // Same off-streak debounce as onMove — do NOT snap straight to
+      // 'default'. A store change can fire reevaluate on a momentary
+      // blip of a flag (notably altHeld, which useAltKey reads raw as
+      // ground truth and so flickers true→false→true within a tick on
+      // the WebView2 Alt-stick quirk). Applying 'default' instantly on
+      // that blip hands the cursor back to WebView2 for one frame — the
+      // visible flicker. Switch INTO a cursor immediately; only fall
+      // back after OFF_NEEDED consecutive off readings, exactly like a
+      // pointermove. Without this, the retime cursor (the one flag tied
+      // to altHeld) strobes while you hold Alt over an edge.
       const next = compute(lastX, lastY);
-      offStreak = next === 'default' ? OFF_NEEDED : 0;
-      apply(next);
+      if (next !== 'default') {
+        offStreak = 0;
+        apply(next);
+      } else if (++offStreak >= OFF_NEEDED) {
+        apply('default');
+      }
     }
 
     // Re-evaluate on store changes too — when a slip drag ends with
@@ -139,6 +161,7 @@ export function useToolCursor(): void {
       if (s.activeTool !== prev.activeTool
         || s.slipDragging !== prev.slipDragging
         || s.rollEditActive !== prev.rollEditActive
+        || s.retimeHoverActive !== prev.retimeHoverActive
         || s.rangeHandleDragging !== prev.rangeHandleDragging
         || s.altHeld !== prev.altHeld
         || s.altRmbZooming !== prev.altRmbZooming

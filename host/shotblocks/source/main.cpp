@@ -1502,6 +1502,12 @@ private:
 			// no visible lag between the clip jumping and the keys following.
 			ApplyKeyframeShiftsFromBody(doc, body);
 
+			// Alt-retime: an edge drag with Alt held rescales the referenced
+			// camera's keyframes around the non-moving edge so the motion
+			// fills the clip's new duration. Same in-block undo + shared-
+			// camera guard as the shift; sibling array in the save payload.
+			ApplyKeyframeRetimesFromBody(doc, body);
+
 			// Free bytes for media orphaned by this edit (e.g. an audio
 			// clip was deleted). Done INSIDE this undo block so the clip-
 			// JSON change and the byte removal are one atomic undo step —
@@ -1992,6 +1998,8 @@ private:
 			m = CURSOR_HAND;
 		else if (body.find("\"mode\":\"zoom\"") != std::string::npos)
 			m = CURSOR_ZOOM;
+		else if (body.find("\"mode\":\"retime\"") != std::string::npos)
+			m = CURSOR_RETIME;
 		_cursorMode.store(m);
 		char b[64];
 		_snprintf_s(b, sizeof(b), _TRUNCATE, "[Shotblocks/v2] set-cursor-mode -> %d", m);
@@ -2547,6 +2555,145 @@ private:
 			Int32 deltaFrames = ParseIntField(obj, "deltaFrames");
 			Int32 refCount    = ParseIntField(obj, "refCount");
 			ApplyKeyframeShift(doc, objectId, deltaFrames, refCount);
+			p = oe + 1;
+		}
+	}
+
+	// Retime (rescale) one clip's referenced camera's keyframes around a
+	// fixed anchor frame, so the same motion fills the clip's new duration
+	// when an EDGE is dragged with Alt held. Sibling of ApplyKeyframeShift
+	// (which OFFSETS for a body move); this one SCALES for an edge retime.
+	// Like the shift, it does NOT open its own undo block — the caller
+	// (HandleSaveState) brackets it inside the SAME StartUndo/EndUndo as
+	// the clip in/out write, so one Ctrl+Z undoes the trim AND the rescale.
+	//
+	// `anchorFrame` is the edge that did NOT move (out-edge drag anchors the
+	// in-point; in-edge drag anchors the out-point). Each key at document
+	// time `f` maps to `anchorFrame + round((f - anchorFrame) * newDur/oldDur)`.
+	// We rescale ALL of the camera's (and tags') keys — the one-camera-per-
+	// clip model, matching the Move feature — not just keys inside the clip
+	// window. Rounded to whole frames (user decision).
+	//
+	// `refCount` shares ApplyKeyframeShift's shared-camera guard: >1 skips,
+	// because rescaling a camera used by another clip would warp that clip's
+	// animation too. Returns keys moved (0 on skip / no-op).
+	Int32 ApplyKeyframeRetime(BaseDocument* doc, Int32 objectId,
+	                          Int32 anchorFrame, Int32 oldDur, Int32 newDur,
+	                          Int32 refCount)
+	{
+		if (!doc || oldDur <= 0 || newDur <= 0 || oldDur == newDur)
+			return 0;
+		if (refCount > 1)
+		{
+			GePrint("[Shotblocks] keyframe retime: camera shared by "_s +
+				maxon::String::IntToString(refCount) +
+				" clips — skipping to avoid corrupting the other clip's animation."_s);
+			return 0;
+		}
+		BaseObject* cam = ResolveCameraForObjectId(doc, objectId);
+		if (!cam)
+			return 0;
+
+		Int32 fps = doc->GetFps();
+		if (fps <= 0)
+			fps = 24;
+
+		Int32 keysMoved = 0;
+		// A key's new whole-frame time, anchored and rescaled. Integer math
+		// (no Float on the wire) keeps the round exact at this boundary.
+		auto remap = [&](Int32 f) -> Int32
+		{
+			Int64 num = (Int64)(f - anchorFrame) * (Int64)newDur;
+			// Round-half-away-from-zero division by oldDur.
+			Int64 q = (num >= 0)
+				? (num + oldDur / 2) / oldDur
+				: -((-num + oldDur / 2) / oldDur);
+			return anchorFrame + (Int32)q;
+		};
+
+		auto retimeTracks = [&](CTrack* head)
+		{
+			for (CTrack* t = head; t; t = t->GetNext())
+			{
+				CCurve* c = t->GetCurve(CCURVE::CURVE, false);
+				if (!c)
+					continue;
+				Int32 n = c->GetKeyCount();
+				// SetTime re-sorts the curve. A monotonic rescale (newDur>0)
+				// preserves key order, so iterate in the safe direction:
+				// expanding (newDur>oldDur) spreads keys APART — move the
+				// farthest-from-anchor first (reverse) so none transiently
+				// crosses a neighbour; compressing pulls them together —
+				// move the nearest first (forward).
+				const bool expanding = newDur > oldDur;
+				if (expanding)
+				{
+					for (Int32 i = n - 1; i >= 0; --i)
+					{
+						CKey* k = c->GetKey(i);
+						if (!k)
+							continue;
+						Int32 f = (Int32)(k->GetTime().GetFrame(fps));
+						k->SetTime(c, BaseTime(remap(f), fps));
+						++keysMoved;
+					}
+				}
+				else
+				{
+					for (Int32 i = 0; i < n; ++i)
+					{
+						CKey* k = c->GetKey(i);
+						if (!k)
+							continue;
+						Int32 f = (Int32)(k->GetTime().GetFrame(fps));
+						k->SetTime(c, BaseTime(remap(f), fps));
+						++keysMoved;
+					}
+				}
+			}
+		};
+
+		// Caller owns the StartUndo/EndUndo; we only register the objects.
+		doc->AddUndo(UNDOTYPE::CHANGE, cam);
+		retimeTracks(cam->GetFirstCTrack());
+		for (BaseTag* tag = cam->GetFirstTag(); tag; tag = tag->GetNext())
+		{
+			doc->AddUndo(UNDOTYPE::CHANGE, tag);
+			retimeTracks(tag->GetFirstCTrack());
+		}
+		cam->SetDirty(DIRTYFLAGS::MATRIX | DIRTYFLAGS::CACHE);
+		return keysMoved;
+	}
+
+	// Parse the optional "keyframeRetimes":[{"objectId":N,"anchorFrame":A,
+	// "oldDur":O,"newDur":W,"refCount":R},...] array and apply each retime.
+	// MUST be called inside the save-state StartUndo/EndUndo block. Mirrors
+	// ApplyKeyframeShiftsFromBody.
+	void ApplyKeyframeRetimesFromBody(BaseDocument* doc, const std::string& body)
+	{
+		auto arr = body.find("\"keyframeRetimes\"");
+		if (arr == std::string::npos)
+			return;
+		auto lb = body.find('[', arr);
+		auto rb = (lb == std::string::npos) ? std::string::npos : body.find(']', lb);
+		if (lb == std::string::npos || rb == std::string::npos)
+			return;
+		std::string::size_type p = lb + 1;
+		while (p < rb)
+		{
+			auto ob = body.find('{', p);
+			if (ob == std::string::npos || ob >= rb)
+				break;
+			auto oe = body.find('}', ob);
+			if (oe == std::string::npos || oe > rb)
+				break;
+			std::string obj = body.substr(ob, oe - ob + 1);
+			Int32 objectId    = ParseIntField(obj, "objectId");
+			Int32 anchorFrame = ParseIntField(obj, "anchorFrame");
+			Int32 oldDur      = ParseIntField(obj, "oldDur");
+			Int32 newDur      = ParseIntField(obj, "newDur");
+			Int32 refCount    = ParseIntField(obj, "refCount");
+			ApplyKeyframeRetime(doc, objectId, anchorFrame, oldDur, newDur, refCount);
 			p = oe + 1;
 		}
 	}
@@ -3334,6 +3481,7 @@ private:
 		CURSOR_HAND       = 8,
 		CURSOR_HAND_GRAB  = 9,
 		CURSOR_ZOOM       = 10,
+		CURSOR_RETIME     = 11,
 	};
 
 	// Load one multi-resolution .cur from <plugin>/web/cursors/.
@@ -3378,13 +3526,15 @@ private:
 		_handCursor      = LoadCursorFile(path, L"hand.cur");
 		_handGrabCursor  = LoadCursorFile(path, L"hand-grab.cur");
 		_zoomCursor      = LoadCursorFile(path, L"zoom.cur");
+		_retimeCursor    = LoadCursorFile(path, L"retime.cur");
 		char b[256];
 		_snprintf_s(b, sizeof(b), _TRUNCATE,
-			"[Shotblocks/v2] cursors loaded: slip=%d razor=%d avsplit=%d roll=%d playrange=%d pen=%d hand=%d handgrab=%d zoom=%d",
+			"[Shotblocks/v2] cursors loaded: slip=%d razor=%d avsplit=%d roll=%d playrange=%d pen=%d hand=%d handgrab=%d zoom=%d retime=%d",
 			_slipCursor ? 1 : 0, _razorCursor ? 1 : 0,
 			_avSplitCursor ? 1 : 0, _rollCursor ? 1 : 0, _playRangeCursor ? 1 : 0,
 			_penCursor ? 1 : 0,
-			_handCursor ? 1 : 0, _handGrabCursor ? 1 : 0, _zoomCursor ? 1 : 0);
+			_handCursor ? 1 : 0, _handGrabCursor ? 1 : 0, _zoomCursor ? 1 : 0,
+			_retimeCursor ? 1 : 0);
 		GePrint(maxon::String(b));
 	}
 
@@ -3403,6 +3553,7 @@ private:
 			case CURSOR_HAND:       return _handCursor;
 			case CURSOR_HAND_GRAB:  return _handGrabCursor;
 			case CURSOR_ZOOM:       return _zoomCursor;
+			case CURSOR_RETIME:     return _retimeCursor;
 			default:                return nullptr;
 		}
 	}
@@ -3507,6 +3658,7 @@ private:
 	HCURSOR              _handCursor{nullptr};
 	HCURSOR              _handGrabCursor{nullptr};
 	HCURSOR              _zoomCursor{nullptr};
+	HCURSOR              _retimeCursor{nullptr};
 	std::atomic<int>     _cursorMode{0};   // CursorMode id; 0 = no override
 	HWND                 _cursorSubclassed{nullptr};
 
