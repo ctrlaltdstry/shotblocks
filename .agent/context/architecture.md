@@ -137,11 +137,11 @@ Orphaned shots persist across save/load — the helper-null JSON stores the came
 
 We deliberately do NOT walk the document by stored name to re-bind a same-named survivor camera. Re-binding by name would silently heal an orphan and erase the user's signal that a delete happened — the orphan visual is the point.
 
-## A single camera in multiple shots
+## One camera per shot
 
-Multiple shots can reference the same source camera, but never at the same frame. The active-shot resolution is always exactly one source camera per frame. Two shots that share a source camera must occupy non-overlapping frame ranges (across *all* tracks — the same-camera-twice rule is global, not per-track). The sequencer enforces this — attempting to drag a shot to overlap another shot of the same source camera triggers the overlap policy below.
+Each shot owns its own source camera — no camera backs more than one shot. The active-shot resolution is therefore trivially one camera per frame. (Historical note: v1 allowed "one camera, two appearances" in non-overlapping ranges, enforced by an overlap policy. v2 retired that: video clips can't be split or razored — the razor/split path is audio-only — so a clip never divides into two clips sharing a camera, and the timeline doesn't offer any other way to point two clips at one camera. The keyframe edit paths (move / retime / delete) keep a defensive `refCount > 1` guard as cheap insurance, but it never fires in practice.)
 
-Per-shot rig state is independent: shot A and shot B can both reference camera C, and each can have its own focal length override, operator personality, framing rule, etc. The shared camera is the source; the per-shot state is the per-appearance configuration.
+Per-shot rig state is independent because each shot has its own camera + tag: focal length override, operator personality, framing rule, etc. are all wholly per-shot.
 
 ## Multi-track timeline
 

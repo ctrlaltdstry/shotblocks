@@ -32,16 +32,16 @@ The Shotblocks tag operates in one of two modes:
 
 - **Replace mode** (default when the camera has no prior animation, or when the user opts in): the procedural pipeline drives the camera entirely. Boom, pan, tilt nulls are computed from presets and behaviors; the camera inherits their transforms. Look-at and framing rules fully replace the camera's rotation.
 
-The mode is a property of the tag (and thus of the camera). All shots referencing a given camera see it in the same mode. If a user wants the same camera in additive mode in one shot and replace mode in another, they duplicate the camera. This keeps the model simple and predictable.
+The mode is a property of the tag (and thus of the camera). Since each shot owns its own camera, mode is effectively per-shot — different shots want different cameras anyway, each with its own tag and mode. This keeps the model simple and predictable.
 
 Without any Shotblocks tag, the camera still works as a shot — Shotblocks plays back its existing animation directly through the shot's frame range. The plugin scales from "sequence cameras I already animated" to "full procedural authoring" and the user picks where they live on that spectrum.
 
 Shot boundaries are hard cuts — the previous shot's camera renders through frame N, the next shot's camera takes over at frame N+1. No interpolation across the boundary, no blending between cameras.
 
-A single camera is never the source of two shots simultaneously. Two shots can reference the same camera in non-overlapping frame ranges (one camera, two appearances) but never at the same frame. The active-shot resolution is always exactly one source camera per frame.
+Each shot owns its own camera — one camera, one shot. (The v2 timeline enforces this: video clips can't be split or razored, so a clip never divides into two clips sharing a camera; the razor/split path is audio-only. The earlier "one camera, two appearances in non-overlapping ranges" model was retired with v2.) The active-shot resolution is always exactly one source camera per frame, trivially, since no camera backs more than one shot. A defensive `refCount > 1` guard remains on the keyframe edit paths (move / retime / delete) as cheap insurance against any future path that might re-share a camera, but in practice it never fires.
 
 ### 3. Each shot owns its rig state (when there is one)
-A shot stores the per-shot configuration of its camera's Shotblocks tag: focal length override, operator personality, damping, target, framing rule, shake profile, autofocus behavior. Two shots that reference the same underlying camera can have different rig states — that's how a single camera can act differently in different shots.
+A shot stores the per-shot configuration of its camera's Shotblocks tag: focal length override, operator personality, damping, target, framing rule, shake profile, autofocus behavior. Each shot has its own camera and tag, so each shot's rig state is wholly its own.
 
 If the camera has no Shotblocks tag, the shot has no rig state to store; the camera plays back its own animation directly. This is a valid configuration, not an error state.
 
