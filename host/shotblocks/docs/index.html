@@ -469,7 +469,10 @@
           <p>Drag a clip's body to slide it. Horizontal drag changes its position in time; drag it up or down to move it to another track. Drag past the outermost track to spawn a new one.</p>
 
           <h3>Trim</h3>
-          <p>Grab a clip's left or right edge and drag to change where that cut lands — the clip gets longer or shorter, the opposite edge stays put. (Audio clips trim against the underlying media: you can only extend as far as there's sound to reveal.)</p>
+          <p>Grab a clip's left or right edge and drag to change where that cut lands — the clip gets longer or shorter, the opposite edge stays put. (Audio clips trim against the underlying media: you can only extend as far as there's sound to reveal.) Trimming a camera shot changes only the clip's window — the camera's keyframes stay exactly where they are, so trimming reveals or hides more of the existing animation rather than stretching it.</p>
+
+          <h3>Retime</h3>
+          <p>Hold <kbd>Alt</kbd>+<kbd>Ctrl</kbd> and drag a camera shot's edge to <strong>retime</strong> it: instead of revealing more animation, the camera's keyframes are rescaled to fit the clip's new length, so the whole move plays faster or slower in the same number of moves. The edge you don't drag stays anchored. One undo reverts both the resize and the rescale together.</p>
 
           <h3>Roll</h3>
           <p>Where two clips meet edge-to-edge, the seam is divided into three zones. Hover near the left clip to trim its right edge; near the right clip to trim its left edge; right in the middle to <strong>roll</strong> — both edges move together, so the cut shifts without leaving a gap. The cursor switches to a roll arrow in the middle zone.</p>
@@ -479,6 +482,23 @@
 
           <h3>Nudging</h3>
           <p>With clips selected, the arrow keys nudge them: <kbd>&larr;</kbd>/<kbd>&rarr;</kbd> by one frame, <kbd>Shift</kbd>+arrow by ten. The bracket keys snap clips to the playhead — see the <a href="#keyboard">Keyboard reference</a>.</p>
+        </section>
+
+        <section class="doc-section" id="keyframe-dots" data-nav-title="Keyframe dots">
+          <h2>Keyframe dots</h2>
+          <p>A camera shot shows its camera's keyframes as small orange marks across the clip — a glance at where the motion happens. Each mark is a <em>column</em>: every keyframe at that frame, across the camera and any of its tags, collapses into one. Keys outside the clip's window aren't drawn, so trimming a shot shorter shows fewer of them.</p>
+          <p>The dots are editable directly from the timeline:</p>
+          <ul>
+            <li><strong>Select</strong> — click a dot to select that column. <kbd>Shift</kbd>-click adds or removes columns from the selection.</li>
+            <li><strong>Marquee</strong> — hold <kbd>Alt</kbd> and drag a box across one or more clips to rubber-band every dot it covers (the box is blue so it reads over the purple shots). <kbd>Shift</kbd>+<kbd>Alt</kbd> adds to the current selection.</li>
+            <li><strong>Move</strong> — drag a selected dot left or right to shift those keyframes to a new frame. The whole selection moves together, snapped to whole frames and kept inside the clip.</li>
+            <li><strong>Delete</strong> — with dots selected, press <kbd>Delete</kbd> to remove those keyframe columns from the camera.</li>
+          </ul>
+          <p>Every dot edit flows through Cinema&nbsp;4D's undo, so <kbd>Ctrl</kbd>+<kbd>Z</kbd> reverts it. To edit individual channels or tangents, use Cinema&nbsp;4D's own dope sheet — the dots are a fast overview and bulk-move tool, not a replacement for it.</p>
+          <div class="tip">
+            <span class="tip__label">Slip vs. move</span>
+            To shift the <em>entire</em> animation at once without selecting every dot, use the <a href="#tools">Slip tool</a> on the shot — it slides all the keyframes together under the fixed clip.
+          </div>
         </section>
 
         <section class="doc-section" id="tools" data-nav-title="The tools">
@@ -491,7 +511,7 @@
             <tr><td><strong>Pen</strong></td><td><kbd>P</kbd></td><td>Draw and edit the volume curve on audio clips. See <a href="#audio-playback">Playback &amp; metering</a>.</td></tr>
             <tr><td><strong>Hand</strong></td><td><kbd>H</kbd></td><td>Drag to pan, same as a middle-drag.</td></tr>
             <tr><td><strong>Zoom</strong></td><td><kbd>Z</kbd></td><td>Drag to zoom, same as Alt+Right-drag.</td></tr>
-            <tr><td><strong>Slip</strong></td><td><kbd>S</kbd></td><td>Drag inside an audio clip to slide the sound under it without moving the clip itself — handy for re-aligning a sound to a beat.</td></tr>
+            <tr><td><strong>Slip</strong></td><td><kbd>S</kbd></td><td>Drag inside a clip to slide its contents under it without moving the clip itself. On an audio clip it slides the sound (handy for re-aligning to a beat); on a camera shot it slides the whole keyframe animation, so you can reposition the move in time in one drag.</td></tr>
           </table>
           <figure class="fig-tools">
             <img src="images/tools.png" alt="The six tools, each shown active in turn" />
@@ -523,10 +543,11 @@
           <ul>
             <li>the edges of other clips, on any track;</li>
             <li>the playhead;</li>
+            <li>camera <a href="#keyframe-dots">keyframe dots</a>, on any visible shot;</li>
             <li>detected beats (when the beat grid is visible);</li>
             <li>markers (when markers are visible).</li>
           </ul>
-          <p>A yellow line appears wherever the clip is snapping. If you prefer snap off by default, leave the toggle off and hold <kbd>Shift</kbd> during a drag to snap just for that move.</p>
+          <p>A yellow line appears wherever the clip is snapping. Dragging the playhead snaps too, so you can park it exactly on a keyframe or a beat. If you prefer snap off by default, leave the toggle off and hold <kbd>Shift</kbd> during a drag to snap just for that move.</p>
           <figure>
             <img src="images/snapping.png" alt="The playhead snapped to a clip edge, with the snap line running through the video shot edge and the seam between two audio clips" />
             <figcaption>Snapping aligns edit points across tracks. Here the snap line runs through the end of the video shot and the seam between two audio clips below it, so the cut lands exactly on the edge.</figcaption>
@@ -717,6 +738,14 @@
             <tr><td><kbd>&larr;</kbd> / <kbd>&rarr;</kbd></td><td>Nudge selection 1 frame (<kbd>Shift</kbd> = 10)</td></tr>
             <tr><td><kbd>[</kbd> / <kbd>]</kbd></td><td>Move selected clip so its start / end lands on the playhead</td></tr>
             <tr><td><kbd>Alt</kbd>+<kbd>[</kbd> / <kbd>Alt</kbd>+<kbd>]</kbd></td><td>Trim selected clip's in / out edge to the playhead</td></tr>
+            <tr><td><kbd>Delete</kbd> / <kbd>Backspace</kbd></td><td>With keyframe dots selected, remove those keyframe columns</td></tr>
+          </table>
+          <p>Some edits are mouse-with-modifier rather than a single key:</p>
+          <table>
+            <tr><th>Gesture</th><th>Action</th></tr>
+            <tr><td><kbd>Shift</kbd>+drag</td><td>Ripple instead of replace (push neighbors aside); also force-enables snap for the drag</td></tr>
+            <tr><td><kbd>Alt</kbd>+<kbd>Ctrl</kbd>+edge-drag</td><td>Retime a camera shot — rescale its keyframes to the new length</td></tr>
+            <tr><td><kbd>Alt</kbd>+drag on a shot</td><td>Marquee-select keyframe dots (<kbd>Shift</kbd>+<kbd>Alt</kbd> = add)</td></tr>
           </table>
 
           <h3>Markers &amp; toggles</h3>
@@ -763,7 +792,8 @@
           <h3>v1.0.0 (beta)</h3>
           <p>The first Shotblocks release: a complete, polished camera-sequencing timeline for Cinema&nbsp;4D&nbsp;2026 on Windows. This beta includes:</p>
           <ul>
-            <li><strong>The timeline</strong> — multi-track shot sequencing with hard cuts; move, trim, roll, ripple, slip; replace/ripple overlap handling; top-track-wins resolution.</li>
+            <li><strong>The timeline</strong> — multi-track shot sequencing with hard cuts; move, trim, roll, ripple, retime, and slip (on audio and camera shots); replace/ripple overlap handling; top-track-wins resolution.</li>
+            <li><strong>Keyframe editing from the timeline</strong> — camera keyframes show as dots on each shot; select, marquee, drag, and delete them, snap edits to them, slip the whole animation, or Alt+Ctrl-drag an edge to retime — all without leaving the timeline.</li>
             <li><strong>Cameras</strong> — drag from the Object Manager or create in place with Add&nbsp;Camera (inherits your viewport view and lens); per-side active chips; selection follows the playhead; orphan detection and relink when a camera is deleted.</li>
             <li><strong>Audio</strong> — drag-in WAV/MP3, zoom-adaptive waveforms, a live stereo dB meter, audio scrubbing, per-track mute/solo, pen-tool volume curves, and automatic beat detection with a snap-to-beat grid.</li>
             <li><strong>Playback &amp; range</strong> — native-transport playback, loop, a draggable play range with I/O hotkeys, markers, and an "audio follows C4D timeline" option.</li>
