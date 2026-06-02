@@ -257,13 +257,18 @@ def _frame_offset_ud_container():
     # treats each pixel of drag as ~millions of units.
     bc[c4d.DESC_UNIT]       = c4d.DESC_UNIT_PERCENT
     bc[c4d.DESC_STEP]       = 0.001
-    # Hard clamp at ±100% = one viewport in either direction. The
-    # joystick drag-area maps to MIN..MAX; without the clamp, raw
-    # pixel drag = millions of units. Hard clamp (not MINSLIDER/
-    # MAXSLIDER soft) because the soft-only path produced a
-    # half-working widget in C4D 2026 — empty dragbox, no scrub.
-    bc[c4d.DESC_MIN]        = c4d.Vector(-1.0, -1.0, 0.0)
-    bc[c4d.DESC_MAX]        = c4d.Vector( 1.0,  1.0, 0.0)
+    # Hard clamp at ±300% = up to three viewports off either edge. The
+    # extra range past ±100% (target at frame edge) lets the user
+    # keyframe a pan that brings the target from well off-screen to
+    # on-screen — animate the offset and the aim swings the subject into
+    # frame. The joystick drag-area maps to MIN..MAX, so the everyday
+    # ±100% framing range occupies the center third of the pad (coarser
+    # drag is the accepted trade for the pan capability); type or
+    # keyframe values for the extreme end. Hard clamp (not MINSLIDER/
+    # MAXSLIDER soft) because the soft-only path produced a half-working
+    # widget in C4D 2026 — empty dragbox, no scrub.
+    bc[c4d.DESC_MIN]        = c4d.Vector(-3.0, -3.0, 0.0)
+    bc[c4d.DESC_MAX]        = c4d.Vector( 3.0,  3.0, 0.0)
     return bc
 
 
@@ -1187,9 +1192,36 @@ def _apply_frame_offset(local_dir, cam, doc, offset_u, offset_v):
     half_h = distance * tan(fov_v * 0.5)
     dx = offset_u * half_w
     dy = offset_v * half_h
-    # World right/up in parent-frozen local space. For an unparented
-    # camera (or a parent that's identity), these are world axes.
-    return c4d.Vector(local_dir.x - dx, local_dir.y - dy, local_dir.z)
+
+    # Screen right/up for THIS aim direction. The earlier version
+    # assumed world X = screen-right and world Y = screen-up, which is
+    # only true when the camera looks straight down -Z. For an off-axis
+    # aim (camera pointed at a target) those world axes are NOT the
+    # screen axes: subtracting dx from local_dir.x then mostly changes
+    # distance-along-view, not horizontal screen position, so the
+    # horizontal offset visually collapsed while the vertical (which
+    # stayed near-perpendicular) survived. Build the screen basis from
+    # the aim instead: right = forward × world-up, up = right × forward.
+    forward = local_dir
+    world_up = c4d.Vector(0.0, 1.0, 0.0)
+    right = forward.Cross(world_up)
+    if right.GetLength() < 1e-6:
+        # Aim is straight up/down — world-up is degenerate as a hint.
+        # Use world +X so the offset still has a stable horizontal axis.
+        right = forward.Cross(c4d.Vector(1.0, 0.0, 0.0))
+    right.Normalize()
+    up = right.Cross(forward)
+    up.Normalize()
+
+    # Move the aim by +right*dx and +up*dy. (Sign matches the old
+    # behaviour: moving the AIM toward the offset puts the target at the
+    # opposite screen fraction, which is the "drag the dot to where the
+    # subject sits" convention _read_frame_offset documents.)
+    return c4d.Vector(
+        forward.x - right.x * dx - up.x * dy,
+        forward.y - right.y * dx - up.y * dy,
+        forward.z - right.z * dx - up.z * dy,
+    )
 
 
 def _camera_fov_radians(cam, doc):
