@@ -1,5 +1,19 @@
 # Plan: selectable / editable keyframe dots
 
+Status: **SHIPPED** (commits `57aa0eb` selection, `4a43e54` delete+shift).
+Built as planned: select → delete → drag-shift, reusing the move/retime
+plumbing; dots are deduped COLUMNS (column-granular edits). Notes: the
+drag-release needed the same echo-hold as the clip-move (hold the dot at
+its new position until the shifted-keys `cameras` echo lands, else it
+flickers back); video clips can no longer share a camera (split is
+audio-only), so the refCount guard never fires but stays as insurance;
+dots keep the default cursor (no custom cursor, per user). Single-select
+only — multi-select / marquee deferred, never requested.
+
+Original plan below (for reference).
+
+---
+
 Status: **designed, not started.** Follow-up to the read-only keyframe
 dots (commit `20adcb2`) and the keyframe move/retime plumbing
 (`9ba7d3b`, `fc963ff`). This makes the dots interactive: click to select,
