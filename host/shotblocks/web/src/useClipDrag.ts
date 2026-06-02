@@ -5,6 +5,7 @@ import { flushKeyframeShifts } from './usePersistence';
 import { DRAG_THRESHOLD_PX, type DragRef } from './hooks/clipDrag/types';
 import { resolveLane } from './hooks/clipDrag/resolveLane';
 import { startSlipDrag } from './hooks/clipDrag/startSlipDrag';
+import { startCameraSlipDrag } from './hooks/clipDrag/startCameraSlipDrag';
 
 /** Pointer-driven body drag on a ShotBlock.
  *
@@ -536,10 +537,20 @@ export function useClipDrag(
       // tool (palette or the `S` hotkey).
       {
         const st = useStore.getState();
-        const slipActive = side === 'audio' && st.activeTool === 'slip';
-        if (slipActive) {
-          startSlipDrag(ev, el!, clip.id, trackId);
-          return;
+        if (st.activeTool === 'slip') {
+          if (side === 'audio') {
+            // Audio: slide the media window under the fixed clip.
+            startSlipDrag(ev, el!, clip.id, trackId);
+            return;
+          }
+          // Video: slide the camera's whole keyframe animation under the
+          // fixed clip window (shift all its keys). startCameraSlipDrag
+          // bails on a camera with no slippable keys, so a no-key clip
+          // falls through to the normal body drag.
+          if (clip.objectId > 0) {
+            startCameraSlipDrag(ev, el!, clip.id);
+            return;
+          }
         }
       }
 

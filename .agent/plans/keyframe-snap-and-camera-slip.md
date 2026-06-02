@@ -54,12 +54,11 @@ edges / playhead / beats / markers already do.
 **Verify:** with Snap on, dragging a clip edge / playhead near a keyframe
 dot pulls to it with a yellow line; Snap off (and no Shift) = no pull.
 
-**Open questions:**
-- Snap to ALL cameras' keys, or just the relevant clip's camera? (Perf:
-  the editPoints array grows; cap or dedupe if a camera has 200 keys.)
-- Should the playhead scrub snap to keyframes too (nice for parking on a
-  key), or only clip edits? Recommend: yes, playhead too — it's the most
-  useful place to land on a key.
+**RESOLVED (2026-06-02, with Mike):**
+- Snap scope: **ALL visible cameras' keys** (every in-view video clip's
+  camera contributes its keys). Dedupe + cap for perf (a camera caps at
+  200 keys already in C++; still dedupe the union across cameras).
+- Playhead scrub: **YES, snaps to keys too** — same gate as clip edits.
 
 ### Part 1b — marquee color: blue, not purple (quick polish)
 
@@ -126,29 +125,48 @@ needed.**
 4. **Cursor:** `useToolCursor.ts` — show the slip cursor over
    `.shot-block.is-video` too (change `.is-audio` gate to `.shot-block`,
    or add a video branch). The slip.cur already exists.
-5. **Clamp (open question):** the user's framing is "clip endpoints = first
-   & last keyframe." Two interpretations:
-   (a) FREE slip — animation can slide anywhere, keys can leave the clip
-       window (like audio slip lets the window move within media). Simple,
-       reuses ApplyKeyframeShift directly.
-   (b) BOUNDED slip — clamp so the first/last key stay pinned to the clip
-       in/out (the animation can't slide past the window). Needs the clip
-       in/out and the key range to compute the clamp.
-   Recommend confirming with the user. (a) is the literal "slip the
-   animation"; (b) matches "endpoints ARE the keys" more strictly but is
-   more constrained. Likely (a) with the clip auto-fitting, OR (b). ASK.
+5. **Clamp — RESOLVED (2026-06-02, with Mike):** bounded by the WINDOW
+   EDGES against the END KEYS (not keys-pinned-to-window). The animation
+   slides within the window viewport and stops when an end-key reaches the
+   matching window edge:
+   - Slip RIGHT (keys later)  → stop when FIRST key hits window LEFT edge.
+   - Slip LEFT  (keys earlier) → stop when LAST  key hits window RIGHT edge.
+   THE clamp (corrected after implementing — a single a,b ordering can't
+   cover all three cases; min/max can):
+     `a = clip.inFrame  - firstKeyFrame`   (first key → clip LEFT edge)
+     `b = clip.outFrame - lastKeyFrame`    (last  key → clip RIGHT edge)
+     `delta = clamp(rawDelta, min(a,b), max(a,b))`
+   - window < anim span → a>0, b<0 → range straddles 0 → real slip range
+     (pick which slice of the longer animation shows).
+   - window == anim span → a==b → range is a point → no-op (the "slip has
+     no purpose" case). NOTE: it's window==span that's the no-op, not
+     window<span — Mike's "smaller → no purpose" was loose phrasing.
+   - window > anim span → a<0, b>0 → range straddles 0 → short animation
+     roams freely between the edges.
+   Bonus: slip is now the one-gesture "shift the whole animation" — no
+   need to marquee-select every dot first.
+   firstKeyFrame/lastKeyFrame come from `cameraKeyTimes.get(objectId)`
+   (already sorted). No new C++ — `ApplyKeyframeShift(delta)` applies it.
+
+   **Dots while slipping (corrected after first build):** the static path
+   only renders in-window keys, but during a slip you must render ALL the
+   camera's keys so out-of-window keys can SLIDE INTO view as the
+   animation moves. So KeyframeTicks switches to an all-keys, absolute-
+   fraction render mode while slipping (and through the echo-hold), drops
+   the edge-anchoring, and the `.keyframe-dots` container gets a
+   `clip-path: inset(-1000px 0)` mask so dots past the clip edges are
+   hidden but their height isn't clipped. `.shot-block` is overflow:visible
+   by design (brackets), so the mask must live on the dots container.
 
 **Verify:** Slip tool active, drag a camera clip body → the keyframe dots
 slide together, clip stays put; on release the camera's animation has
 shifted in time; one Ctrl+Z undoes it; scrub shows the motion moved.
 
-**Open questions:**
-- Free vs bounded slip (above) — the core behavior question. ASK THE USER.
-- Should the clip's in/out auto-snap to the first/last keyframe (so the
-  clip window literally tracks the animation extent)? Or are clip window
-  and keyframe range independent? This determines whether slip is "move
-  keys under a fixed window" or "move the window+keys together minus the
-  ends." ASK.
+**RESOLVED (2026-06-02, with Mike):**
+- Clamp model: window-edge-vs-end-key bounded (see step 5 above).
+- Window auto-fit: NO. Clip window and keyframe range stay INDEPENDENT —
+  the window is just a "which camera is live" label; you size it freely,
+  slip moves keys under it. Window never resizes itself to the keys.
 - refCount guard: never fires (video clips can't share a camera) but keep
   it, like delete/retime.
 

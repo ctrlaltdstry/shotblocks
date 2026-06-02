@@ -92,7 +92,9 @@ export function useToolCursor(): void {
       if (s.activeTool === 'slip') {
         // Slip drag in progress → stay slip unconditionally.
         if (s.slipDragging) return 'slip';
-        return pointerOverRect(x, y, '.shot-block.is-audio') ? 'slip' : 'default';
+        // Slip works on any clip now: audio slips the media window, video
+        // slips the camera's keyframe animation under the fixed window.
+        return pointerOverRect(x, y, '.shot-block') ? 'slip' : 'default';
       }
       if (s.activeTool === 'razor') {
         // Razor cuts any clip — video or audio.

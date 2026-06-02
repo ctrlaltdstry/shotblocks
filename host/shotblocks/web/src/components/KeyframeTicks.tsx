@@ -1,6 +1,7 @@
-import { useRef, useState, type CSSProperties, type PointerEvent as ReactPointerEvent } from 'react';
+import { useEffect, useReducer, useRef, useState, type CSSProperties, type PointerEvent as ReactPointerEvent } from 'react';
 import { useStore, keyColKey, parseKeyCol, type Clip } from '../store';
 import { flushKeyframeColumnShifts } from '../usePersistence';
+import { registerKeyframeSlipRedraw, getKeyframeSlipDelta } from '../lib/keyframeSlipPreview';
 
 // Past this many px of movement, a dot pointer-press becomes a column
 // DRAG (shift the keys) rather than a click (select). Matches the clip
@@ -98,6 +99,31 @@ export function KeyframeTicks({ clip, thin }: { clip: Clip; thin: boolean }) {
     frames: Set<number>; deltaPx: number; keyTimesAtRelease: number[] | undefined;
   } | null>(null);
 
+  // --- Camera slip live preview ---
+  // A camera slip (Slip tool, body drag on this video clip) shifts ALL
+  // this clip's keys together. The drag handler lives in
+  // startCameraSlipDrag and pushes the in-flight delta to the
+  // keyframe-slip-preview module (NOT the store — a per-move store commit
+  // would re-render the clip body and drop the WebView2 cursor). We
+  // register an imperative redraw that just forces THIS component to
+  // re-render (the dots are React spans, not a canvas), then read the
+  // live delta in render and translate every in-window dot by it.
+  const [, forceRender] = useReducer((n: number) => n + 1, 0);
+  useEffect(() => registerKeyframeSlipRedraw(clip.id, forceRender), [clip.id]);
+  const dotsContainerRef = useRef<HTMLDivElement | null>(null);
+  const slipDelta = getKeyframeSlipDelta(clip.id);
+  // Track the last non-zero slip delta so that when the preview clears on
+  // release we can hand off to the echo-hold at the SAME offset until the
+  // shifted-keys echo lands (keyTimes identity change), exactly like the
+  // dot-drag hold. prevSlipDelta is the value seen on the previous render.
+  const prevSlipDelta = useRef<number | null>(null);
+  // True while a slip is live OR its post-release echo-hold is in effect.
+  // In this mode we render EVERY key (not just in-window) so out-of-window
+  // keys can slide into view, and drop the edge-anchoring (keys move with
+  // the slip, they don't pin to the clip edge). The container's clip-path
+  // masks anything past the clip edges. Set in render below.
+  const slipRenderRef = useRef<boolean>(false);
+
   // Snapshot of each in-window dot's fraction-of-clip, captured when a
   // gesture (retime or body-drag) begins and held for its duration. null
   // when no gesture is active.
@@ -178,23 +204,39 @@ export function KeyframeTicks({ clip, thin }: { clip: Clip; thin: boolean }) {
   frozenSince.current = 0;
 
   const clipDuration = Math.max(1, clip.outFrame - clip.inFrame);
-  // Keys inside the clip's window. Keys outside simply don't draw (a clip
-  // trimmed past its keys shows fewer dots — truthful). Each dot carries
-  // its own anchor style so the two boundary cases stay fully contained,
-  // plus its DOCUMENT frame so it can be selected (a dot = the keyframe
-  // column at that frame on this clip's camera).
+  // Slip render mode: live while a camera slip is in progress, and held
+  // through the post-release echo until keyTimes updates (slipRenderRef
+  // stays true across those renders, cleared when the echo lands below).
+  // In slip mode we render EVERY key positioned by absolute frame-fraction
+  // (no window filter, no edge-anchor) so out-of-window keys slide into
+  // view as the animation moves; the container's clip-path masks the
+  // overflow to the clip box.
+  const isSlipRender = (slipDelta !== null) || slipRenderRef.current;
   const dots: { frame: number; style: CSSProperties }[] = [];
-  for (const f of keyTimes) {
-    if (f < clip.inFrame || f > clip.outFrame) continue;
-    if (f === clip.inFrame) {
-      // Flush-left: cancel the centring shift so the dot sits just inside
-      // the left edge instead of straddling it.
-      dots.push({ frame: f, style: { left: 0, transform: 'none' } });
-    } else if (f === clip.outFrame) {
-      // Flush-right: anchor by the right edge, same reason.
-      dots.push({ frame: f, style: { right: 0, left: 'auto', transform: 'none' } });
-    } else {
+  if (isSlipRender) {
+    for (const f of keyTimes) {
+      // Absolute fraction-of-clip; may be <0 or >1 (masked by clip-path).
+      // No edge-anchoring — every dot rides the slip translate uniformly.
       dots.push({ frame: f, style: { left: ((f - clip.inFrame) / clipDuration) * 100 + '%' } });
+    }
+  } else {
+    // Keys inside the clip's window. Keys outside simply don't draw (a clip
+    // trimmed past its keys shows fewer dots — truthful). Each dot carries
+    // its own anchor style so the two boundary cases stay fully contained,
+    // plus its DOCUMENT frame so it can be selected (a dot = the keyframe
+    // column at that frame on this clip's camera).
+    for (const f of keyTimes) {
+      if (f < clip.inFrame || f > clip.outFrame) continue;
+      if (f === clip.inFrame) {
+        // Flush-left: cancel the centring shift so the dot sits just inside
+        // the left edge instead of straddling it.
+        dots.push({ frame: f, style: { left: 0, transform: 'none' } });
+      } else if (f === clip.outFrame) {
+        // Flush-right: anchor by the right edge, same reason.
+        dots.push({ frame: f, style: { right: 0, left: 'auto', transform: 'none' } });
+      } else {
+        dots.push({ frame: f, style: { left: ((f - clip.inFrame) / clipDuration) * 100 + '%' } });
+      }
     }
   }
   if (dots.length === 0) return null;
@@ -321,6 +363,41 @@ export function KeyframeTicks({ clip, thin }: { clip: Clip; thin: boolean }) {
   const dragPx = dotDrag.current && dragFrames.size > 0
     ? dragDeltaFrames * dotDrag.current.pxPerFrame : 0;
 
+  // pxPerFrame from the rendered dots container (== clip content width).
+  // Needed to convert the slip's frame-delta into a px translate and to
+  // capture the post-release hold offset. Falls back to 0 (no translate)
+  // until the ref is attached / measured.
+  const pxPerFrameNow = dotsContainerRef.current
+    ? dotsContainerRef.current.getBoundingClientRect().width / clipDuration
+    : 0;
+
+  // Camera-slip live translate: every dot moves together by the in-flight
+  // slip delta. When the slip ENDS (delta goes non-zero → null), hand off
+  // to the echo-hold so the dots stay put until the shifted-keys echo
+  // lands — same mechanism as the dot-drag hold, but the commit happened
+  // in startCameraSlipDrag, not here. slipRenderRef stays true through the
+  // hold so the all-keys render mode persists until the echo.
+  const slipActive = slipDelta !== null;
+  const slipPx = slipActive ? slipDelta * pxPerFrameNow : 0;
+  if (slipActive) {
+    slipRenderRef.current = true;
+  }
+  if (prevSlipDelta.current !== null && slipDelta === null && prevSlipDelta.current !== 0) {
+    // Slip just released with a real shift: seed the echo-hold at the final
+    // offset (keep the px so it survives a zoom change before the echo).
+    // No frame set — in slip mode EVERY dot is held (see slipHeldPx below).
+    pendingShift.current = {
+      frames: new Set(),
+      deltaPx: prevSlipDelta.current * pxPerFrameNow,
+      keyTimesAtRelease: keyTimes,
+    };
+  } else if (prevSlipDelta.current !== null && slipDelta === null) {
+    // Slip released with a zero net shift (or no real move): no echo will
+    // come, so drop the all-keys render mode immediately.
+    slipRenderRef.current = false;
+  }
+  prevSlipDelta.current = slipDelta;
+
   // Echo-hold: after release, keyTimes still has the dots at their OLD
   // frames until C++'s echo lands. Clear the hold once keyTimes changes
   // identity; until then keep the dragged dots at their new (held)
@@ -330,19 +407,30 @@ export function KeyframeTicks({ clip, thin }: { clip: Clip; thin: boolean }) {
   const heldPx = ps ? ps.deltaPx : 0;
   if (ps && keyTimes !== ps.keyTimesAtRelease) {
     pendingShift.current = null;   // echo arrived; dots are at their real frames
+    slipRenderRef.current = false; // and the slip render mode ends with it
   }
+  // In slip mode every dot translates uniformly: by slipPx live, or heldPx
+  // during the post-release echo-hold.
+  const slipHeldPx = slipActive ? slipPx
+    : (slipRenderRef.current && ps && keyTimes === ps.keyTimesAtRelease) ? heldPx
+    : 0;
 
   return (
-    <div className="keyframe-dots">
+    <div className="keyframe-dots" ref={dotsContainerRef}>
       {dots.map(({ frame, style }) => {
         // Overlay a translateX on dots being dragged (live) OR held
         // post-release until the echo lands. The base style's transform
         // handles centring (translate(-50%)) for interior dots / 'none'
         // for edge dots — compose the px offset after it so both apply.
+        // A camera slip translates EVERY dot by slipHeldPx.
         const isDragged = dragFrames.has(frame);
         const isHeld = !!heldFrames && heldFrames.has(frame);
-        const px = isDragged ? dragPx : isHeld ? heldPx : 0;
-        const composed: CSSProperties = (isDragged || isHeld)
+        // In slip render mode every dot translates by slipHeldPx; otherwise
+        // only the dragged / held columns move.
+        const inSlip = slipRenderRef.current || slipActive;
+        const translated = inSlip || isDragged || isHeld;
+        const px = inSlip ? slipHeldPx : isDragged ? dragPx : isHeld ? heldPx : 0;
+        const composed: CSSProperties = translated
           ? {
               ...style,
               transform:
@@ -356,7 +444,7 @@ export function KeyframeTicks({ clip, thin }: { clip: Clip; thin: boolean }) {
             key={frame}
             className={'keyframe-dot is-interactive'
               + (selectedFramesSet.has(frame) || isDragged || isHeld ? ' is-selected' : '')
-              + (isDragged || isHeld ? ' is-dragging' : '')}
+              + (translated ? ' is-dragging' : '')}
             style={composed}
             data-kf-obj={clip.objectId}
             data-kf-frame={frame}

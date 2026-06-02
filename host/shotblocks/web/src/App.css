@@ -916,15 +916,22 @@ body.is-resizing-headers .body { transition: none; }
     url("data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAACAAAAAgCAYAAABzenr0AAACZUlEQVR4nO1Vz6tSQRg9Z2ZUEEylwkU+ELIycGEgZBHUMoh4PmrTKto9yEWhbSLQf6E2tWjRsuJBEO2FCFy6qGhRSkHQJvqBkUHQ5CfjYxDB63UTcQ9cGO5858yZ7/tmBogQIUKEfw3WWpC8AeA3gD6A7BpySQBvRIvk9Xa7zSCkBICXvV7PlstlS/J02NVJnhEN0QLwOpfLxZeSjDEZAIN+v28rlYoY2BQtL6QGoLiAKv/K/vqTDG6KhmgBeAcgHcT4vIG6E5NSPMjn8yL2NZvNmhkhnU7L+LObu+9ihbPlGRg47aUQ8nBmQCklBs4bYz42Gg07Go1EzGqt93scGdvxeGy3t7dl/hOASyTXNwDgValUmtZxBlkMwFEnmHHj3flut2uFI1zfgDEmUEPvGqhWq7bVak135iOTySz8fAin3W7bWq0WKgPTHvB3HRai4WVgtRKI+06nEzoDzWZzmsXQBlwPfJd6Sl39HiC5Q/IRgIeT47fj94Ds2vXAt7A9MPAMyCIvAPySDpeduSY8oZQqGmMOKqVOyj85IXJSjDFjAM8BPJ4zsDwDzuXQuwcuAzgL4B6A9+6s/1BKHfBoMv7p5j6QlNhzk/GVlQ0syMBWKpWKKaUOTVJ6DcBTkre11vs8jtwDdwA8I3kVgMTGANRXLoFzOfTegtlNKN8ekhWt9WEAesYpFotGa32E5LFYLJby4uveW/A2aAbSrqn+APhC8vjcWxAUJHlKrmin9SToWxAnecHV/OZcrVeC494CcJfkRdEOyk0qpTYA7C0UCiqsAfGQSCSkVzbi8XhyDZ0IEf5j/AWLOMMulgeZ/gAAAABJRU5ErkJggg==") 16 16,
     ew-resize;
 }
-/* Slip cursor is set on the LANE (data-side=audio), not the
-   shot-block. The shot-block + its waveform canvas re-render on every
-   slipClip commit during a slip drag; WebView2 loses cursor tracking
-   when the element it latched onto re-renders mid-gesture. The .lane
-   element is stable through a slip (never re-renders), so anchoring
-   the cursor there keeps WebView2's cursor target fixed. `* `
-   propagates it to the shot-block / content / canvas children. */
+/* Slip cursor is set on the LANE, not the shot-block. The shot-block +
+   its waveform canvas re-render on every slipClip commit during a slip
+   drag; WebView2 loses cursor tracking when the element it latched onto
+   re-renders mid-gesture. The .lane element is stable through a slip
+   (never re-renders), so anchoring the cursor there keeps WebView2's
+   cursor target fixed. `* ` propagates it to the children.
+
+   Both sides now: audio slips the media window, video slips the camera's
+   keyframe animation. This CSS layer MUST agree with the C++ cursor layer
+   (useToolCursor sends 'slip' over any .shot-block) — when the two writers
+   disagree (CSS default vs C++ slip), the cursor flickers on hover. So the
+   selector covers both data-side values, matching the C++ side. */
 .lanes-area.is-tool-slip .lane[data-side="audio"],
-.lanes-area.is-tool-slip .lane[data-side="audio"] * {
+.lanes-area.is-tool-slip .lane[data-side="audio"] *,
+.lanes-area.is-tool-slip .lane[data-side="video"],
+.lanes-area.is-tool-slip .lane[data-side="video"] * {
   cursor: var(--slip-cursor);
 }
 
@@ -1133,6 +1140,14 @@ body.is-hand-panning * {
   height: 0;
   pointer-events: none;
   z-index: 5;
+  /* Mask dots to the clip width WITHOUT clipping their height. During a
+     camera slip the dots translate horizontally and out-of-window keys
+     slide in/out past the clip edges; this clip-path hides anything past
+     the left/right edges (the clip box) while leaving top/bottom free so
+     the 6px dot + its selected ring still show. Negative top/bottom insets
+     expand the clip region far past the dots vertically; 0 left/right
+     clips exactly to the box (clip) edges. */
+  clip-path: inset(-1000px 0 -1000px 0);
 }
 .keyframe-dot {
   position: absolute;
