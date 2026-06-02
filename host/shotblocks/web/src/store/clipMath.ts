@@ -31,6 +31,13 @@ export interface TracksStateLike {
   audioTracks: Track[];
 }
 
+/** Subset of State `cameraKeyframeSnapFrames` needs — the video tracks
+ *  (to know which cameras are in play) and the per-camera key times. */
+export interface CameraKeysStateLike {
+  videoTracks: Track[];
+  cameraKeyTimes: Map<number, number[]>;
+}
+
 const MIN_GAP_FRAMES = 0;
 
 /** Place a new clip on the timeline without overlapping existing clips.
@@ -318,6 +325,27 @@ export function audioPeakDocFrames(state: AudioLinesStateLike): number[] {
     }
   }
   return out;
+}
+
+/** Union of every video clip's camera keyframe times (DOC frames),
+ *  deduped, as extra magnetic-snap edit points. Mirrors the
+ *  "everything snaps to everything" spirit of clip-edge snapping: a
+ *  clip edge / the playhead can latch onto ANY visible camera's
+ *  keyframe dot, not just its own. Deduped because multiple clips can
+ *  share one camera (and each camera's keys are already capped at 200
+ *  in C++ `GatherKeyTimes`). Used as extra editPoints by body / trim /
+ *  roll / playhead drags, behind the same snap gate as beats/markers. */
+export function cameraKeyframeSnapFrames(state: CameraKeysStateLike): number[] {
+  const seen = new Set<number>();
+  for (const t of state.videoTracks) {
+    for (const c of t.clips) {
+      if (c.objectId <= 0) continue;
+      const keys = state.cameraKeyTimes.get(c.objectId);
+      if (!keys) continue;
+      for (const f of keys) seen.add(f);
+    }
+  }
+  return Array.from(seen);
 }
 
 /** Like `audioPeakDocFrames`, but tags each beat as a BAR downbeat

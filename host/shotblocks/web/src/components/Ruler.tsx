@@ -1,5 +1,5 @@
 import { useRef, type CSSProperties } from 'react';
-import { useStore, magneticSnap, audioPeakDocFrames, SNAP_PIXEL_RADIUS } from '../store';
+import { useStore, magneticSnap, audioPeakDocFrames, cameraKeyframeSnapFrames, SNAP_PIXEL_RADIUS } from '../store';
 import { useElementSize } from '../useElementSize';
 import { computeRulerLayout } from '../lib/ruler';
 import { send, seekToHost } from '../lib/host';
@@ -79,6 +79,9 @@ export function Ruler() {
     if (s.markersVisible) {
       for (const f of s.markers) editPoints.push(f);
     }
+    // Park the playhead on any visible camera's keyframe dots too
+    // (deduped) — most useful place to land exactly on a key.
+    for (const f of cameraKeyframeSnapFrames(s)) editPoints.push(f);
     const snapFrames = Math.max(1, SNAP_PIXEL_RADIUS / Math.max(0.0001, pxPerFrame));
     // duration=0 → snap the single playhead frame directly to the
     // nearest edit point, no "other edge" to also align.

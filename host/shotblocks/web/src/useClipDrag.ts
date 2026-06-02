@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useRef, type PointerEventHandler, type RefObject } from 'react';
 import { gsap } from 'gsap';
-import { useStore, magneticSnap, audioPeakDocFrames, isTrackLocked, SNAP_PIXEL_RADIUS, clipEdgeZonePx, type Clip } from './store';
+import { useStore, magneticSnap, audioPeakDocFrames, cameraKeyframeSnapFrames, isTrackLocked, SNAP_PIXEL_RADIUS, clipEdgeZonePx, type Clip } from './store';
 import { flushKeyframeShifts } from './usePersistence';
 import { DRAG_THRESHOLD_PX, type DragRef } from './hooks/clipDrag/types';
 import { resolveLane } from './hooks/clipDrag/resolveLane';
@@ -276,6 +276,10 @@ export function useClipDrag(
       if (state.markersVisible) {
         for (const f of state.markers) editPoints.push(f);
       }
+      // Camera keyframe dots are magnet targets too — any visible
+      // camera's keys, deduped. Always on (the dots are always drawn),
+      // gated only by the snap toggle below like clip edges.
+      for (const f of cameraKeyframeSnapFrames(state)) editPoints.push(f);
       // Snap gating (Premiere model): snap is active when the Snap
       // toggle is on, OR while Shift is held — Shift temporarily
       // force-enables snap for this drag even with the toggle off.

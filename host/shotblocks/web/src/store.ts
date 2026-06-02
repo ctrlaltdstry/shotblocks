@@ -63,6 +63,7 @@ export {
   rippleAround,
   replaceOverlap,
   audioPeakDocFrames,
+  cameraKeyframeSnapFrames,
   audioBeatLines,
   audioSongPartLines,
   keyColKey,

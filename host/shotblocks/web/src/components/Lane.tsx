@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from 'react';
-import { useStore, magneticSnap, audioPeakDocFrames, SNAP_PIXEL_RADIUS, clipEdgeZonePx } from '../store';
+import { useStore, magneticSnap, audioPeakDocFrames, cameraKeyframeSnapFrames, SNAP_PIXEL_RADIUS, clipEdgeZonePx } from '../store';
 import type { Track, Clip } from '../store';
 import { flushKeyframeRetimes } from '../usePersistence';
 import { ShotBlock } from './ShotBlock';
@@ -362,6 +362,9 @@ export function Lane({ track, side }: { track: Track; side: 'video' | 'audio' })
     if (state.markersVisible) {
       for (const f of state.markers) editPoints.push(f);
     }
+    // Camera keyframe dots are magnet targets too (any visible camera's
+    // keys, deduped) — same as clip edges, gated only by snap below.
+    for (const f of cameraKeyframeSnapFrames(state)) editPoints.push(f);
     // Snap gating (Premiere model): active when the Snap toggle is on
     // OR Shift is held — Shift force-enables snap for this trim even
     // with the toggle off. snapFrames=0 short-circuits magneticSnap.
@@ -467,6 +470,9 @@ export function Lane({ track, side }: { track: Track; side: 'video' | 'audio' })
     if (state.markersVisible) {
       for (const f of state.markers) editPoints.push(f);
     }
+    // Camera keyframe dots are magnet targets too (any visible camera's
+    // keys, deduped) — same as clip edges, gated only by snap below.
+    for (const f of cameraKeyframeSnapFrames(state)) editPoints.push(f);
     // Same gating as trim (Premiere model) — snap active when the Snap
     // toggle is on OR Shift is held. Roll has no ripple mode.
     const snapActive = state.snapEnabled || ev.shiftKey;
