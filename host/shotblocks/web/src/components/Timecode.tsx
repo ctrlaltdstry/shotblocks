@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from 'react';
 import { useStore } from '../store';
-import { send } from '../lib/host';
+import { send, seekToHost } from '../lib/host';
 
 function pad2(n: number): string { return (n < 10 ? '0' : '') + n; }
 
@@ -68,7 +68,7 @@ export function Timecode() {
       useStore.getState().setScrubFrame(f);
       if (f !== drag.current.lastSent) {
         drag.current.lastSent = f;
-        send({ kind: 'seek', frame: f }).catch(() => {});
+        seekToHost(f);   // coalesced — at most one seek in flight (see host.ts)
       }
 
       // Edge wrap: if the cursor reached either screen edge, teleport it

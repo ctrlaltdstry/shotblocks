@@ -1276,45 +1276,7 @@ private:
 		}
 		if (body.find("\"kind\":\"seek\"") != std::string::npos)
 		{
-			// Scrub from JS. Body shape: {"kind":"seek","frame":<int>}.
-			// Pull the integer after `"frame":`. Naive parse is enough for
-			// the one numeric field; replace with a real JSON parser when
-			// the message vocabulary grows beyond a handful of commands.
-			Int32 frame = 0;
-			auto pos = body.find("\"frame\"");
-			if (pos != std::string::npos)
-			{
-				pos = body.find(':', pos);
-				if (pos != std::string::npos)
-				{
-					++pos;
-					while (pos < body.size() && (body[pos] == ' ' || body[pos] == '\t'))
-						++pos;
-					frame = (Int32)std::strtol(body.c_str() + pos, nullptr, 10);
-				}
-			}
-			BaseDocument* doc = GetActiveDocument();
-			if (doc)
-			{
-				Int32 fps = doc->GetFps();
-				BaseTime minT = doc->GetMinTime();
-				BaseTime maxT = doc->GetMaxTime();
-				Int32 minFrame = minT.GetFrame(fps);
-				Int32 maxFrame = maxT.GetFrame(fps);
-				if (frame < 0)
-					frame = 0;
-				Int32 absFrame = minFrame + frame;
-				if (absFrame < minFrame)
-					absFrame = minFrame;
-				if (absFrame > maxFrame)
-					absFrame = maxFrame;
-				// SetDocumentTime is transport-aware (cooperates with a
-				// running RunAnimation) where raw SetTime is not.
-				SetDocumentTime(doc, BaseTime(absFrame, fps));
-				// EVMSG_TIMECHANGED triggers the viewport + timeline + our
-				// own PostTick via CoreMessage, keeping every UI in sync.
-				EventAdd();
-			}
+			HandleSeek(body);
 			return "{\"ok\":true,\"kind\":\"seek-ack\"}";
 		}
 		if (body.find("\"kind\":\"scrub-begin\"") != std::string::npos)
@@ -2023,6 +1985,53 @@ private:
 				::KillTimer(_cursorSubclassed, kCursorTimerId);
 			}
 		}
+	}
+
+	// Handler for `seek` — scrub from JS. Body: {"kind":"seek","frame":N}
+	// (frame is doc-relative, 0-based). Sets the document time and
+	// synchronously evaluates the animation pass so a keyframed camera
+	// tracks the scrub. Extracted from Dispatch to stay under the
+	// sourceprocessor's 600-line function cap.
+	void HandleSeek(const std::string& body)
+	{
+		Int32 frame = ParseIntField(body, "frame");
+		BaseDocument* doc = GetActiveDocument();
+		if (!doc)
+			return;
+		Int32 fps = doc->GetFps();
+		Int32 minFrame = doc->GetMinTime().GetFrame(fps);
+		Int32 maxFrame = doc->GetMaxTime().GetFrame(fps);
+		if (frame < 0)
+			frame = 0;
+		Int32 absFrame = minFrame + frame;
+		if (absFrame < minFrame)
+			absFrame = minFrame;
+		if (absFrame > maxFrame)
+			absFrame = maxFrame;
+		// SetDocumentTime is transport-aware (cooperates with a running
+		// RunAnimation) where raw SetTime is not.
+		SetDocumentTime(doc, BaseTime(absFrame, fps));
+		// Refresh the rest of the UI (timeline, managers) — async is fine
+		// for those. The viewport itself we paint synchronously below; an
+		// async ANIMATE event would COALESCE (the instrumentation proved
+		// C++ gets every frame contiguously on a slow drag, yet the viewport
+		// skipped — the burst of async redraws collapses to one paint at the
+		// last frame).
+		EventAdd();
+		// Synchronous animate-and-paint of the active view, so EACH scrub
+		// frame draws. DrawViews (without NO_ANIMATION) prepares the scene —
+		// runs the animation pass — then paints, all in this one blocking
+		// call, so the new pose IS evaluated before the pixels go down (an
+		// async EventAdd(EVENT::ANIMATE) + DrawViews would draw the stale
+		// pose, since the queued animate hasn't run yet).
+		//
+		// INDRAG = the interactive-drag semantics C4D's OWN scrub uses;
+		// ONLY_ACTIVE_VIEW keeps it cheap. This is NOT the failed
+		// ExecutePasses(animation=true) attempt: that flipped
+		// CheckIsRunning(ANIMATIONRUNNING) true, so scrub-begin's transport
+		// check mis-fired and scrub-end kicked off playback. DrawViews sets
+		// VIEWDRAWING, not ANIMATIONRUNNING, so it never trips that path.
+		DrawViews(DRAWFLAGS::ONLY_ACTIVE_VIEW | DRAWFLAGS::NO_THREAD | DRAWFLAGS::INDRAG);
 	}
 
 	// Handler for `set-doc-frames` — grow (or set) the document length.

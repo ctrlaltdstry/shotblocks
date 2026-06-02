@@ -2,7 +2,7 @@ import { useRef, type CSSProperties } from 'react';
 import { useStore, magneticSnap, audioPeakDocFrames, SNAP_PIXEL_RADIUS } from '../store';
 import { useElementSize } from '../useElementSize';
 import { computeRulerLayout } from '../lib/ruler';
-import { send } from '../lib/host';
+import { send, seekToHost } from '../lib/host';
 import playheadHandleUrl from '../icons/playhead-handle.svg';
 import markerUrl from '../icons/marker.svg';
 import { RangeBar } from './RangeBar';
@@ -94,7 +94,10 @@ export function Ruler() {
     setScrubFrame(f);
     if (f === drag.current.lastSent) return;
     drag.current.lastSent = f;
-    send({ kind: 'seek', frame: f }).catch(() => {});
+    // Coalesced seek: at most one request in flight, latest frame wins.
+    // A per-pointermove fetch flooded the browser's connection pool and
+    // C4D ran frames behind (see seekToHost).
+    seekToHost(f);
     ev.preventDefault();
   }
   function onPointerDown(ev: React.PointerEvent<HTMLDivElement>) {

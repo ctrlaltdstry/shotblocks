@@ -170,6 +170,39 @@ export function send(obj: HostOutbound): Promise<unknown> {
   });
 }
 
+// Scrub seek with IN-FLIGHT COALESCING. A scrub fires a seek per pointer-
+// move; each seek round-trips to C++ where it does a synchronous DrawViews
+// (slow). Firing a fetch per move floods the browser's per-origin
+// connection pool — the requests QUEUE IN CHROMIUM, each carrying a now-
+// stale frame, and C++ drains them one-at-a-time (the [SB/drain] log showed
+// queueAfter=0 always: C++ was starved, the backlog lived in the browser).
+// The viewport + C4D timeline then ran frames behind and "caught up" on
+// release as the queue flushed.
+//
+// Fix: keep at most ONE seek in flight. While one is pending, just record
+// the latest target frame; when it resolves, fire the newest pending frame
+// (if it changed). A fast drag collapses to "send current → await → send
+// newest", never a backlog — always the current cursor position. Standard
+// scrub-over-a-request-channel pattern.
+let seekInFlight = false;
+let seekPending: number | null = null;
+function pumpSeek(): void {
+  if (seekInFlight || seekPending === null) return;
+  const frame = seekPending;
+  seekPending = null;
+  seekInFlight = true;
+  send({ kind: 'seek', frame })
+    .catch(() => {})
+    .then(() => { seekInFlight = false; pumpSeek(); });
+}
+/** Seek to `frame`, coalescing so only one request is in flight at a time
+ *  and the latest target always wins. Use for scrub/playhead drags instead
+ *  of send({kind:'seek'}) directly. */
+export function seekToHost(frame: number): void {
+  seekPending = frame;
+  pumpSeek();
+}
+
 /** Subscribe to inbound messages. Returns an unsubscribe function. */
 export function onMessage(fn: Listener): () => void {
   listeners.add(fn);
