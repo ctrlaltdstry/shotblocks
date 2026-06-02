@@ -34,11 +34,17 @@ export interface TimelineSlice {
    *  drops from C++'s _cameraLinks); ShotBlock falls back to the
    *  clip's persisted sourceName in that case. */
   cameraNames: Map<number, string>;
-  /** Update both the orphan set AND the name map from a C++
+  /** Camera keyframe DOCUMENT frames keyed by objectId, from the same
+   *  C++ `cameras` push. Drives the read-only keyframe-tick strip on
+   *  each video clip (ShotBlock clips these to its in/out window).
+   *  Deduped + sorted + capped C++-side. Absent id = no keys / orphan.
+   *  Never persisted. */
+  cameraKeyTimes: Map<number, number[]>;
+  /** Update the orphan set, name map, AND keyframe-time map from a C++
    *  `cameras` push. `statuses` is the full snapshot for every
    *  objectId in C++'s _cameraLinks; ids absent from the snapshot
-   *  drop out of both maps. */
-  setCameraStatuses: (statuses: { id: number; alive: boolean; name: string }[]) => void;
+   *  drop out of all three maps. */
+  setCameraStatuses: (statuses: { id: number; alive: boolean; name: string; keyTimes?: number[] }[]) => void;
 
   /** Audio media that couldn't be resolved — bytes missing from the
    *  C++ helper or the stored bytes failed to decode. An audio clip
@@ -130,6 +136,7 @@ export const createTimelineSlice: StateCreator<State, [], [], TimelineSlice> = (
 
   orphanObjectIds: new Set<number>(),
   cameraNames: new Map<number, string>(),
+  cameraKeyTimes: new Map<number, number[]>(),
   orphanMediaIds: new Set<number>(),
   setAudioMediaOrphan: (mediaId, orphan) => set((s) => {
     const has = s.orphanMediaIds.has(mediaId);
@@ -141,12 +148,16 @@ export const createTimelineSlice: StateCreator<State, [], [], TimelineSlice> = (
   setCameraStatuses: (statuses) => set((s) => {
     const nextOrphans = new Set<number>();
     const nextNames = new Map<number, string>();
+    const nextKeyTimes = new Map<number, number[]>();
     for (const st of statuses) {
       if (!st.alive) nextOrphans.add(st.id);
       // Only carry names for live cameras — deleted cameras' names
       // are stale, but we've already persisted them to clip.sourceName
       // below so the fallback still shows the most recent name.
       else nextNames.set(st.id, st.name);
+      // Keyframe ticks: carry for any camera that reports keys (live or
+      // not — an orphan clip with the last-known keys still draws them).
+      if (st.keyTimes && st.keyTimes.length > 0) nextKeyTimes.set(st.id, st.keyTimes);
     }
     // Reference-equality skip on BOTH dimensions. EVMSG_CHANGE
     // ticks during scrub / drag can fire dozens per second — most
@@ -159,6 +170,20 @@ export const createTimelineSlice: StateCreator<State, [], [], TimelineSlice> = (
     let namesSame = nextNames.size === s.cameraNames.size;
     if (namesSame) {
       for (const [id, name] of nextNames) if (s.cameraNames.get(id) !== name) { namesSame = false; break; }
+    }
+    // Same ref-equality skip for keyTimes (frame arrays compared by
+    // length + element). EVMSG_CHANGE fires on every key edit, so a real
+    // keyframe change DOES need to wake the affected ShotBlock — but a
+    // stable tick must not. Compared element-wise since the arrays are
+    // sorted + deduped C++-side (positional equality is exact).
+    let keysSame = nextKeyTimes.size === s.cameraKeyTimes.size;
+    if (keysSame) {
+      for (const [id, arr] of nextKeyTimes) {
+        const prev = s.cameraKeyTimes.get(id);
+        if (!prev || prev.length !== arr.length) { keysSame = false; break; }
+        for (let i = 0; i < arr.length; i++) if (prev[i] !== arr[i]) { keysSame = false; break; }
+        if (!keysSame) break;
+      }
     }
 
     // Mirror live names into clip.sourceName so a later camera
@@ -183,10 +208,11 @@ export const createTimelineSlice: StateCreator<State, [], [], TimelineSlice> = (
       if (mutated) videoTracks = next;
     }
 
-    if (orphansSame && namesSame && videoTracks === s.videoTracks) return s;
+    if (orphansSame && namesSame && keysSame && videoTracks === s.videoTracks) return s;
     return {
       orphanObjectIds: orphansSame ? s.orphanObjectIds : nextOrphans,
       cameraNames: namesSame ? s.cameraNames : nextNames,
+      cameraKeyTimes: keysSame ? s.cameraKeyTimes : nextKeyTimes,
       videoTracks,
     };
   }),

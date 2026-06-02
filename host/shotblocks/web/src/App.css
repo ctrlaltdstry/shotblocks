@@ -1118,6 +1118,30 @@ body.is-hand-panning * {
   width: 9px;
   height: 9px;
 }
+
+/* Read-only keyframe dots — a CHILD layer of a video .shot-block (so
+   they ride the clip's transform during a drag). One semi-transparent
+   black dot per keyframe frame, sitting on the clip's bottom edge,
+   positioned by `left:%`. Purely informational (no hit-testing) — shows
+   where the camera has keyframes. Same dot treatment as the audio
+   beat-dots: black at 50% darkens the clip's OWN colour, no new hue, no
+   stroke. `.keyframe-dots` is a zero-height anchor on the bottom edge. */
+.keyframe-dots {
+  position: absolute;
+  left: 0; right: 0; bottom: 0;
+  height: 0;
+  pointer-events: none;
+  z-index: 5;
+}
+.keyframe-dot {
+  position: absolute;
+  bottom: 0;
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: rgba(0, 0, 0, 0.5);
+  transform: translate(-50%, 0);
+}
 .lane {
   flex: 0 0 var(--track-h);
   /* Lanes are an invisible LAYOUT + hit-testing structure only — no

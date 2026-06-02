@@ -32,6 +32,11 @@ export interface CameraStatus {
   id: number;
   alive: boolean;
   name: string;
+  // Deduped, sorted DOCUMENT frames where this camera (or any of its
+  // tags) has a keyframe. Drives the read-only keyframe-tick strip on
+  // the clip. Capped C++-side (~200); absent on older payloads. Same
+  // frame origin as clip in/out, so the renderer clips to the window.
+  keyTimes?: number[];
 }
 
 export type HostInbound =

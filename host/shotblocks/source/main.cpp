@@ -3399,6 +3399,42 @@ private:
 	// keep clip labels in sync with OM renames. Called from
 	// EVMSG_CHANGE so any OM mutation triggers a refresh, and from the
 	// ping handshake so JS gets the initial snapshot on connect.
+	// Cap on keyTimes per camera. The timeline strip is read-only and a
+	// few px tall; past ~200 deduped frames the ticks are a solid bar
+	// anyway, so collecting more just bloats the cameras payload (pushed
+	// on every EVMSG_CHANGE). We sample the first N after dedup+sort.
+	static const Int32 kMaxKeyTimes = 200;
+
+	// Collect the distinct DOCUMENT frames at which `op` (a camera) or any
+	// of its tags has a keyframe, across every CTrack curve. A std::set
+	// keeps them deduped + sorted ascending for free, so 6 params keyed at
+	// the same frame collapse to one. Used to paint the read-only keyframe-
+	// tick strip on the clip. Frames share the clip in/out origin (doc
+	// frames), so JS just clips them to each clip's [inFrame, outFrame).
+	void GatherKeyTimes(BaseObject* op, Int32 fps, std::set<Int32>& out)
+	{
+		auto walk = [&](CTrack* head)
+		{
+			for (CTrack* t = head; t; t = t->GetNext())
+			{
+				CCurve* c = t->GetCurve(CCURVE::CURVE, false);
+				if (!c)
+					continue;
+				Int32 n = c->GetKeyCount();
+				for (Int32 i = 0; i < n; ++i)
+				{
+					CKey* k = c->GetKey(i);
+					if (!k)
+						continue;
+					out.insert((Int32)(k->GetTime().GetFrame(fps)));
+				}
+			}
+		};
+		walk(op->GetFirstCTrack());
+		for (BaseTag* tag = op->GetFirstTag(); tag; tag = tag->GetNext())
+			walk(tag->GetFirstCTrack());
+	}
+
 	void PostCameras()
 	{
 		if (!_htmlView || !_navigated)
@@ -3406,6 +3442,9 @@ private:
 		BaseDocument* doc = GetActiveDocument();
 		if (!doc)
 			return;
+		Int32 fps = doc->GetFps();
+		if (fps <= 0)
+			fps = 24;
 		maxon::String items("["_s);
 		Bool first = true;
 		for (auto& kv : _cameraLinks)
@@ -3443,7 +3482,27 @@ private:
 				}
 				items += maxon::String(esc.c_str());
 			}
-			items += "\"}"_s;
+			items += "\","_s;
+			// keyTimes: deduped+sorted doc frames for the clip's read-only
+			// keyframe-tick strip (one tick per frame, capped). Empty for
+			// orphans (no live camera).
+			items += "\"keyTimes\":["_s;
+			if (op)
+			{
+				std::set<Int32> frames;
+				GatherKeyTimes(op, fps, frames);
+				Int32 emitted = 0;
+				for (Int32 f : frames)
+				{
+					if (emitted >= kMaxKeyTimes)
+						break;
+					if (emitted > 0)
+						items += ","_s;
+					items += maxon::String::IntToString(f);
+					++emitted;
+				}
+			}
+			items += "]}"_s;
 		}
 		items += "]"_s;
 		maxon::String payload = "{\"kind\":\"cameras\",\"items\":"_s + items + "}"_s;

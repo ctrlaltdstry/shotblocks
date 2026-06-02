@@ -4,6 +4,7 @@ import { useClipDrag } from '../useClipDrag';
 import { WaveformCanvas } from './WaveformCanvas';
 import { LevelCurve } from './LevelCurve';
 import { BeatDots } from './BeatDots';
+import { KeyframeTicks } from './KeyframeTicks';
 
 /** Shot block (a clip rendered inside a Lane). Visual matrix per
  *  Figma node 173:1827: state × type × height.
@@ -219,6 +220,11 @@ export function ShotBlock({
           the clip's transform during a drag (no lag, no z-order
           glitch) and travel between tracks with it. */}
       {side === 'audio' && beatGridVisible && <BeatDots clip={clip} />}
+      {/* Read-only keyframe ticks for video clips — a thin strip along
+          the clip's bottom showing where the camera has keyframes. Also
+          a clip child so it rides the drag transform. Hidden on thin
+          clips and on clips whose camera has no keys in view. */}
+      {side === 'video' && <KeyframeTicks clip={clip} thin={thin} />}
       {/* Edge-hover brackets — always in the DOM at opacity 0; fade
           in via .is-edge-left / .is-edge-right on parent. Yellow
           three-sided rounded rectangles per Figma node 193:1166. */}

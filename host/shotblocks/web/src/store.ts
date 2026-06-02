@@ -227,6 +227,12 @@ export interface State {
   // in the map (camera deleted -> we keep the last persisted name).
   cameraNames: Map<number, string>;
 
+  // Camera keyframe DOCUMENT frames keyed by objectId — drives the
+  // read-only keyframe-tick strip on each video clip. Shipped alongside
+  // the orphan set / names on every EVMSG_CHANGE; deduped+sorted+capped
+  // C++-side. ShotBlock clips these to its in/out window. Not persisted.
+  cameraKeyTimes: Map<number, number[]>;
+
   // Audio mediaIds whose embedded bytes couldn't be loaded on doc
   // open — either C++ helper has no bytes, or decoding the bytes
   // failed. Derived from the audio-load pipeline; never persisted.
@@ -652,7 +658,7 @@ export interface State {
   /** Apply a C++ `cameras` snapshot to `orphanObjectIds` and
    *  `cameraNames`. C++ sends the full snapshot of every objectId
    *  in its _cameraLinks; missing ids drop out of both maps. */
-  setCameraStatuses: (statuses: { id: number; alive: boolean; name: string }[]) => void;
+  setCameraStatuses: (statuses: { id: number; alive: boolean; name: string; keyTimes?: number[] }[]) => void;
 
   /** Rebind an orphan clip's source camera. Called when the user
    *  drags a fresh camera from the OM onto an orphan clip — the
