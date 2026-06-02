@@ -1148,7 +1148,6 @@ body.is-hand-panning * {
    without a pixel-perfect click. The pad is centred on the dot. */
 .keyframe-dot.is-interactive {
   pointer-events: auto;
-  cursor: pointer;
 }
 .keyframe-dot.is-interactive::before {
   content: "";
@@ -1163,6 +1162,11 @@ body.is-hand-panning * {
    so it reads as picked without changing the dot's colour. */
 .keyframe-dot.is-selected {
   box-shadow: 0 0 0 1.5px #ffffff;
+}
+/* Dragged column — lift above siblings so the moving dot reads on top.
+   Cursor stays the default (no special drag cursor for the dots). */
+.keyframe-dot.is-dragging {
+  z-index: 1;
 }
 .lane {
   flex: 0 0 var(--track-h);

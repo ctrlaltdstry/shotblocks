@@ -1488,6 +1488,15 @@ private:
 			// camera guard as the shift; sibling array in the save payload.
 			ApplyKeyframeRetimesFromBody(doc, body);
 
+			// Keyframe-dot delete: removing a selected keyframe column from
+			// the timeline deletes every key at that frame on the camera +
+			// tags. Same in-block undo + shared-camera guard; sibling array.
+			ApplyKeyframeDeletesFromBody(doc, body);
+
+			// Keyframe-dot drag: dragging a selected column moves every key
+			// at that frame to a new frame. Same in-block undo + guard.
+			ApplyKeyframeColumnShiftsFromBody(doc, body);
+
 			// Free bytes for media orphaned by this edit (e.g. an audio
 			// clip was deleted). Done INSIDE this undo block so the clip-
 			// JSON change and the byte removal are one atomic undo step —
@@ -2721,6 +2730,192 @@ private:
 			Int32 newDur      = ParseIntField(obj, "newDur");
 			Int32 refCount    = ParseIntField(obj, "refCount");
 			ApplyKeyframeRetime(doc, objectId, anchorFrame, oldDur, newDur, refCount);
+			p = oe + 1;
+		}
+	}
+
+	// Delete a keyframe COLUMN: every key at document `frame` across the
+	// camera's object tracks + every tag track. The timeline dot is a
+	// deduped column (all params keyed at that frame collapse to one dot),
+	// so deleting the dot deletes the whole column — there's no single-key
+	// addressing from the timeline (that's the dope sheet's job). Sibling
+	// of ApplyKeyframeShift/Retime: no own undo block (caller brackets it),
+	// AddUndo per cam+tag, shared-camera guard (refCount>1 skips). Returns
+	// keys removed.
+	Int32 ApplyKeyframeDelete(BaseDocument* doc, Int32 objectId,
+	                          Int32 frame, Int32 refCount)
+	{
+		if (!doc)
+			return 0;
+		if (refCount > 1)
+		{
+			GePrint("[Shotblocks] keyframe delete: camera shared by "_s +
+				maxon::String::IntToString(refCount) +
+				" clips — skipping to avoid corrupting the other clip's animation."_s);
+			return 0;
+		}
+		BaseObject* cam = ResolveCameraForObjectId(doc, objectId);
+		if (!cam)
+			return 0;
+
+		Int32 fps = doc->GetFps();
+		if (fps <= 0)
+			fps = 24;
+
+		Int32 removed = 0;
+		auto delFromTracks = [&](CTrack* head)
+		{
+			for (CTrack* t = head; t; t = t->GetNext())
+			{
+				CCurve* c = t->GetCurve(CCURVE::CURVE, false);
+				if (!c)
+					continue;
+				// Walk backwards so DelKey's index shift doesn't skip keys.
+				for (Int32 i = c->GetKeyCount() - 1; i >= 0; --i)
+				{
+					CKey* k = c->GetKey(i);
+					if (!k)
+						continue;
+					if ((Int32)(k->GetTime().GetFrame(fps)) == frame)
+					{
+						c->DelKey(i);   // caller owns undo (AddUndo below)
+						++removed;
+					}
+				}
+			}
+		};
+
+		doc->AddUndo(UNDOTYPE::CHANGE, cam);
+		delFromTracks(cam->GetFirstCTrack());
+		for (BaseTag* tag = cam->GetFirstTag(); tag; tag = tag->GetNext())
+		{
+			doc->AddUndo(UNDOTYPE::CHANGE, tag);
+			delFromTracks(tag->GetFirstCTrack());
+		}
+		cam->SetDirty(DIRTYFLAGS::MATRIX | DIRTYFLAGS::CACHE);
+		return removed;
+	}
+
+	// Parse "keyframeDeletes":[{"objectId":N,"frame":F,"refCount":R},...]
+	// and apply each. MUST run inside the save-state StartUndo/EndUndo.
+	void ApplyKeyframeDeletesFromBody(BaseDocument* doc, const std::string& body)
+	{
+		auto arr = body.find("\"keyframeDeletes\"");
+		if (arr == std::string::npos)
+			return;
+		auto lb = body.find('[', arr);
+		auto rb = (lb == std::string::npos) ? std::string::npos : body.find(']', lb);
+		if (lb == std::string::npos || rb == std::string::npos)
+			return;
+		std::string::size_type p = lb + 1;
+		while (p < rb)
+		{
+			auto ob = body.find('{', p);
+			if (ob == std::string::npos || ob >= rb)
+				break;
+			auto oe = body.find('}', ob);
+			if (oe == std::string::npos || oe > rb)
+				break;
+			std::string obj = body.substr(ob, oe - ob + 1);
+			Int32 objectId = ParseIntField(obj, "objectId");
+			Int32 frame    = ParseIntField(obj, "frame");
+			Int32 refCount = ParseIntField(obj, "refCount");
+			ApplyKeyframeDelete(doc, objectId, frame, refCount);
+			p = oe + 1;
+		}
+	}
+
+	// Shift a keyframe COLUMN: move every key at document `frame` (across
+	// the camera + tag tracks) by `deltaFrames` to a new frame. Narrower
+	// than ApplyKeyframeShift, which moves ALL keys — here only the keys at
+	// the dragged column move. No own undo block (caller brackets it),
+	// AddUndo per cam+tag, shared-camera guard. If a moved key lands on a
+	// frame that already has a key in the same track, SetTime collapses
+	// them — acceptable: the user dragged the column onto that one.
+	// Returns keys moved.
+	Int32 ApplyKeyframeColumnShift(BaseDocument* doc, Int32 objectId,
+	                               Int32 frame, Int32 deltaFrames, Int32 refCount)
+	{
+		if (!doc || deltaFrames == 0)
+			return 0;
+		if (refCount > 1)
+		{
+			GePrint("[Shotblocks] keyframe column shift: camera shared by "_s +
+				maxon::String::IntToString(refCount) +
+				" clips — skipping to avoid corrupting the other clip's animation."_s);
+			return 0;
+		}
+		BaseObject* cam = ResolveCameraForObjectId(doc, objectId);
+		if (!cam)
+			return 0;
+
+		Int32 fps = doc->GetFps();
+		if (fps <= 0)
+			fps = 24;
+
+		Int32 moved = 0;
+		auto shiftColumn = [&](CTrack* head)
+		{
+			for (CTrack* t = head; t; t = t->GetNext())
+			{
+				CCurve* c = t->GetCurve(CCURVE::CURVE, false);
+				if (!c)
+					continue;
+				// Find the (single) key at `frame` and move it. Match by
+				// whole-frame equality, like the delete path.
+				for (Int32 i = 0; i < c->GetKeyCount(); ++i)
+				{
+					CKey* k = c->GetKey(i);
+					if (!k)
+						continue;
+					if ((Int32)(k->GetTime().GetFrame(fps)) == frame)
+					{
+						k->SetTime(c, BaseTime(frame + deltaFrames, fps));
+						++moved;
+						break;   // one key per track at this frame
+					}
+				}
+			}
+		};
+
+		doc->AddUndo(UNDOTYPE::CHANGE, cam);
+		shiftColumn(cam->GetFirstCTrack());
+		for (BaseTag* tag = cam->GetFirstTag(); tag; tag = tag->GetNext())
+		{
+			doc->AddUndo(UNDOTYPE::CHANGE, tag);
+			shiftColumn(tag->GetFirstCTrack());
+		}
+		cam->SetDirty(DIRTYFLAGS::MATRIX | DIRTYFLAGS::CACHE);
+		return moved;
+	}
+
+	// Parse "keyframeColumnShifts":[{"objectId":N,"frame":F,
+	// "deltaFrames":D,"refCount":R},...] and apply each. MUST run inside
+	// the save-state StartUndo/EndUndo.
+	void ApplyKeyframeColumnShiftsFromBody(BaseDocument* doc, const std::string& body)
+	{
+		auto arr = body.find("\"keyframeColumnShifts\"");
+		if (arr == std::string::npos)
+			return;
+		auto lb = body.find('[', arr);
+		auto rb = (lb == std::string::npos) ? std::string::npos : body.find(']', lb);
+		if (lb == std::string::npos || rb == std::string::npos)
+			return;
+		std::string::size_type p = lb + 1;
+		while (p < rb)
+		{
+			auto ob = body.find('{', p);
+			if (ob == std::string::npos || ob >= rb)
+				break;
+			auto oe = body.find('}', ob);
+			if (oe == std::string::npos || oe > rb)
+				break;
+			std::string obj = body.substr(ob, oe - ob + 1);
+			Int32 objectId    = ParseIntField(obj, "objectId");
+			Int32 frame       = ParseIntField(obj, "frame");
+			Int32 deltaFrames = ParseIntField(obj, "deltaFrames");
+			Int32 refCount    = ParseIntField(obj, "refCount");
+			ApplyKeyframeColumnShift(doc, objectId, frame, deltaFrames, refCount);
 			p = oe + 1;
 		}
 	}

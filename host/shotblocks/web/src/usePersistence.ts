@@ -520,6 +520,60 @@ export function flushKeyframeRetimes(
   }
 }
 
+// Pending keyframe-column deletes for the NEXT save-state. Keyed by
+// `objectId:frame` so deleting the same column twice collapses to one.
+// C++ removes every key at `frame` on the camera + tags inside the
+// save-state undo block (one Ctrl+Z restores the column).
+const pendingKeyframeDeletes = new Map<
+  string,
+  { objectId: number; frame: number; refCount: number }
+>();
+
+/** Queue keyframe-column deletes and persist immediately (bypass the
+ *  250ms debounce). Called from useKeyboard when Delete/Backspace fires
+ *  with a keyframe dot selected. Mirrors flushKeyframeShifts. */
+export function flushKeyframeDeletes(
+  deletes: { objectId: number; frame: number; refCount: number }[],
+): void {
+  for (const d of deletes) {
+    if (d.objectId <= 0) continue;
+    pendingKeyframeDeletes.set(d.objectId + ':' + d.frame, {
+      objectId: d.objectId, frame: d.frame, refCount: d.refCount,
+    });
+  }
+  if (pendingKeyframeDeletes.size > 0) {
+    cancelPendingSave();
+    saveToHost();
+  }
+}
+
+// Pending keyframe-column drags for the NEXT save-state. Keyed by
+// `objectId:frame` (the column's ORIGINAL frame) so repeated nudges of
+// the same column before a save collapse to the latest delta. C++ moves
+// every key at that frame by deltaFrames inside the save-state undo block.
+const pendingKeyframeColumnShifts = new Map<
+  string,
+  { objectId: number; frame: number; deltaFrames: number; refCount: number }
+>();
+
+/** Queue keyframe-column drags and persist immediately (bypass the 250ms
+ *  debounce). Called from KeyframeTicks on a dot-drag commit. Mirrors
+ *  flushKeyframeShifts. */
+export function flushKeyframeColumnShifts(
+  shifts: { objectId: number; frame: number; deltaFrames: number; refCount: number }[],
+): void {
+  for (const s of shifts) {
+    if (s.objectId <= 0 || s.deltaFrames === 0) continue;
+    pendingKeyframeColumnShifts.set(s.objectId + ':' + s.frame, {
+      objectId: s.objectId, frame: s.frame, deltaFrames: s.deltaFrames, refCount: s.refCount,
+    });
+  }
+  if (pendingKeyframeColumnShifts.size > 0) {
+    cancelPendingSave();
+    saveToHost();
+  }
+}
+
 function saveToHost() {
   const s = useStore.getState();
   // Strip transient fields — only persist what defines the timeline.
@@ -618,7 +672,15 @@ function saveToHost() {
     }),
   );
   pendingKeyframeRetimes.clear();
-  void send({ kind: 'save-state', json, objectIds, removeAudioMedia, keyframeShifts, keyframeRetimes });
+  // Keyframe-column deletes from the timeline — same in-block-undo
+  // contract; C++ removes every key at the frame on the camera + tags.
+  const keyframeDeletes = [...pendingKeyframeDeletes.values()];
+  pendingKeyframeDeletes.clear();
+  // Keyframe-column drags — move the keys at a frame by a delta.
+  const keyframeColumnShifts = [...pendingKeyframeColumnShifts.values()];
+  pendingKeyframeColumnShifts.clear();
+  void send({ kind: 'save-state', json, objectIds, removeAudioMedia,
+    keyframeShifts, keyframeRetimes, keyframeDeletes, keyframeColumnShifts });
   // Plan 4.1 — push the per-boundary camera event list so C++ can
   // rebuild the hidden Stage helper's animation track. Same cadence
   // as save-state (250ms debounce). The Stage stays dormant during

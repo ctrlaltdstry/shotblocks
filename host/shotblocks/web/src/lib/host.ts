@@ -78,7 +78,15 @@ export type HostOutbound =
       // new duration. Applied by C++ in the SAME save-state undo block as
       // the trim (one Ctrl+Z). All frame counts are integers; C++ rounds
       // each rescaled key to a whole frame. refCount guards shared cameras.
-      keyframeRetimes?: { objectId: number; anchorFrame: number; oldDur: number; newDur: number; refCount: number }[] }
+      keyframeRetimes?: { objectId: number; anchorFrame: number; oldDur: number; newDur: number; refCount: number }[];
+      // Keyframe-dot deletes — remove every key at `frame` on the camera +
+      // tags (a dot is a deduped column). Applied by C++ in the same undo
+      // block. refCount guards shared cameras (C++ skips when >1).
+      keyframeDeletes?: { objectId: number; frame: number; refCount: number }[];
+      // Keyframe-dot drags — move every key at `frame` by `deltaFrames`
+      // (the dragged column lands on a new frame). Same in-block undo +
+      // shared-camera guard.
+      keyframeColumnShifts?: { objectId: number; frame: number; deltaFrames: number; refCount: number }[] }
   | { kind: 'load-state' }
   | { kind: 'undo' }
   | { kind: 'redo' }

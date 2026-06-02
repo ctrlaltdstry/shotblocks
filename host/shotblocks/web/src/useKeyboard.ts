@@ -1,6 +1,7 @@
 import { useEffect } from 'react';
 import { useStore } from './store';
 import { send } from './lib/host';
+import { flushKeyframeDeletes } from './usePersistence';
 
 /** Keyboard shortcuts for the timeline:
  *    - Delete / Backspace: remove all clips in the current selection.
@@ -209,10 +210,27 @@ export function useKeyboard(): void {
         return;
       }
 
-      // Delete / Backspace → delete selection. A pen-tool level-
-      // keyframe selection takes priority over the clip selection.
+      // Delete / Backspace → delete selection. Priority: a selected
+      // keyframe COLUMN (dot) first, then a pen-tool level-keyframe
+      // selection, then clips. Each is a distinct selection model; the
+      // most specific wins so Delete doesn't also nuke the clip.
       if (ev.key === 'Delete' || ev.key === 'Backspace') {
         const st = useStore.getState();
+        const col = st.selectedKeyColumn;
+        if (col) {
+          ev.preventDefault();
+          ev.stopPropagation();
+          // refCount across ALL video clips — a camera shared by two
+          // clips is skipped by C++ (deleting would corrupt the other
+          // clip's animation), same guard as move/retime.
+          let refCount = 0;
+          for (const t of st.videoTracks)
+            for (const c of t.clips)
+              if (c.objectId === col.objectId) refCount++;
+          flushKeyframeDeletes([{ objectId: col.objectId, frame: col.frame, refCount }]);
+          st.setSelectedKeyColumn(null);
+          return;
+        }
         const lk = st.levelKfSelection;
         if (lk && lk.indices.length) {
           ev.preventDefault();

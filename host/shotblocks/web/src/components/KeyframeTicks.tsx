@@ -1,5 +1,11 @@
-import { useRef, type CSSProperties, type PointerEvent as ReactPointerEvent } from 'react';
+import { useRef, useState, type CSSProperties, type PointerEvent as ReactPointerEvent } from 'react';
 import { useStore, type Clip } from '../store';
+import { flushKeyframeColumnShifts } from '../usePersistence';
+
+// Past this many px of movement, a dot pointer-press becomes a column
+// DRAG (shift the keys) rather than a click (select). Matches the clip
+// drag threshold feel.
+const DOT_DRAG_THRESHOLD_PX = 3;
 
 /** Read-only keyframe-dot strip for a video ShotBlock. Renders one
  *  semi-transparent dot per DOCUMENT frame where the clip's referenced
@@ -62,6 +68,25 @@ export function KeyframeTicks({ clip, thin }: { clip: Clip; thin: boolean }) {
     s.selectedKeyColumn && s.selectedKeyColumn.objectId === clip.objectId
       ? s.selectedKeyColumn.frame : null,
   );
+  // Dot-drag (column shift) state. Ref-based per react-drag-state-in-ref.
+  // The live preview delta is mirrored into state so the dragged dot
+  // re-renders translated; `dragFrame` marks which dot is being dragged.
+  const dotDrag = useRef<{
+    frame: number; startClientX: number; pxPerFrame: number;
+    active: boolean; pointerId: number; deltaFrames: number;
+  } | null>(null);
+  const [dragFrame, setDragFrame] = useState<number | null>(null);
+  const [dragDeltaFrames, setDragDeltaFrames] = useState(0);
+  // Echo-hold after a column-shift release: the dot's frame in keyTimes
+  // doesn't update until C++'s `cameras` echo lands a frame or two later,
+  // so without this the dot snaps back to its OLD position for that gap
+  // and flickers. We keep rendering the dragged dot at its NEW position
+  // (held px offset) until keyTimes changes identity (the echo). Same
+  // mechanism as the clip-move's frozenKeyTimes hold.
+  const pendingShift = useRef<{
+    frame: number; deltaPx: number; keyTimesAtRelease: number[] | undefined;
+  } | null>(null);
+
   // Snapshot of each in-window dot's fraction-of-clip, captured when a
   // gesture (retime or body-drag) begins and held for its duration. null
   // when no gesture is active.
@@ -163,26 +188,126 @@ export function KeyframeTicks({ clip, thin }: { clip: Clip; thin: boolean }) {
   }
   if (dots.length === 0) return null;
 
-  function selectColumn(frame: number, ev: ReactPointerEvent) {
-    // The dot is a clickable column. Stop the event reaching the clip
-    // body (which would start a clip drag / change clip selection) and
-    // select this (objectId, frame) column.
+  function onDotPointerDown(frame: number, ev: ReactPointerEvent) {
+    // A dot press is EITHER a click (select the column) OR a drag (shift
+    // the column to a new frame). We select immediately on down, then
+    // watch for movement past the threshold to promote to a drag. Stop
+    // the event so it never reaches the clip body (clip drag / selection).
     ev.stopPropagation();
     ev.preventDefault();
     useStore.getState().setSelectedKeyColumn({ objectId: clip.objectId, frame });
+
+    // pxPerFrame from the clip's rendered width (the dots' offsetParent
+    // spans the clip). Measured at down so the drag math is exact.
+    const dotsEl = ev.currentTarget.parentElement;          // .keyframe-dots
+    const clipEl = dotsEl?.parentElement;                    // .shot-block
+    const rect = clipEl?.getBoundingClientRect();
+    const dur = Math.max(1, clip.outFrame - clip.inFrame);
+    const pxPerFrame = rect && rect.width > 0 ? rect.width / dur : 0;
+    if (pxPerFrame <= 0) return;
+
+    dotDrag.current = {
+      frame, startClientX: ev.clientX, pxPerFrame,
+      active: false, pointerId: ev.pointerId, deltaFrames: 0,
+    };
+    try { ev.currentTarget.setPointerCapture(ev.pointerId); } catch { /* noop */ }
+  }
+
+  function onDotPointerMove(ev: ReactPointerEvent) {
+    const d = dotDrag.current;
+    if (!d || d.pointerId !== ev.pointerId) return;
+    const dxPx = ev.clientX - d.startClientX;
+    if (!d.active) {
+      if (Math.abs(dxPx) < DOT_DRAG_THRESHOLD_PX) return;
+      d.active = true;
+      setDragFrame(d.frame);
+    }
+    // Snap the column to whole frames. Clamp so it stays within the clip
+    // window (a key can't be dragged outside the clip it belongs to).
+    const raw = Math.round(dxPx / d.pxPerFrame);
+    const newFrame = Math.max(clip.inFrame, Math.min(clip.outFrame, d.frame + raw));
+    d.deltaFrames = newFrame - d.frame;
+    setDragDeltaFrames(d.deltaFrames);
+  }
+
+  function onDotPointerEnd(ev: ReactPointerEvent) {
+    const d = dotDrag.current;
+    if (!d || d.pointerId !== ev.pointerId) return;
+    try { ev.currentTarget.releasePointerCapture(ev.pointerId); } catch { /* noop */ }
+    dotDrag.current = null;
+    const wasActive = d.active;
+    const delta = d.deltaFrames;
+    // Commit only a real drag (not a click) with a non-zero move.
+    if (wasActive && delta !== 0) {
+      let refCount = 0;
+      const st = useStore.getState();
+      for (const t of st.videoTracks)
+        for (const c of t.clips)
+          if (c.objectId === clip.objectId) refCount++;
+      // Hold the dot at its NEW position until the shifted-keys echo lands
+      // (keyTimes changes identity), bridging the C++ round-trip so it
+      // doesn't flicker back to the old frame. The live drag state clears
+      // now; the echo-hold takes over the preview.
+      pendingShift.current = {
+        frame: d.frame, deltaPx: delta * d.pxPerFrame, keyTimesAtRelease: keyTimes,
+      };
+      flushKeyframeColumnShifts([{ objectId: clip.objectId, frame: d.frame, deltaFrames: delta, refCount }]);
+      // Re-anchor the selection to the moved column's NEW frame so it
+      // stays selected after the echo refreshes the dots.
+      useStore.getState().setSelectedKeyColumn({ objectId: clip.objectId, frame: d.frame + delta });
+    }
+    setDragFrame(null);
+    setDragDeltaFrames(0);
+  }
+
+  // Live drag offset in px for the dragged dot (frame delta × pxPerFrame).
+  const dragPx = dotDrag.current && dragFrame !== null
+    ? dragDeltaFrames * dotDrag.current.pxPerFrame : 0;
+
+  // Echo-hold: after release, keyTimes still has the dot at its OLD frame
+  // until C++'s echo lands. Clear the hold once keyTimes changes identity;
+  // until then keep the dot at its new (held) position so it doesn't
+  // flicker back. The held dot is the one still at pendingShift.frame.
+  const ps = pendingShift.current;
+  const heldFrame = ps && keyTimes === ps.keyTimesAtRelease ? ps.frame : null;
+  const heldPx = ps ? ps.deltaPx : 0;
+  if (ps && keyTimes !== ps.keyTimesAtRelease) {
+    pendingShift.current = null;   // echo arrived; dot is now at its real frame
   }
 
   return (
     <div className="keyframe-dots">
-      {dots.map(({ frame, style }) => (
-        <span
-          key={frame}
-          className={'keyframe-dot is-interactive'
-            + (frame === selectedFrame ? ' is-selected' : '')}
-          style={style}
-          onPointerDown={(ev) => selectColumn(frame, ev)}
-        />
-      ))}
+      {dots.map(({ frame, style }) => {
+        // Overlay a translateX on the dot being dragged (live) OR held
+        // post-release until the echo lands. The base style's transform
+        // handles centring (translate(-50%)) for interior dots / 'none'
+        // for edge dots — compose the px offset after it so both apply.
+        const isDragged = frame === dragFrame;
+        const isHeld = frame === heldFrame;
+        const px = isDragged ? dragPx : isHeld ? heldPx : 0;
+        const composed: CSSProperties = (isDragged || isHeld)
+          ? {
+              ...style,
+              transform:
+                (style.transform && style.transform !== 'none'
+                  ? `${style.transform} `
+                  : '') + `translateX(${px}px)`,
+            }
+          : style;
+        return (
+          <span
+            key={frame}
+            className={'keyframe-dot is-interactive'
+              + (frame === selectedFrame || isDragged || isHeld ? ' is-selected' : '')
+              + (isDragged || isHeld ? ' is-dragging' : '')}
+            style={composed}
+            onPointerDown={(ev) => onDotPointerDown(frame, ev)}
+            onPointerMove={onDotPointerMove}
+            onPointerUp={onDotPointerEnd}
+            onPointerCancel={onDotPointerEnd}
+          />
+        );
+      })}
     </div>
   );
 }
