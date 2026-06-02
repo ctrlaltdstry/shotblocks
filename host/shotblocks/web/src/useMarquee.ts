@@ -101,10 +101,20 @@ export function useMarquee(lanesAreaRef: RefObject<HTMLDivElement | null>): void
       // directly on a dot is handled by the dot itself, which stops the
       // event, so it never reaches here.) Plain press over a clip is the
       // clip's own drag/select — bail so we don't fight it.
+      //
+      // Alt+Ctrl is the RETIME combo (Alt+Ctrl+edge-drag), NOT a marquee —
+      // exclude it so an Alt+Ctrl press on a clip edge doesn't also draw a
+      // marquee on top of the retime. Plain Alt stays the marquee; additive
+      // keyframe-marquee select uses Shift (not Ctrl).
       const videoClip = target.closest('.shot-block.is-video');
-      if (ev.altKey && videoClip) {
+      const isRetimeCombo = ev.altKey && (ev.ctrlKey || ev.metaKey);
+      if (ev.altKey && !isRetimeCombo && videoClip) {
         mode = 'keyframe';
       } else if (target.closest('.shot-block')) {
+        return;
+      } else if (isRetimeCombo) {
+        // Alt+Ctrl over empty canvas has no meaning — don't start a clip
+        // marquee either (keeps the combo exclusively a clip-edge gesture).
         return;
       } else {
         mode = 'clip';
