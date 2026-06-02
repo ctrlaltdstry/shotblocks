@@ -342,7 +342,33 @@ def _read_frame_offset(tag):
     return float(v.x), -float(v.y)
 
 
-def _channel_ownership(tag):
+def _cam_has_pos_rot_tracks(cam):
+    """Return (has_pos_track, has_rot_track): whether the camera has any
+    keyframed position / rotation channel. Used so a damping-only tag
+    still owns (and therefore smooths) a channel the user has ANIMATED —
+    those keyframes are a moving target the spring should ease. Walks the
+    CTracks once and matches the six rel-pos/rel-rot DescIDs."""
+    has_pos = False
+    has_rot = False
+    if cam is None:
+        return False, False
+    track = cam.GetFirstCTrack()
+    while track is not None:
+        try:
+            tid = track.GetDescriptionID()
+            if tid == _POS_X or tid == _POS_Y or tid == _POS_Z:
+                has_pos = True
+            elif tid == _ROT_H or tid == _ROT_P or tid == _ROT_B:
+                has_rot = True
+        except Exception:
+            pass
+        if has_pos and has_rot:
+            break
+        track = track.GetNext()
+    return has_pos, has_rot
+
+
+def _channel_ownership(tag, cam=None):
     """Decide which transform channels the tag actually drives this
     frame, given its parameters. A channel the tag does NOT own is left
     untouched so the user can navigate / keyframe it freely.
@@ -354,12 +380,18 @@ def _channel_ownership(tag):
       Handheld Noise is on (it shakes rotation).
     - Position is owned when Chase drives the body, or Handheld Noise is
       on (it shakes position).
+    - With Damping ENABLED, a channel is ALSO owned when the camera has
+      keyframes on it: those keyframes are a moving target the spring
+      should smooth. Without this, a purely-keyframed camera with damping
+      on owned nothing, so the spring ran but its output was discarded and
+      the motion stayed hard (the user-reported bug). A PARKED camera with
+      damping on and no keys still owns nothing — there's nothing to
+      smooth, so the viewport stays free.
 
-    Damping is deliberately NOT a reason to own a channel: with nothing
-    else active, damping has nothing to smooth (the camera's keyframed
-    or hand-posed value IS the target), so a damping-only tag stays pass-
-    through and the viewport is navigable. Damping only changes HOW an
-    already-owned channel is written (spring vs instant), not WHETHER.
+    Damping alone (no keys, nothing else active) is still NOT a reason to
+    own a channel — it only changes HOW an owned channel is written
+    (spring vs instant), not WHETHER, so an un-animated camera stays
+    pass-through and navigable.
     """
     look_at_target = tag[SHOTBLOCKS_LOOK_AT_TARGET]
     look_at_on = (look_at_target is not None
@@ -370,9 +402,24 @@ def _channel_ownership(tag):
                 and float(tag[SHOTBLOCKS_NOISE_STRENGTH] or 0.0) > 0.0)
     chase_on = (bool(tag[SHOTBLOCKS_FOLLOW_ENABLED])
                 and tag[SHOTBLOCKS_FOLLOW_TARGET] is not None)
+    # Frame Offset rotates the camera (re-frames via look-at when a target
+    # is set, or a rotational pan on the keyframed rotation when it isn't).
+    # Either way a non-zero offset drives rotation, so it must own that
+    # channel — otherwise the offset write is discarded (same class of bug
+    # as damping owning nothing). Zero offset owns nothing → pass-through.
+    fou, fov = _read_frame_offset(tag)
+    frame_offset_on = (fou != 0.0 or fov != 0.0)
 
-    owns_rot = look_at_on or roll_on or bank_on or noise_on
+    owns_rot = look_at_on or roll_on or bank_on or noise_on or frame_offset_on
     owns_pos = chase_on or noise_on
+
+    # Damping smooths animated channels: own any channel the user has
+    # keyframed so the spring's eased output actually reaches the camera.
+    if bool(tag[SHOTBLOCKS_DAMPING_ENABLED]):
+        has_pos_key, has_rot_key = _cam_has_pos_rot_tracks(cam)
+        owns_pos = owns_pos or has_pos_key
+        owns_rot = owns_rot or has_rot_key
+
     return owns_pos, owns_rot
 
 
@@ -526,7 +573,7 @@ class ShotblocksTag(c4d.plugins.TagData):
         look_at_target = tag[SHOTBLOCKS_LOOK_AT_TARGET]
         up_target      = tag[SHOTBLOCKS_UP_TARGET]
 
-        owns_pos, owns_rot = _channel_ownership(tag)
+        owns_pos, owns_rot = _channel_ownership(tag, cam)
         bank_into_turns = bool(tag[SHOTBLOCKS_BANK_INTO_TURNS])
 
         # ---- Damping OFF: instant, fully-interactive path. -----------
@@ -782,6 +829,18 @@ class ShotblocksTag(c4d.plugins.TagData):
                     target_rot = _slerp_hpb(key_rot, la_hpb, s)
                 # s == 0: leave target_rot = key_rot (look-at off)
                 has_explicit_bank_source = (up_target is not None)
+        else:
+            # No look-at target → Frame Offset becomes a rotational pan
+            # on the keyframed rotation (look-at consumes the offset via
+            # _apply_frame_offset when a target IS set, so only do this
+            # when it isn't — never both).
+            ou, ov = _read_frame_offset(tag)
+            if ou != 0.0 or ov != 0.0:
+                try:
+                    target_rot = _apply_frame_offset_rotation(
+                        target_rot, cam, doc, ou, ov)
+                except Exception:
+                    pass
 
         # Roll + Bank-Into-Turns are a post-step on whatever
         # target_rot the previous stage produced — keyframed, AtS,
@@ -904,6 +963,16 @@ def _compute_target_pose(tag, st, cam, doc, time, fps, dt, cur_frame,
             elif s > 0.0:
                 target_rot = _slerp_hpb(key_rot, la_hpb, s)
             has_explicit_bank_source = (up_target is not None)
+    else:
+        # No look-at target → Frame Offset is a rotational pan on the
+        # keyframed rotation (mirrors the damping-on path).
+        ou, ov = _read_frame_offset(tag)
+        if ou != 0.0 or ov != 0.0:
+            try:
+                target_rot = _apply_frame_offset_rotation(
+                    target_rot, cam, doc, ou, ov)
+            except Exception:
+                pass
 
     roll = float(tag[SHOTBLOCKS_LOOK_AT_ROLL] or 0.0)
     target_rot, heading = _apply_roll_and_bank_into_turns(
@@ -1400,6 +1469,39 @@ def _apply_frame_offset(local_dir, cam, doc, offset_u, offset_v):
         forward.y - right.y * dx - up.y * dy,
         forward.z - right.z * dx - up.z * dy,
     )
+
+
+def _apply_frame_offset_rotation(rot_hpb, cam, doc, offset_u, offset_v):
+    """Frame Offset for a camera with NO look-at target: a rotational pan.
+
+    Adds a small heading/pitch rotation to the keyframed rotation so the
+    world shifts in frame by the screen-space fraction (offset_u,
+    offset_v) — the target-less counterpart to the look-at re-framing.
+    The shift fraction maps to the angle that subtends that fraction of
+    the FOV: a fraction `f` of the half-frame is `f * (fov/2)` radians.
+
+    Sign is the "pan toward the dot" convention — with no target there's
+    no subject to re-frame, so the natural feel is "drag the dot the way
+    you want the camera to look." Drag right (+u) → camera pans right →
+    the framing shifts right; drag up (+v) → camera tilts up. (This is the
+    OPPOSITE of the look-at re-framing, where +u puts the SUBJECT right by
+    panning the aim left — correct there because there's a subject to
+    place, wrong here where the dot just steers the camera.) Heading is
+    HPB index 0, pitch index 1. Returns the adjusted (h, p, b) tuple.
+
+    Composes with the spring naturally — it only shifts the rotation
+    TARGET; the angular damping still eases the camera onto it. Raises on
+    missing FOV data — caller catches.
+    """
+    if offset_u == 0.0 and offset_v == 0.0:
+        return rot_hpb
+    fov_h, fov_v = _camera_fov_radians(cam, doc)
+    # Pan toward the dot: drag right → look right (−heading in C4D's HPB,
+    # which is what swings the view right), drag up → tilt up. _read_frame_
+    # offset already inverted v's raw sign so +v means "up" here.
+    h = rot_hpb[0] - offset_u * (fov_h * 0.5)
+    p = rot_hpb[1] - offset_v * (fov_v * 0.5)
+    return (h, p, rot_hpb[2])
 
 
 def _camera_fov_radians(cam, doc):
