@@ -1269,22 +1269,7 @@ private:
 			// Tool palette selection. Body: {"kind":"tool","id":"<name>"}.
 			// We just record + log for now — no behavior is wired to the
 			// active tool yet.
-			std::string id;
-			auto pos = body.find("\"id\"");
-			if (pos != std::string::npos)
-			{
-				pos = body.find(':', pos);
-				if (pos != std::string::npos)
-				{
-					pos = body.find('"', pos);
-					if (pos != std::string::npos)
-					{
-						auto end = body.find('"', pos + 1);
-						if (end != std::string::npos)
-							id = body.substr(pos + 1, end - pos - 1);
-					}
-				}
-			}
+			std::string id = ParseStringField(body, "id");
 			_activeTool = id;
 			GePrint("[Shotblocks/v2] tool="_s + maxon::String(id.c_str()));
 			return "{\"ok\":true,\"kind\":\"tool-ack\"}";
