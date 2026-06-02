@@ -1127,40 +1127,53 @@ body.is-hand-panning * {
 }
 
 /* Keyframe dots — a CHILD layer of a video .shot-block (so they ride the
-   clip's transform during a drag). One semi-transparent black dot per
-   keyframe frame, sitting on the clip's bottom edge, positioned by
-   `left:%`. Same dot treatment as the audio beat-dots: black at 50%
-   darkens the clip's OWN colour, no new hue, no stroke. `.keyframe-dots`
-   is a zero-height anchor on the bottom edge — pointer-events:none on the
-   anchor so empty strip space never blocks a clip-body click; individual
-   interactive dots re-enable events on themselves. */
+   clip's transform during a drag). One semi-transparent ORANGE vertical
+   pill per keyframe frame, centred in the clip body, positioned by
+   `left:%`. Orange-at-50% pops on the purple shot (sibling of the
+   audio-kf orange) rather than darkening into it. `.keyframe-dots` spans
+   the full clip box with pointer-events:none so empty space never blocks
+   a clip-body click; individual interactive pills re-enable events on
+   themselves. */
 .keyframe-dots {
   position: absolute;
-  left: 0; right: 0; bottom: 0;
-  height: 0;
+  left: 0; right: 0; top: 0; bottom: 0;
   pointer-events: none;
   z-index: 5;
   /* Mask dots to the clip width WITHOUT clipping their height. During a
      camera slip the dots translate horizontally and out-of-window keys
      slide in/out past the clip edges; this clip-path hides anything past
      the left/right edges (the clip box) while leaving top/bottom free so
-     the 6px dot + its selected ring still show. Negative top/bottom insets
+     the pill + its selected ring still show. Negative top/bottom insets
      expand the clip region far past the dots vertically; 0 left/right
      clips exactly to the box (clip) edges. */
   clip-path: inset(-1000px 0 -1000px 0);
 }
+/* Vertical rounded pill, vertically centred in the clip. Black at 30%
+   darkens the clip's own colour (no new hue, no stroke) — same treatment
+   as the audio beat-dots, just a taller, lighter mark that's easier to
+   read mid-clip than a dot on the bottom edge. Centring is via margins
+   (not transform) so `transform` stays free for the slip/drag translateX
+   that KeyframeTicks composes on top. left:% anchors the column; the
+   negative margin-left pulls it back by half its width to centre it. */
 .keyframe-dot {
   position: absolute;
-  bottom: 0;
-  width: 6px;
-  height: 6px;
-  border-radius: 50%;
-  background: rgba(0, 0, 0, 0.5);
-  transform: translate(-50%, 0);
+  /* Centre in the BODY region, below the ~20px title band (3px pad + 14px
+     line + 3px pad), not the whole clip — so the pills sit between the
+     camera icon and the title background, visually balanced. Offset the
+     50% centre down by half the band height (~10px). */
+  top: calc(50% + 10px);
+  width: 4px;
+  height: 14px;
+  margin-top: -7px;
+  margin-left: -2px;
+  border-radius: 2px;
+  /* Warm orange at 50% — pops on the purple shot instead of darkening
+     into it (see --color-keyframe-dot). */
+  background: color-mix(in srgb, var(--color-keyframe-dot) 50%, transparent);
 }
-/* Selectable dot. The visible dot stays 6px, but a transparent ::before
-   pads the hit area out to ~14px so the thin bottom-edge dot is grabbable
-   without a pixel-perfect click. The pad is centred on the dot. */
+/* Selectable pill. The visible pill stays 4px wide, but a transparent
+   ::before pads the hit area wider so a thin pill is grabbable without a
+   pixel-perfect click. The pad is centred on the pill. */
 .keyframe-dot.is-interactive {
   pointer-events: auto;
 }
@@ -1168,13 +1181,13 @@ body.is-hand-panning * {
   content: "";
   position: absolute;
   left: 50%;
-  bottom: 0;
+  top: 50%;
   width: 14px;
-  height: 14px;
-  transform: translate(-50%, 0);
+  height: 20px;
+  transform: translate(-50%, -50%);
 }
-/* Selected column — keep the dot's resting black fill, add a white ring
-   so it reads as picked without changing the dot's colour. */
+/* Selected column — keep the pill's resting black fill, add a white ring
+   so it reads as picked without changing the fill colour. */
 .keyframe-dot.is-selected {
   box-shadow: 0 0 0 1.5px #ffffff;
 }
@@ -1509,15 +1522,17 @@ body.is-hand-panning * {
    color-mix avoids hand-derived hex constants and stays correct if
    the timeline color tokens ever change. */
 .shot-block.is-video    {
-  background: var(--color-timeline-default-block);
-  border-color: color-mix(in srgb, var(--color-timeline-default-block) 70%, black);
+  /* Video shots are the brand purple #824cee at ALL times. Selection adds
+     only the white outline (.shot-block__selected-outline) — NOT a fill
+     change. (Previously the resting fill was the lighter #a47bf2 and
+     selection darkened it to #824cee; that's reversed now per Mike: the
+     base IS #824cee, selection just outlines.) */
+  background: var(--color-timeline-primary-highlight);
+  border-color: color-mix(in srgb, var(--color-timeline-primary-highlight) 70%, black);
   /* Flush to the lane's BOTTOM edge (no 2px inset there) so the beat-
      grid lines running behind don't peek through a sliver of gap
      below the clip. The top keeps its 2px inset for row separation. */
   bottom: 0;
-}
-.shot-block.is-video.is-selected {
-  background: var(--color-timeline-primary-highlight);
 }
 .shot-block.is-audio    {
   background: var(--color-timeline-audio);

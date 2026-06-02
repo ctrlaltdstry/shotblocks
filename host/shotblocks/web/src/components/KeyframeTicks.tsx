@@ -228,12 +228,12 @@ export function KeyframeTicks({ clip, thin }: { clip: Clip; thin: boolean }) {
     for (const f of keyTimes) {
       if (f < clip.inFrame || f > clip.outFrame) continue;
       if (f === clip.inFrame) {
-        // Flush-left: cancel the centring shift so the dot sits just inside
-        // the left edge instead of straddling it.
-        dots.push({ frame: f, style: { left: 0, transform: 'none' } });
+        // Flush-left: cancel the centring margin so the pill sits just
+        // inside the left edge instead of straddling it.
+        dots.push({ frame: f, style: { left: 0, marginLeft: 0 } });
       } else if (f === clip.outFrame) {
         // Flush-right: anchor by the right edge, same reason.
-        dots.push({ frame: f, style: { right: 0, left: 'auto', transform: 'none' } });
+        dots.push({ frame: f, style: { right: 0, left: 'auto', marginLeft: 0 } });
       } else {
         dots.push({ frame: f, style: { left: ((f - clip.inFrame) / clipDuration) * 100 + '%' } });
       }
@@ -419,9 +419,9 @@ export function KeyframeTicks({ clip, thin }: { clip: Clip; thin: boolean }) {
     <div className="keyframe-dots" ref={dotsContainerRef}>
       {dots.map(({ frame, style }) => {
         // Overlay a translateX on dots being dragged (live) OR held
-        // post-release until the echo lands. The base style's transform
-        // handles centring (translate(-50%)) for interior dots / 'none'
-        // for edge dots — compose the px offset after it so both apply.
+        // post-release until the echo lands. Centring is done with margins
+        // (see .keyframe-dot CSS), so `transform` is free for the slip /
+        // drag offset alone — no base transform to compose around.
         // A camera slip translates EVERY dot by slipHeldPx.
         const isDragged = dragFrames.has(frame);
         const isHeld = !!heldFrames && heldFrames.has(frame);
@@ -431,13 +431,7 @@ export function KeyframeTicks({ clip, thin }: { clip: Clip; thin: boolean }) {
         const translated = inSlip || isDragged || isHeld;
         const px = inSlip ? slipHeldPx : isDragged ? dragPx : isHeld ? heldPx : 0;
         const composed: CSSProperties = translated
-          ? {
-              ...style,
-              transform:
-                (style.transform && style.transform !== 'none'
-                  ? `${style.transform} `
-                  : '') + `translateX(${px}px)`,
-            }
+          ? { ...style, transform: `translateX(${px}px)` }
           : style;
         return (
           <span

@@ -26,6 +26,11 @@
      marquee runs OVER the clips, so it gets the contrasting blue.
      Same rationale as the audio-kf orange above. */
   --color-keyframe-marquee:              #2C7CD3;
+  /* Keyframe-dot pills — warm orange, drawn at 50% over the purple shot
+     so they pop instead of darkening into the clip. Sibling of the
+     audio-kf orange (keyframe UI on a coloured clip wants a contrast
+     hue, not a black tint). */
+  --color-keyframe-dot:                  #FFB949;
   /* Audio fill #01904b (Figma 440:2618). Selected variant is the same
      base bumped ~30% brighter for visual feedback (no Figma reference
      for the selected state yet). Border on shot-block.is-audio is
