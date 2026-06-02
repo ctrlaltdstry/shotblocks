@@ -60,6 +60,7 @@ export function useMarquee(lanesAreaRef: RefObject<HTMLDivElement | null>): void
       if (!wasActive && !additive) {
         useStore.getState().setSelectedClipIds(new Set<number>());
         useStore.getState().setLevelKfSelection(null);
+        useStore.getState().setSelectedKeyColumn(null);
       }
       try { el!.releasePointerCapture(ev.pointerId); } catch { /* noop */ }
     }

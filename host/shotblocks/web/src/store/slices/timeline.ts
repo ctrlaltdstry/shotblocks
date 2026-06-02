@@ -217,10 +217,21 @@ export const createTimelineSlice: StateCreator<State, [], [], TimelineSlice> = (
     // don't drop the optimistic state until the authoritative echo lands.
     const clearRetiming = !keysSame && s.retimingClipId !== null;
 
-    if (orphansSame && namesSame && keysSame && !clearRetiming
+    // Drop the selected keyframe column if its camera's keys changed and
+    // the selected frame is no longer present — the column it pointed at
+    // moved or was removed (e.g. edited in the dope sheet), so a stale
+    // selection would highlight the wrong dot or nothing.
+    let clearKeyColumn = false;
+    if (!keysSame && s.selectedKeyColumn) {
+      const arr = nextKeyTimes.get(s.selectedKeyColumn.objectId);
+      if (!arr || !arr.includes(s.selectedKeyColumn.frame)) clearKeyColumn = true;
+    }
+
+    if (orphansSame && namesSame && keysSame && !clearRetiming && !clearKeyColumn
         && videoTracks === s.videoTracks) return s;
     return {
       ...(clearRetiming ? { retimingClipId: null } : {}),
+      ...(clearKeyColumn ? { selectedKeyColumn: null } : {}),
       orphanObjectIds: orphansSame ? s.orphanObjectIds : nextOrphans,
       cameraNames: namesSame ? s.cameraNames : nextNames,
       cameraKeyTimes: keysSame ? s.cameraKeyTimes : nextKeyTimes,

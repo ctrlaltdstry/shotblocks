@@ -1119,13 +1119,14 @@ body.is-hand-panning * {
   height: 9px;
 }
 
-/* Read-only keyframe dots — a CHILD layer of a video .shot-block (so
-   they ride the clip's transform during a drag). One semi-transparent
-   black dot per keyframe frame, sitting on the clip's bottom edge,
-   positioned by `left:%`. Purely informational (no hit-testing) — shows
-   where the camera has keyframes. Same dot treatment as the audio
-   beat-dots: black at 50% darkens the clip's OWN colour, no new hue, no
-   stroke. `.keyframe-dots` is a zero-height anchor on the bottom edge. */
+/* Keyframe dots — a CHILD layer of a video .shot-block (so they ride the
+   clip's transform during a drag). One semi-transparent black dot per
+   keyframe frame, sitting on the clip's bottom edge, positioned by
+   `left:%`. Same dot treatment as the audio beat-dots: black at 50%
+   darkens the clip's OWN colour, no new hue, no stroke. `.keyframe-dots`
+   is a zero-height anchor on the bottom edge — pointer-events:none on the
+   anchor so empty strip space never blocks a clip-body click; individual
+   interactive dots re-enable events on themselves. */
 .keyframe-dots {
   position: absolute;
   left: 0; right: 0; bottom: 0;
@@ -1141,6 +1142,27 @@ body.is-hand-panning * {
   border-radius: 50%;
   background: rgba(0, 0, 0, 0.5);
   transform: translate(-50%, 0);
+}
+/* Selectable dot. The visible dot stays 6px, but a transparent ::before
+   pads the hit area out to ~14px so the thin bottom-edge dot is grabbable
+   without a pixel-perfect click. The pad is centred on the dot. */
+.keyframe-dot.is-interactive {
+  pointer-events: auto;
+  cursor: pointer;
+}
+.keyframe-dot.is-interactive::before {
+  content: "";
+  position: absolute;
+  left: 50%;
+  bottom: 0;
+  width: 14px;
+  height: 14px;
+  transform: translate(-50%, 0);
+}
+/* Selected column — keep the dot's resting black fill, add a white ring
+   so it reads as picked without changing the dot's colour. */
+.keyframe-dot.is-selected {
+  box-shadow: 0 0 0 1.5px #ffffff;
 }
 .lane {
   flex: 0 0 var(--track-h);

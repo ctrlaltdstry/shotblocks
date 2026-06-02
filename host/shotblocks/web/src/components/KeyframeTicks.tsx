@@ -1,4 +1,4 @@
-import { useRef, type CSSProperties } from 'react';
+import { useRef, type CSSProperties, type PointerEvent as ReactPointerEvent } from 'react';
 import { useStore, type Clip } from '../store';
 
 /** Read-only keyframe-dot strip for a video ShotBlock. Renders one
@@ -43,19 +43,73 @@ export function KeyframeTicks({ clip, thin }: { clip: Clip; thin: boolean }) {
     clip.objectId > 0 ? s.cameraKeyTimes.get(clip.objectId) : undefined,
   );
   const retiming = useStore((s) => s.retimingClipId === clip.id);
-  // Snapshot of each in-window dot's fraction-of-clip, captured when this
-  // clip's retime begins and held for the drag. null when not retiming.
+  // True while THIS clip is being body-dragged. The clip glides via a CSS
+  // transform; the dots, being children, ride it. But they ALSO recompute
+  // their frame-fraction from the store's in/out, which updates in
+  // discrete steps during the drag (ripple/group commit live, and the
+  // commit re-renders the clip's left/right). For a frame on each step the
+  // recomputed dot %-positions and the still-transformed clip disagree →
+  // flash. Fix: while dragging, FREEZE each dot at the fraction it had at
+  // drag-start (same mechanism as the retime preview) so the dots ride the
+  // transform with the clip and never recompute mid-drag. Measured: the
+  // keyframe DATA never blips (keyTimes stays steady) — only the position
+  // mechanism desyncs, so freezing the fractions is sufficient.
+  const dragging = useStore((s) => s.dragClip?.clipId === clip.id);
+  // The selected keyframe column's frame on THIS clip's camera, or null.
+  // Subscribed narrowly so only the affected clip's dots re-render on a
+  // selection change.
+  const selectedFrame = useStore((s) =>
+    s.selectedKeyColumn && s.selectedKeyColumn.objectId === clip.objectId
+      ? s.selectedKeyColumn.frame : null,
+  );
+  // Snapshot of each in-window dot's fraction-of-clip, captured when a
+  // gesture (retime or body-drag) begins and held for its duration. null
+  // when no gesture is active.
   const frozenFractions = useRef<number[] | null>(null);
+  // The keyTimes array reference at freeze-start. Held positions persist
+  // until `keyTimes` changes identity (the shifted-keys echo from C++),
+  // bridging the gap between the local in/out commit on release and the
+  // keys catching up — without it the dots flash at the stale-key spot.
+  const frozenKeyTimes = useRef<number[] | undefined | null>(null);
+  // Wall-clock when the freeze began. The echo wait is BOUNDED: a move
+  // with zero net shift, or a shared camera (C++ skips the shift), never
+  // produces a keyTimes echo — without a cap the dots would stay frozen
+  // forever (and non-interactive). In those cases the frozen fractions
+  // already equal the live ones (nothing moved), so unfreezing after the
+  // cap is visually seamless.
+  const frozenSince = useRef<number>(0);
 
   if (thin || !keyTimes || keyTimes.length === 0) {
     frozenFractions.current = null;
+    frozenKeyTimes.current = null;
     return null;
   }
 
-  // --- Live retime preview: hold the drag-start fractions ---
-  if (retiming) {
+  // Echo wait is bounded so a no-shift / shared-camera move can't freeze
+  // the dots forever. 500ms comfortably covers the C++ round-trip.
+  const ECHO_WAIT_MS = 500;
+
+  // --- Hold the drag-start fractions during a retime OR a body-drag, and
+  // across the release until the shifted keys actually arrive ---
+  //
+  // A move shifts the camera's keys via a C++ round-trip (flushKeyframe-
+  // Shifts → save → `cameras` echo), which lands a FRAME OR TWO AFTER the
+  // clip's in/out already updated locally. Measured: on release the window
+  // jumps to the new position while `keyTimes` still holds the OLD frames
+  // for one render → the absolute mapping computes a wrong (often
+  // negative) position → the dots flash, then snap right when the echo
+  // lands. So we must NOT unfreeze the instant `dragging` goes false; we
+  // hold the frozen fractions until `keyTimes` changes identity (the new
+  // array = the echo arrived). Move preserves each key's fraction-of-clip,
+  // so the frozen fractions are already the correct final positions — the
+  // handoff is seamless. Mirrors the retime preview's echo handoff.
+  const echoPending =
+    frozenKeyTimes.current !== null
+    && keyTimes === frozenKeyTimes.current
+    && (Date.now() - frozenSince.current) < ECHO_WAIT_MS;
+  if (retiming || dragging || echoPending) {
     if (frozenFractions.current === null) {
-      // Capture once at retime start, from the clip's pre-stretch window.
+      // Capture once at gesture start, from the clip's current window.
       const dur = Math.max(1, clip.outFrame - clip.inFrame);
       const fr: number[] = [];
       for (const f of keyTimes) {
@@ -63,6 +117,8 @@ export function KeyframeTicks({ clip, thin }: { clip: Clip; thin: boolean }) {
         fr.push((f - clip.inFrame) / dur);
       }
       frozenFractions.current = fr;
+      frozenKeyTimes.current = keyTimes;   // identity to watch for the echo
+      frozenSince.current = Date.now();
     }
     const fracs = frozenFractions.current;
     if (fracs.length === 0) return null;
@@ -82,31 +138,50 @@ export function KeyframeTicks({ clip, thin }: { clip: Clip; thin: boolean }) {
     );
   }
   frozenFractions.current = null;
+  frozenKeyTimes.current = null;
+  frozenSince.current = 0;
 
   const clipDuration = Math.max(1, clip.outFrame - clip.inFrame);
   // Keys inside the clip's window. Keys outside simply don't draw (a clip
   // trimmed past its keys shows fewer dots — truthful). Each dot carries
-  // its own anchor style so the two boundary cases stay fully contained.
-  const dots: CSSProperties[] = [];
+  // its own anchor style so the two boundary cases stay fully contained,
+  // plus its DOCUMENT frame so it can be selected (a dot = the keyframe
+  // column at that frame on this clip's camera).
+  const dots: { frame: number; style: CSSProperties }[] = [];
   for (const f of keyTimes) {
     if (f < clip.inFrame || f > clip.outFrame) continue;
     if (f === clip.inFrame) {
       // Flush-left: cancel the centring shift so the dot sits just inside
       // the left edge instead of straddling it.
-      dots.push({ left: 0, transform: 'none' });
+      dots.push({ frame: f, style: { left: 0, transform: 'none' } });
     } else if (f === clip.outFrame) {
       // Flush-right: anchor by the right edge, same reason.
-      dots.push({ right: 0, left: 'auto', transform: 'none' });
+      dots.push({ frame: f, style: { right: 0, left: 'auto', transform: 'none' } });
     } else {
-      dots.push({ left: ((f - clip.inFrame) / clipDuration) * 100 + '%' });
+      dots.push({ frame: f, style: { left: ((f - clip.inFrame) / clipDuration) * 100 + '%' } });
     }
   }
   if (dots.length === 0) return null;
 
+  function selectColumn(frame: number, ev: ReactPointerEvent) {
+    // The dot is a clickable column. Stop the event reaching the clip
+    // body (which would start a clip drag / change clip selection) and
+    // select this (objectId, frame) column.
+    ev.stopPropagation();
+    ev.preventDefault();
+    useStore.getState().setSelectedKeyColumn({ objectId: clip.objectId, frame });
+  }
+
   return (
-    <div className="keyframe-dots" aria-hidden="true">
-      {dots.map((style, i) => (
-        <span key={i} className="keyframe-dot" style={style} />
+    <div className="keyframe-dots">
+      {dots.map(({ frame, style }) => (
+        <span
+          key={frame}
+          className={'keyframe-dot is-interactive'
+            + (frame === selectedFrame ? ' is-selected' : '')}
+          style={style}
+          onPointerDown={(ev) => selectColumn(frame, ev)}
+        />
       ))}
     </div>
   );

@@ -281,6 +281,11 @@ export interface State {
   // trim-end, when C++ has rescaled the real keys.
   retimingClipId: number | null;
 
+  // Selected keyframe COLUMN (a dot): (objectId, frame), or null. A dot
+  // is a deduped column of all keys at that frame on the camera, so the
+  // selection addresses the column, not a single key. Single-select v1.
+  selectedKeyColumn: { objectId: number; frame: number } | null;
+
   // True while a play-range handle is being dragged. RangeBar sets
   // it so useToolCursor keeps the play-range cursor for the whole
   // drag even if the pointer strays off the small chevron handle.
@@ -429,6 +434,7 @@ export interface State {
   setRollEditActive: (on: boolean) => void;
   setRetimeHoverActive: (on: boolean) => void;
   setRetimingClipId: (id: number | null) => void;
+  setSelectedKeyColumn: (col: { objectId: number; frame: number } | null) => void;
   setRangeHandleDragging: (on: boolean) => void;
   setHandPanning: (on: boolean) => void;
   setSpawnGhost: (ghost: { side: 'video' | 'audio'; trackId: string } | null) => void;

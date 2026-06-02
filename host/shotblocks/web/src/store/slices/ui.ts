@@ -74,6 +74,13 @@ export interface UiSlice {
    *  — instead of drifting (their true frames haven't moved yet; C++
    *  rescales them only on drag-release). Cleared on trim-end. */
   retimingClipId: number | null;
+  /** The selected keyframe COLUMN (a keyframe dot), or null. A dot is a
+   *  deduped column — every track keyed at `frame` on this camera — so
+   *  the selection addresses (objectId, frame), not a single key. Single-
+   *  select for v1. Drives the dot's selected render state; Delete / drag
+   *  will act on it in later steps. Cleared on Esc, click-away, or any
+   *  clip-list edit that could move/remove the column. */
+  selectedKeyColumn: { objectId: number; frame: number } | null;
   rangeHandleDragging: boolean;
   /** True while a Hand-tool pan drag is in flight. Drives the
    *  cursor swap from open-hand → closed-hand for the duration of
@@ -120,6 +127,7 @@ export interface UiSlice {
   setRollEditActive: (on: boolean) => void;
   setRetimeHoverActive: (on: boolean) => void;
   setRetimingClipId: (id: number | null) => void;
+  setSelectedKeyColumn: (col: { objectId: number; frame: number } | null) => void;
   setRangeHandleDragging: (on: boolean) => void;
   setHandPanning: (on: boolean) => void;
   setSpawnGhost: (ghost: { side: 'video' | 'audio'; trackId: string } | null) => void;
@@ -158,6 +166,7 @@ export const createUiSlice: StateCreator<State, [], [], UiSlice> = (set) => ({
   rollEditActive: false,
   retimeHoverActive: false,
   retimingClipId: null,
+  selectedKeyColumn: null,
   rangeHandleDragging: false,
   handPanning: false,
   spawnGhost: null,
@@ -208,6 +217,12 @@ export const createUiSlice: StateCreator<State, [], [], UiSlice> = (set) => ({
   setRollEditActive: (on) => set((s) => (s.rollEditActive === on ? s : { rollEditActive: on })),
   setRetimeHoverActive: (on) => set((s) => (s.retimeHoverActive === on ? s : { retimeHoverActive: on })),
   setRetimingClipId: (id) => set((s) => (s.retimingClipId === id ? s : { retimingClipId: id })),
+  setSelectedKeyColumn: (col) => set((s) => {
+    const cur = s.selectedKeyColumn;
+    const same = cur === col
+      || (!!cur && !!col && cur.objectId === col.objectId && cur.frame === col.frame);
+    return same ? s : { selectedKeyColumn: col };
+  }),
   setRangeHandleDragging: (on) => set((s) => (s.rangeHandleDragging === on ? s : { rangeHandleDragging: on })),
   setHandPanning: (on) => set((s) => (s.handPanning === on ? s : { handPanning: on })),
   setSpawnGhost: (ghost) => set((s) => {

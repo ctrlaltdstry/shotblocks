@@ -24,6 +24,17 @@ export function useKeyboard(): void {
         return;
       }
 
+      // Esc clears the selected keyframe column (a keyframe dot). Only
+      // acts when one is selected, so it doesn't swallow Esc from other
+      // would-be users; expand here as more Esc-dismissible state lands.
+      if (ev.key === 'Escape') {
+        if (useStore.getState().selectedKeyColumn) {
+          ev.preventDefault();
+          useStore.getState().setSelectedKeyColumn(null);
+          return;
+        }
+      }
+
       // Undo / Redo — forward to C4D's native undo. WebView2 swallows
       // Ctrl+Z before C4D's menu system sees it, so we explicitly
       // tell C++ to call doc->DoUndo() / DoRedo(). C++ writes the

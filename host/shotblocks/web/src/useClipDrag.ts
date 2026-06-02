@@ -94,11 +94,8 @@ export function useClipDrag(
       window.removeEventListener('pointercancel', onCancel);
       window.removeEventListener('keydown', onKey);
 
-      useStore.getState().setDragClip(null);
       useStore.getState().setSpawnGhost(null);
       useStore.getState().setSnapIndicatorFrames([]);
-      // Body `.is-clip-dragging` class is mirrored from dragClip
-      // state by useDragRecovery — no manual remove needed here.
 
       // Solo REPLACE drag commits on release. Group drag and solo
       // RIPPLE both committed live each pointermove — nothing to do.
@@ -107,6 +104,17 @@ export function useClipDrag(
         useStore.getState().moveClip(clip.id, trackId, dest.trackId, dest.inFrame, snapFrames, 'replace');
       }
       clearTransform();
+
+      // Clear dragClip LAST — after the position commit + transform clear.
+      // KeyframeTicks freezes its dots while dragClip points at this clip;
+      // dropping the flag BEFORE moveClip ran let the dots unfreeze and
+      // recompute against the clip's OLD in/out (not yet updated) with the
+      // transform still in flux → they flashed at a wrong location for a
+      // frame before snapping right. Clearing it here means the dots
+      // unfreeze only once the store + DOM both hold the final position.
+      // Body `.is-clip-dragging` class is mirrored from dragClip by
+      // useDragRecovery — no manual remove needed.
+      useStore.getState().setDragClip(null);
 
       // Shift each moved clip's camera keyframes so the animation travels
       // with the clip. Runs AFTER the store commit above, so we read final
