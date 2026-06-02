@@ -85,11 +85,13 @@ if ($LASTEXITCODE -ge 8) { throw "robocopy (python) failed ($LASTEXITCODE)" }
 Copy-Item $xdl64 (Join-Path $stage "shotblocks.xdl64") -Force
 
 # Web UI: the full bundled dist/ (index.html + cursors/ + svg assets) into web/.
-# Exclude dev sidecars the Vite build copies through from the source cursors/
-# dir: *.cssurl.txt (notes) and .gitignore. The real .cur files stay.
+# Exclude dev sidecars Vite copies through from public/cursors/: *.cssurl.txt
+# (notes), .gitignore, and _*-prefixed scratch (the _make_retime_cur.py tool +
+# its _preview_*.png exports), plus the __pycache__ bytecode dir. The real
+# .cur files stay. Same _*-scratch convention as the docs stage below.
 $webStage = Join-Path $stage "web"
 New-Item -ItemType Directory -Path $webStage -Force | Out-Null
-robocopy $webDist $webStage /MIR /XF *.cssurl.txt .gitignore /NFL /NDL /NJH /NJS /NP | Out-Null
+robocopy $webDist $webStage /MIR /XD __pycache__ /XF *.cssurl.txt .gitignore _* /NFL /NDL /NJH /NJS /NP | Out-Null
 if ($LASTEXITCODE -ge 8) { throw "robocopy (web) failed ($LASTEXITCODE)" }
 
 # Bundled user manual: ships inside the plugin so the Help button's
