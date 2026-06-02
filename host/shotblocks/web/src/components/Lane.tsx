@@ -34,12 +34,15 @@ export function Lane({ track, side }: { track: Track; side: 'video' | 'audio' })
   const resizeClip = useStore((s) => s.resizeClip);
   const setSnapIndicatorFrames = useStore((s) => s.setSnapIndicatorFrames);
   const altHeld = useStore((s) => s.altHeld);
+  const ctrlHeld = useStore((s) => s.ctrlHeld);
   const [cursorMode, setCursorMode] = useState<CursorMode>('default');
   // Retime intent for the cursor: hovering a video-clip trim edge with
-  // Alt held, OR an Alt-retime drag in flight. Audio edges never retime
-  // (no keyframes), so the video gate keeps the cursor honest there.
+  // Alt+Ctrl held, OR a retime drag in flight. Alt ALONE is the keyframe
+  // marquee now, so retime took the Alt+Ctrl combo to avoid competing.
+  // Audio edges never retime (no keyframes), so the video gate keeps the
+  // cursor honest there.
   const [retimeDragging, setRetimeDragging] = useState(false);
-  const retimeActive = (cursorMode === 'trim' && altHeld && side === 'video') || retimeDragging;
+  const retimeActive = (cursorMode === 'trim' && altHeld && ctrlHeld && side === 'video') || retimeDragging;
   const visibleSpan = Math.max(1, h.vMax - h.vMin);
   const thin = laneHeight > 0 && laneHeight < THIN_THRESHOLD_PX;
   const trackId = (side === 'video' ? 'V' : 'A') + track.id;
@@ -292,10 +295,11 @@ export function Lane({ track, side }: { track: Track; side: 'video' | 'audio' })
               origOutFrame: clip.outFrame,
               startClientX: ev.clientX,
               pxPerFrame,
-              // Latch the retime intent: Alt held at press = retime this
-              // edit's keyframes (only meaningful on video clips with a
-              // camera; audio clips carry no keyframes so retime is inert).
-              retime: ev.altKey && side === 'video' && (clip.objectId ?? 0) > 0,
+              // Latch the retime intent: Alt+Ctrl at press = retime this
+              // edit's keyframes (Alt alone is the keyframe marquee now).
+              // Only meaningful on video clips with a camera; audio clips
+              // carry no keyframes so retime is inert.
+              retime: ev.altKey && ev.ctrlKey && side === 'video' && (clip.objectId ?? 0) > 0,
               objectId: clip.objectId ?? 0,
             };
             // Keep the retime cursor pinned for the whole drag (the latch
@@ -371,7 +375,10 @@ export function Lane({ track, side }: { track: Track; side: 'video' | 'audio' })
     // Cmd/Ctrl held during trim → ripple mode (push same-track
     // neighbors aside instead of overwriting them). Live: tapping the
     // modifier mid-drag toggles the mode, mirroring Premiere/Resolve.
-    const mode = (ev.ctrlKey || ev.metaKey) ? 'ripple' : 'replace';
+    // EXCEPT during a retime (Alt+Ctrl latched): Ctrl is part of the
+    // retime combo there, not a ripple request — force replace so the
+    // two gestures don't conflate.
+    const mode = (!t.retime && (ev.ctrlKey || ev.metaKey)) ? 'ripple' : 'replace';
     resizeClip(t.clipId, trackId, t.edge, snap.inFrame, mode);
   }
 

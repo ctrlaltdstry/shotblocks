@@ -1,5 +1,5 @@
 import { useEffect, type RefObject } from 'react';
-import { useStore, isTrackLocked } from './store';
+import { useStore, isTrackLocked, keyColKey } from './store';
 
 /** Pixel slop before pointerdown becomes a marquee drag. Below this
  *  we treat the gesture as a click (which clears selection). Matches
@@ -24,6 +24,11 @@ export function useMarquee(lanesAreaRef: RefObject<HTMLDivElement | null>): void
     let startY = 0;
     let baseSelection: Set<number> = new Set();
     let additive = false;
+    // 'clip' = the normal background marquee (selects clips). 'keyframe' =
+    // an Alt+drag started over a video clip body, which rubber-bands the
+    // keyframe DOTS instead (cross-clip). Both reuse this rect machinery.
+    let mode: 'clip' | 'keyframe' = 'clip';
+    let baseKeyCols: Set<string> = new Set();
 
     function onMove(ev: PointerEvent) {
       if (ev.pointerId !== pointerId) return;
@@ -39,6 +44,13 @@ export function useMarquee(lanesAreaRef: RefObject<HTMLDivElement | null>): void
       const x0 = startX - rect.left;
       const y0 = startY - rect.top;
       useStore.getState().setMarquee({ x0, y0, x1, y1 });
+      if (mode === 'keyframe') {
+        const hits = keyDotsInRect(el!, x0, y0, x1, y1);
+        const next = additive ? new Set(baseKeyCols) : new Set<string>();
+        for (const k of hits) next.add(k);
+        useStore.getState().setSelectedKeyColumns(next);
+        return;
+      }
       const hits = clipsInRect(el!, x0, y0, x1, y1);
       const next = additive ? new Set(baseSelection) : new Set<number>();
       for (const id of hits) next.add(id);
@@ -54,13 +66,14 @@ export function useMarquee(lanesAreaRef: RefObject<HTMLDivElement | null>): void
       window.removeEventListener('pointermove', onMove);
       window.removeEventListener('pointerup', onUp);
       window.removeEventListener('pointercancel', onCancel);
-      // Click (no drag): clear selection unless additive (Shift held).
-      // Also clears the level-keyframe selection so an empty-canvas
-      // click is a true "deselect everything" gesture.
-      if (!wasActive && !additive) {
+      // Click (no drag): clear selection unless additive (Shift held). In
+      // keyframe mode (Alt over a clip) a no-drag click is an Alt-click on
+      // the clip body — don't wipe the clip selection; just leave things
+      // as-is. In clip mode, an empty-canvas click deselects everything.
+      if (!wasActive && !additive && mode === 'clip') {
         useStore.getState().setSelectedClipIds(new Set<number>());
         useStore.getState().setLevelKfSelection(null);
-        useStore.getState().setSelectedKeyColumn(null);
+        useStore.getState().setSelectedKeyColumns(new Set<string>());
       }
       try { el!.releasePointerCapture(ev.pointerId); } catch { /* noop */ }
     }
@@ -82,19 +95,24 @@ export function useMarquee(lanesAreaRef: RefObject<HTMLDivElement | null>): void
       // capture-phase; Zoom drag-rect lands in Commit 2.)
       const tool = useStore.getState().activeTool;
       if (tool === 'hand' || tool === 'zoom') return;
-      // Reject if the pointer is over a clip — clip drag/select owns
-      // its own pointerdown. We only start a marquee on bare
-      // lanes-area background (or empty lane space).
       const target = ev.target as HTMLElement | null;
       if (!target) return;
-      if (target.closest('.shot-block')) return;
-      // Also reject the V/A splitter — it owns its own up/down drag.
-      // It lives inside the lanes-area, and its React stopPropagation
-      // can't block this native listener on an ancestor DOM node.
+      // Alt + press over a VIDEO clip body → keyframe-dot marquee. (A press
+      // directly on a dot is handled by the dot itself, which stops the
+      // event, so it never reaches here.) Plain press over a clip is the
+      // clip's own drag/select — bail so we don't fight it.
+      const videoClip = target.closest('.shot-block.is-video');
+      if (ev.altKey && videoClip) {
+        mode = 'keyframe';
+      } else if (target.closest('.shot-block')) {
+        return;
+      } else {
+        mode = 'clip';
+      }
+      // Reject the V/A splitter — it owns its own up/down drag. It lives
+      // inside the lanes-area, and its React stopPropagation can't block
+      // this native listener on an ancestor DOM node.
       if (target.closest('.stack__divider')) return;
-      // Also skip if the lanes-area itself is the click target (or a
-      // lane is): both are valid marquee zones. The early-return
-      // above already filtered clips and their descendants.
 
       pointerId = ev.pointerId;
       startX = ev.clientX;
@@ -102,6 +120,7 @@ export function useMarquee(lanesAreaRef: RefObject<HTMLDivElement | null>): void
       active = false;
       additive = ev.shiftKey || ev.metaKey || ev.ctrlKey;
       baseSelection = new Set(useStore.getState().selectedClipIds);
+      baseKeyCols = new Set(useStore.getState().selectedKeyColumns);
       try { el!.setPointerCapture(ev.pointerId); } catch { /* noop */ }
       window.addEventListener('pointermove', onMove);
       window.addEventListener('pointerup', onUp);
@@ -151,6 +170,37 @@ function clipsInRect(
     if (laneTrack && isTrackLocked(laneTrack)) continue;
     const id = parseInt(clipEl.getAttribute('data-clip') || '', 10);
     if (Number.isFinite(id)) hits.push(id);
+  }
+  return hits;
+}
+
+/** Keyframe-dot keys ("objectId:frame") whose rendered dots intersect the
+ *  marquee rectangle, across ALL clips. Reads the data-kf-obj / data-kf-
+ *  frame attributes the dots carry. Locked-track clips are skipped (their
+ *  keys can't be edited). */
+function keyDotsInRect(
+  lanesArea: HTMLElement,
+  x0: number, y0: number, x1: number, y1: number,
+): string[] {
+  const rx1 = Math.min(x0, x1);
+  const ry1 = Math.min(y0, y1);
+  const rx2 = Math.max(x0, x1);
+  const ry2 = Math.max(y0, y1);
+  const areaRect = lanesArea.getBoundingClientRect();
+  const hits: string[] = [];
+  const dots = lanesArea.querySelectorAll<HTMLElement>('.keyframe-dot[data-kf-frame]');
+  for (const dot of dots) {
+    const dr = dot.getBoundingClientRect();
+    const cx = (dr.left + dr.right) / 2 - areaRect.left;
+    const cy = (dr.top + dr.bottom) / 2 - areaRect.top;
+    // Hit by the dot's CENTRE — a thin strip of dots reads better when the
+    // box has to actually cover the dot, not just graze its hit-pad.
+    if (cx < rx1 || cx > rx2 || cy < ry1 || cy > ry2) continue;
+    const laneTrack = dot.closest('.lane')?.getAttribute('data-track');
+    if (laneTrack && isTrackLocked(laneTrack)) continue;
+    const obj = parseInt(dot.getAttribute('data-kf-obj') || '', 10);
+    const frame = parseInt(dot.getAttribute('data-kf-frame') || '', 10);
+    if (Number.isFinite(obj) && Number.isFinite(frame)) hits.push(keyColKey(obj, frame));
   }
   return hits;
 }

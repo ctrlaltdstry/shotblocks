@@ -398,3 +398,14 @@ export function isTrackLockedIn(trackId: string, state: TracksStateLike): boolea
   const tracks = side === 'video' ? state.videoTracks : state.audioTracks;
   return tracks.some((t) => t.id === num && t.locked);
 }
+
+/** Encode a keyframe-column selection key. The selectedKeyColumns Set
+ *  holds these strings; a column is (camera objectId, document frame). */
+export function keyColKey(objectId: number, frame: number): string {
+  return objectId + ':' + frame;
+}
+/** Decode a keyframe-column key back to {objectId, frame}. */
+export function parseKeyCol(key: string): { objectId: number; frame: number } {
+  const i = key.indexOf(':');
+  return { objectId: parseInt(key.slice(0, i), 10), frame: parseInt(key.slice(i + 1), 10) };
+}

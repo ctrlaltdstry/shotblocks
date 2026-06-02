@@ -10,6 +10,61 @@ audio-only), so the refCount guard never fires but stays as insurance;
 dots keep the default cursor (no custom cursor, per user). Single-select
 only — multi-select / marquee deferred, never requested.
 
+## Marquee multi-select — SHIPPED
+
+Built: multi-select via click / Shift-click / Alt-drag marquee; delete +
+drag operate on the whole set. Selection model is `selectedKeyColumns:
+Set<"objectId:frame">` (was a single column). **Modifier split that landed
+(differs from the first attempt below):** Alt+edge-drag competed with the
+old Alt-retime, so RETIME moved to **Alt+Ctrl+edge-drag**, and **plain Alt
+is the marquee** (Alt+drag over a video clip body). `useClipDrag` bails on
+Alt+video so the press reaches `useMarquee`; trim's Ctrl-ripple is
+suppressed during a retime so Alt+Ctrl doesn't double-fire. Added a
+mirrored `ctrlHeld` store flag (like `altHeld`) for the retime cursor's
+hover check. Group-drag is per-camera (the grabbed clip's selected
+columns); cross-clip simultaneous drag not done (rarely the intent).
+
+Original marquee plan below (trigger differs — see above).
+
+**Decisions made with the user:**
+- **Scope:** cross-clip — the marquee selects every dot the box touches
+  across ALL clips/cameras, not just one clip (like the clip marquee).
+- **Trigger:** **Alt + left-drag over a video clip body** rubber-bands a
+  keyframe marquee. Verified free: `useClipDrag` ignores altKey (clip-move
+  unaffected — plain drag still moves the clip), the pen Alt-invite is
+  audio-only (`.shot-block.is-audio`), and retime Alt is on clip EDGES not
+  the body. So plain drag = move clip; Alt+drag = marquee keyframes. No
+  lost grab area.
+
+**Build:**
+- **Selection model:** replace single `selectedKeyColumn {objectId,
+  frame}` with `selectedKeyColumns` — a Set of `objectId:frame` keys (or
+  `{objectId, frame}[]`). Keep single-click selection working (selects
+  one; Shift-click adds). Update KeyframeTicks' `selectedFrame` check, the
+  Esc / click-away / keys-changed clears, and the `is-selected` render.
+- **Marquee gesture:** mirror `LevelCurve.tsx` (pending → marquee-drag,
+  `baseSet` for additive Shift, rubber-band rect). But the rect is in
+  TIMELINE space (spans clips), not one clip's SVG — hit-test every
+  rendered dot's screen rect against the box. A timeline-level overlay
+  (like `MarqueeOverlay`/`useMarquee` for clips) is the right host, gated
+  to fire only on Alt+drag started over a video clip body.
+- **Multi delete:** Delete with N columns selected → `flushKeyframeDeletes`
+  already takes an array; pass one entry per selected column. C++ loops.
+- **Multi drag:** dragging any selected dot moves the WHOLE set by the same
+  frame delta (group drag). `flushKeyframeColumnShifts` takes an array;
+  send one entry per column with the shared delta. The echo-hold +
+  re-anchor logic must handle N held dots (extend `pendingShift` to a
+  list, or hold by a shared px offset keyed by the moved frames).
+- **Reuse:** the column delete/shift C++ + JS flush plumbing is already
+  array-shaped — multi-select is mostly a JS selection-model + gesture
+  change, little/no new C++.
+
+**Open Qs:** group-drag clamp when columns span clips with different
+windows (clamp each to its own clip? or block the drag if any would leave
+its clip?). Recommend: clamp each column to its own clip independently.
+
+---
+
 Original plan below (for reference).
 
 ---

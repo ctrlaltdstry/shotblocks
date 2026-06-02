@@ -59,12 +59,14 @@ export function usePageZoomSuppress() {
 export function useAltKey() {
   useEffect(() => {
     const setAlt = useStore.getState().setAltHeld;
-    function sync(e: { altKey: boolean }) {
+    const setCtrl = useStore.getState().setCtrlHeld;
+    function sync(e: { altKey: boolean; ctrlKey?: boolean }) {
       // Ref-equality-skip happens inside the store action; calling
       // setAlt(true) when it's already true is a no-op for renders.
       setAlt(e.altKey);
+      setCtrl(!!e.ctrlKey);
     }
-    const blur = () => setAlt(false);
+    const blur = () => { setAlt(false); setCtrl(false); };
     // Cover every UI event that surfaces `altKey` on the event object.
     // Together these run on virtually every interaction — the alt flag
     // never drifts more than one event-tick away from physical reality.
@@ -84,6 +86,7 @@ export function useAltKey() {
       window.removeEventListener('wheel', sync, true);
       window.removeEventListener('blur', blur);
       setAlt(false);
+      setCtrl(false);
     };
   }, []);
 }

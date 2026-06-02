@@ -65,6 +65,8 @@ export {
   audioPeakDocFrames,
   audioBeatLines,
   audioSongPartLines,
+  keyColKey,
+  parseKeyCol,
 } from './store/clipMath';
 
 // Authoritative app state. C++ is the source of truth for fps/frame/
@@ -281,10 +283,11 @@ export interface State {
   // trim-end, when C++ has rescaled the real keys.
   retimingClipId: number | null;
 
-  // Selected keyframe COLUMN (a dot): (objectId, frame), or null. A dot
-  // is a deduped column of all keys at that frame on the camera, so the
-  // selection addresses the column, not a single key. Single-select v1.
-  selectedKeyColumn: { objectId: number; frame: number } | null;
+  // Selected keyframe COLUMNS (dots), as a Set of "objectId:frame" keys
+  // (keyColKey / parseKeyCol). A dot is a deduped column of all keys at
+  // that frame on the camera. Multi-select via click / Shift-click /
+  // Alt-drag marquee; Delete / drag act on the whole set.
+  selectedKeyColumns: Set<string>;
 
   // True while a play-range handle is being dragged. RangeBar sets
   // it so useToolCursor keeps the play-range cursor for the whole
@@ -434,7 +437,7 @@ export interface State {
   setRollEditActive: (on: boolean) => void;
   setRetimeHoverActive: (on: boolean) => void;
   setRetimingClipId: (id: number | null) => void;
-  setSelectedKeyColumn: (col: { objectId: number; frame: number } | null) => void;
+  setSelectedKeyColumns: (cols: Set<string>) => void;
   setRangeHandleDragging: (on: boolean) => void;
   setHandPanning: (on: boolean) => void;
   setSpawnGhost: (ghost: { side: 'video' | 'audio'; trackId: string } | null) => void;
@@ -598,6 +601,10 @@ export interface State {
    *  active tool (modifier-as-tool). Set by an App-level listener. */
   altHeld: boolean;
   setAltHeld: (on: boolean) => void;
+  /** Ctrl held globally, mirrored like altHeld. Used for hover-time
+   *  gesture checks with no event (Alt+Ctrl retime cursor). */
+  ctrlHeld: boolean;
+  setCtrlHeld: (on: boolean) => void;
 
   /** True while an Alt+RMB zoom gesture is in flight. useToolCursor
    *  must NOT show the pen cursor during this — Alt is the zoom

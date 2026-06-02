@@ -24,6 +24,10 @@ export interface UiSlice {
   detectingBeats: boolean;
   beatGridVisible: boolean;
   altHeld: boolean;
+  // Ctrl mirrored the same way as altHeld (useAltKey reads e.ctrlKey on
+  // every event as ground truth). Needed for hover-time gesture checks
+  // that have no event — currently the Alt+Ctrl retime cursor.
+  ctrlHeld: boolean;
   altRmbZooming: boolean;
 
   /** Available camera types in this C4D session (renderer-aware).
@@ -74,13 +78,14 @@ export interface UiSlice {
    *  — instead of drifting (their true frames haven't moved yet; C++
    *  rescales them only on drag-release). Cleared on trim-end. */
   retimingClipId: number | null;
-  /** The selected keyframe COLUMN (a keyframe dot), or null. A dot is a
-   *  deduped column — every track keyed at `frame` on this camera — so
-   *  the selection addresses (objectId, frame), not a single key. Single-
-   *  select for v1. Drives the dot's selected render state; Delete / drag
-   *  will act on it in later steps. Cleared on Esc, click-away, or any
-   *  clip-list edit that could move/remove the column. */
-  selectedKeyColumn: { objectId: number; frame: number } | null;
+  /** Selected keyframe COLUMNS (keyframe dots), as a Set of "objectId:
+   *  frame" string keys (see keyColKey / parseKeyCol). A dot is a deduped
+   *  column — every track keyed at `frame` on this camera — so each entry
+   *  addresses (objectId, frame), not a single key. Multi-select via
+   *  click / Shift-click / Alt-drag marquee. Drives the dots' selected
+   *  render; Delete / drag act on the whole set. Cleared on Esc,
+   *  click-away, or a clip-list edit that moves/removes a column. */
+  selectedKeyColumns: Set<string>;
   rangeHandleDragging: boolean;
   /** True while a Hand-tool pan drag is in flight. Drives the
    *  cursor swap from open-hand → closed-hand for the duration of
@@ -118,6 +123,7 @@ export interface UiSlice {
   setDetectingBeats: (on: boolean) => void;
   setBeatGridVisible: (on: boolean) => void;
   setAltHeld: (on: boolean) => void;
+  setCtrlHeld: (on: boolean) => void;
   setAltRmbZooming: (on: boolean) => void;
 
   setDragPreview: (preview: DragPreview | null) => void;
@@ -127,7 +133,7 @@ export interface UiSlice {
   setRollEditActive: (on: boolean) => void;
   setRetimeHoverActive: (on: boolean) => void;
   setRetimingClipId: (id: number | null) => void;
-  setSelectedKeyColumn: (col: { objectId: number; frame: number } | null) => void;
+  setSelectedKeyColumns: (cols: Set<string>) => void;
   setRangeHandleDragging: (on: boolean) => void;
   setHandPanning: (on: boolean) => void;
   setSpawnGhost: (ghost: { side: 'video' | 'audio'; trackId: string } | null) => void;
@@ -151,6 +157,7 @@ export const createUiSlice: StateCreator<State, [], [], UiSlice> = (set) => ({
   detectingBeats: false,
   beatGridVisible: true,
   altHeld: false,
+  ctrlHeld: false,
   altRmbZooming: false,
 
   availableCameraTypes: [],
@@ -166,7 +173,7 @@ export const createUiSlice: StateCreator<State, [], [], UiSlice> = (set) => ({
   rollEditActive: false,
   retimeHoverActive: false,
   retimingClipId: null,
-  selectedKeyColumn: null,
+  selectedKeyColumns: new Set<string>(),
   rangeHandleDragging: false,
   handPanning: false,
   spawnGhost: null,
@@ -208,6 +215,7 @@ export const createUiSlice: StateCreator<State, [], [], UiSlice> = (set) => ({
   // pointermove during a no-alt-state-change drag would wake every
   // subscriber to the full state via Zustand's subscribe().
   setAltHeld: (on) => set((s) => (s.altHeld === on ? s : { altHeld: on })),
+  setCtrlHeld: (on) => set((s) => (s.ctrlHeld === on ? s : { ctrlHeld: on })),
   setAltRmbZooming: (on) => set({ altRmbZooming: on }),
 
   setDragPreview: (preview) => set({ dragPreview: preview }),
@@ -217,11 +225,16 @@ export const createUiSlice: StateCreator<State, [], [], UiSlice> = (set) => ({
   setRollEditActive: (on) => set((s) => (s.rollEditActive === on ? s : { rollEditActive: on })),
   setRetimeHoverActive: (on) => set((s) => (s.retimeHoverActive === on ? s : { retimeHoverActive: on })),
   setRetimingClipId: (id) => set((s) => (s.retimingClipId === id ? s : { retimingClipId: id })),
-  setSelectedKeyColumn: (col) => set((s) => {
-    const cur = s.selectedKeyColumn;
-    const same = cur === col
-      || (!!cur && !!col && cur.objectId === col.objectId && cur.frame === col.frame);
-    return same ? s : { selectedKeyColumn: col };
+  setSelectedKeyColumns: (cols) => set((s) => {
+    // Ref-equality skip on content so identical selections don't re-render.
+    const cur = s.selectedKeyColumns;
+    if (cur === cols) return s;
+    if (cur.size === cols.size) {
+      let same = true;
+      for (const k of cols) if (!cur.has(k)) { same = false; break; }
+      if (same) return s;
+    }
+    return { selectedKeyColumns: cols };
   }),
   setRangeHandleDragging: (on) => set((s) => (s.rangeHandleDragging === on ? s : { rangeHandleDragging: on })),
   setHandPanning: (on) => set((s) => (s.handPanning === on ? s : { handPanning: on })),

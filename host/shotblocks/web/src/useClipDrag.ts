@@ -448,6 +448,12 @@ export function useClipDrag(
     function onDown(ev: PointerEvent) {
       if (ev.button !== 0) return;
 
+      // Alt + left-press over a VIDEO clip is the keyframe-dot MARQUEE
+      // gesture (useMarquee, on the lanes-area). Bail so we neither start a
+      // clip body-drag nor preventDefault the event — it must bubble to the
+      // marquee listener. (Alt has no clip-body meaning otherwise.)
+      if (ev.altKey && side === 'video') return;
+
       // Hand and Zoom tools own left-click on the canvas — Hand for
       // panning, Zoom for drag-rect zoom. Clip drag is suspended while
       // either is active; user must switch tools to move clips.

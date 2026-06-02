@@ -1,5 +1,5 @@
 import { useEffect } from 'react';
-import { useStore } from './store';
+import { useStore, parseKeyCol } from './store';
 import { send } from './lib/host';
 import { flushKeyframeDeletes } from './usePersistence';
 
@@ -25,13 +25,13 @@ export function useKeyboard(): void {
         return;
       }
 
-      // Esc clears the selected keyframe column (a keyframe dot). Only
-      // acts when one is selected, so it doesn't swallow Esc from other
+      // Esc clears the selected keyframe columns (dots). Only acts when
+      // something is selected, so it doesn't swallow Esc from other
       // would-be users; expand here as more Esc-dismissible state lands.
       if (ev.key === 'Escape') {
-        if (useStore.getState().selectedKeyColumn) {
+        if (useStore.getState().selectedKeyColumns.size > 0) {
           ev.preventDefault();
-          useStore.getState().setSelectedKeyColumn(null);
+          useStore.getState().setSelectedKeyColumns(new Set<string>());
           return;
         }
       }
@@ -216,19 +216,24 @@ export function useKeyboard(): void {
       // most specific wins so Delete doesn't also nuke the clip.
       if (ev.key === 'Delete' || ev.key === 'Backspace') {
         const st = useStore.getState();
-        const col = st.selectedKeyColumn;
-        if (col) {
+        const cols = st.selectedKeyColumns;
+        if (cols.size > 0) {
           ev.preventDefault();
           ev.stopPropagation();
-          // refCount across ALL video clips — a camera shared by two
-          // clips is skipped by C++ (deleting would corrupt the other
-          // clip's animation), same guard as move/retime.
-          let refCount = 0;
+          // refCount per camera across ALL video clips — a shared camera
+          // is skipped by C++ (deleting would corrupt the other clip's
+          // animation), same guard as move/retime. One delete entry per
+          // selected column; C++ loops.
+          const refByObj = new Map<number, number>();
           for (const t of st.videoTracks)
             for (const c of t.clips)
-              if (c.objectId === col.objectId) refCount++;
-          flushKeyframeDeletes([{ objectId: col.objectId, frame: col.frame, refCount }]);
-          st.setSelectedKeyColumn(null);
+              if (c.objectId > 0) refByObj.set(c.objectId, (refByObj.get(c.objectId) ?? 0) + 1);
+          const deletes = [...cols].map((key) => {
+            const { objectId, frame } = parseKeyCol(key);
+            return { objectId, frame, refCount: refByObj.get(objectId) ?? 1 };
+          });
+          flushKeyframeDeletes(deletes);
+          st.setSelectedKeyColumns(new Set<string>());
           return;
         }
         const lk = st.levelKfSelection;

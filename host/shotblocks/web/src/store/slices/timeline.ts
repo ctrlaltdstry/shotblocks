@@ -4,7 +4,7 @@ import { mintId } from '../../store';
 import type { Clip, Track } from '../types';
 import { TRACK_FLAG_DEFAULTS } from '../types';
 import { MIN_CLIP_FRAMES } from '../constants';
-import { findFreeSlot, rippleAround, replaceOverlap } from '../clipMath';
+import { findFreeSlot, rippleAround, replaceOverlap, parseKeyCol } from '../clipMath';
 
 /** The timeline data slice — videoTracks / audioTracks, plus every
  *  action that mutates them. The bulk of the store lives here:
@@ -217,21 +217,26 @@ export const createTimelineSlice: StateCreator<State, [], [], TimelineSlice> = (
     // don't drop the optimistic state until the authoritative echo lands.
     const clearRetiming = !keysSame && s.retimingClipId !== null;
 
-    // Drop the selected keyframe column if its camera's keys changed and
-    // the selected frame is no longer present — the column it pointed at
-    // moved or was removed (e.g. edited in the dope sheet), so a stale
-    // selection would highlight the wrong dot or nothing.
-    let clearKeyColumn = false;
-    if (!keysSame && s.selectedKeyColumn) {
-      const arr = nextKeyTimes.get(s.selectedKeyColumn.objectId);
-      if (!arr || !arr.includes(s.selectedKeyColumn.frame)) clearKeyColumn = true;
+    // Prune selected keyframe columns whose frame no longer exists after a
+    // keys change — a column moved or was removed (edited in the dope
+    // sheet, or shifted/deleted here), so a stale entry would highlight the
+    // wrong dot or nothing. Keep the columns that are still present.
+    let prunedKeyCols: Set<string> | null = null;
+    if (!keysSame && s.selectedKeyColumns.size > 0) {
+      const kept = new Set<string>();
+      for (const key of s.selectedKeyColumns) {
+        const { objectId, frame } = parseKeyCol(key);
+        const arr = nextKeyTimes.get(objectId);
+        if (arr && arr.includes(frame)) kept.add(key);
+      }
+      if (kept.size !== s.selectedKeyColumns.size) prunedKeyCols = kept;
     }
 
-    if (orphansSame && namesSame && keysSame && !clearRetiming && !clearKeyColumn
+    if (orphansSame && namesSame && keysSame && !clearRetiming && !prunedKeyCols
         && videoTracks === s.videoTracks) return s;
     return {
       ...(clearRetiming ? { retimingClipId: null } : {}),
-      ...(clearKeyColumn ? { selectedKeyColumn: null } : {}),
+      ...(prunedKeyCols ? { selectedKeyColumns: prunedKeyCols } : {}),
       orphanObjectIds: orphansSame ? s.orphanObjectIds : nextOrphans,
       cameraNames: namesSame ? s.cameraNames : nextNames,
       cameraKeyTimes: keysSame ? s.cameraKeyTimes : nextKeyTimes,
