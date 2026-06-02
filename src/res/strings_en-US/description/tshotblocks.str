@@ -2,6 +2,7 @@ STRINGTABLE Tshotblocks
 {
     Tshotblocks                       "Shotblocks";
     SHOTBLOCKS_ENABLED                "Enabled";
+    SHOTBLOCKS_DAMPING_ENABLED        "Enable Damping";
     SHOTBLOCKS_DAMPING_POS            "Linear";
     SHOTBLOCKS_DAMPING_ROT            "Angular";
     SHOTBLOCKS_SUBSTEP_THRESHOLD      "Substep Threshold (fps)";

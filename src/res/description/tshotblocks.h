@@ -8,6 +8,7 @@ enum
     // was never built; the rig is additive-only. ID retired, not reused.
     SHOTBLOCKS_DAMPING_POS          = 1002,
     SHOTBLOCKS_DAMPING_ROT          = 1003,
+    SHOTBLOCKS_DAMPING_ENABLED      = 1004,  // master on/off for spring smoothing; OFF = camera fully interactive
     SHOTBLOCKS_SUBSTEP_THRESHOLD    = 1006,
     SHOTBLOCKS_RESET_ON_BOUNDARY    = 1008,
     SHOTBLOCKS_LOOK_AT_TARGET       = 1020,

@@ -38,6 +38,11 @@ SHOTBLOCKS_ENABLED              = 1000
 # the rig is additive-only. ID retired, not reused.
 SHOTBLOCKS_DAMPING_POS          = 1002
 SHOTBLOCKS_DAMPING_ROT          = 1003
+# Master damping on/off. OFF (default) = no spring smoothing anywhere;
+# the tag applies targets instantly and only writes the channels it
+# owns, so the camera stays fully interactive in the viewport. ON =
+# the spring runs (one step per frame) and adds weighted/laggy motion.
+SHOTBLOCKS_DAMPING_ENABLED      = 1004
 SHOTBLOCKS_SUBSTEP_THRESHOLD    = 1006
 SHOTBLOCKS_RESET_ON_BOUNDARY    = 1008
 SHOTBLOCKS_LOOK_AT_TARGET       = 1020
@@ -337,6 +342,40 @@ def _read_frame_offset(tag):
     return float(v.x), -float(v.y)
 
 
+def _channel_ownership(tag):
+    """Decide which transform channels the tag actually drives this
+    frame, given its parameters. A channel the tag does NOT own is left
+    untouched so the user can navigate / keyframe it freely.
+
+    Returns (owns_pos, owns_rot) bools.
+
+    - Rotation is owned when look-at aims the camera (strength > 0 and a
+      target is set), or Roll is non-zero, or Bank-Into-Turns is on, or
+      Handheld Noise is on (it shakes rotation).
+    - Position is owned when Chase drives the body, or Handheld Noise is
+      on (it shakes position).
+
+    Damping is deliberately NOT a reason to own a channel: with nothing
+    else active, damping has nothing to smooth (the camera's keyframed
+    or hand-posed value IS the target), so a damping-only tag stays pass-
+    through and the viewport is navigable. Damping only changes HOW an
+    already-owned channel is written (spring vs instant), not WHETHER.
+    """
+    look_at_target = tag[SHOTBLOCKS_LOOK_AT_TARGET]
+    look_at_on = (look_at_target is not None
+                  and float(tag[SHOTBLOCKS_LOOK_AT_STRENGTH] or 0.0) > 0.0)
+    roll_on = float(tag[SHOTBLOCKS_LOOK_AT_ROLL] or 0.0) != 0.0
+    bank_on = bool(tag[SHOTBLOCKS_BANK_INTO_TURNS])
+    noise_on = (bool(tag[SHOTBLOCKS_NOISE_ENABLED])
+                and float(tag[SHOTBLOCKS_NOISE_STRENGTH] or 0.0) > 0.0)
+    chase_on = (bool(tag[SHOTBLOCKS_FOLLOW_ENABLED])
+                and tag[SHOTBLOCKS_FOLLOW_TARGET] is not None)
+
+    owns_rot = look_at_on or roll_on or bank_on or noise_on
+    owns_pos = chase_on or noise_on
+    return owns_pos, owns_rot
+
+
 class ShotblocksTag(c4d.plugins.TagData):
 
     # ------------------------------------------------------------------
@@ -345,6 +384,10 @@ class ShotblocksTag(c4d.plugins.TagData):
 
     def Init(self, node):
         node[SHOTBLOCKS_ENABLED]            = True
+        # Damping master switch defaults OFF — a freshly applied tag is
+        # fully interactive (no spring fighting viewport navigation). The
+        # user turns it on when they want smoothing.
+        node[SHOTBLOCKS_DAMPING_ENABLED]    = False
         # Damping is a 0..1 fraction stored behind a PERCENT slider
         # (0..100% display). Default 0% = stiff, tracks keyframes 1:1;
         # higher % = more smoothing/lag. Linear = position, Angular = rotation.
@@ -483,6 +526,42 @@ class ShotblocksTag(c4d.plugins.TagData):
         look_at_target = tag[SHOTBLOCKS_LOOK_AT_TARGET]
         up_target      = tag[SHOTBLOCKS_UP_TARGET]
 
+        owns_pos, owns_rot = _channel_ownership(tag)
+        bank_into_turns = bool(tag[SHOTBLOCKS_BANK_INTO_TURNS])
+
+        # ---- Damping OFF: instant, fully-interactive path. -----------
+        # No spring, no per-frame idempotency guard, no boundary reset
+        # machinery — none of that is needed without smoothing. We solve
+        # the target pose live every Execute (so look-at / frame offset
+        # track the target even while parked, like the native Target tag)
+        # and write ONLY the channels the tag owns, leaving the rest for
+        # the user to navigate. If the tag owns nothing, it writes
+        # nothing — pure pass-through, camera fully free.
+        if not bool(tag[SHOTBLOCKS_DAMPING_ENABLED]):
+            if not owns_pos and not owns_rot:
+                _apply_quick_zoom(tag, st, cam, doc, time, fps)
+                return c4d.EXECUTIONRESULT_OK
+            tp, tr, heading, npost_pos, npost_rot = _compute_target_pose(
+                tag, st, cam, doc, time, fps, dt, cur_frame,
+                look_at_target, up_target,
+                is_reset=False, bank_into_turns=bank_into_turns)
+            st["prev_heading"] = heading
+            final_pos = (tp[0] + npost_pos[0], tp[1] + npost_pos[1],
+                         tp[2] + npost_pos[2])
+            final_rot = (tr[0] + npost_rot[0], tr[1] + npost_rot[1],
+                         tr[2] + npost_rot[2])
+            # Keep the spring primed at the instant pose so flipping
+            # damping ON mid-session doesn't jolt — it starts settled.
+            reset_to_target(spring, final_pos, final_rot)
+            spring["last_frame"] = cur_frame
+            st["reset_pending"] = True   # re-prime if damping is turned on
+            st["last_output_pos"] = final_pos
+            st["last_output_rot"] = final_rot
+            _write_back(cam, final_pos, final_rot,
+                        write_pos=owns_pos, write_rot=owns_rot)
+            _apply_quick_zoom(tag, st, cam, doc, time, fps)
+            return c4d.EXECUTIONRESULT_OK
+
         # On repeat calls within the same frame, just re-apply the
         # cached output and return. The reset path runs once per
         # boundary; we don't repeat-apply on reset frames either.
@@ -502,18 +581,45 @@ class ShotblocksTag(c4d.plugins.TagData):
             and not st["reset_pending"]
         )
         if already_stepped_this_frame:
-            # Replay the same final pose we wrote on this frame's
-            # first call. Re-sampling noise would give identical
-            # values (stateless sample), but the cached pose also
-            # covers the no-noise case so this is the simple path.
+            # Replay the spring's frozen output for POSITION (we must not
+            # re-step the integrator — that erases the damping). But the
+            # look-at AIM is a live geometric solve, not spring output:
+            # while parked, C4D fires Execute several times per frame and
+            # only the FIRST took the full path. If we replayed the cached
+            # rotation, the aim would freeze and the camera would stop
+            # tracking the target (and stop honoring a dragged Frame
+            # Offset) while stopped. The native Target tag stays live, so
+            # we re-solve the aim here — without touching the spring.
             cached_pos = st.get("last_output_pos")
             cached_rot = st.get("last_output_rot")
-            if cached_pos is not None and cached_rot is not None:
-                _write_back(cam, cached_pos, cached_rot)
-            else:
+            if cached_pos is None or cached_rot is None:
                 pos, _ = spring["pos"]
                 rot, _ = spring["rot"]
-                _write_back(cam, pos, rot)
+                cached_pos = cached_pos or pos
+                cached_rot = cached_rot or rot
+
+            live_rot = cached_rot
+            if owns_rot and look_at_target is not None:
+                ou, ov = _read_frame_offset(tag)
+                aim_pt = _chase_aim_point_world(tag, st, look_at_target)
+                la_hpb = _compute_look_at_local_rot(
+                    cam, look_at_target, up_target,
+                    offset_u=ou, offset_v=ov, doc=doc,
+                    aim_point_world=aim_pt)
+                if la_hpb is not None:
+                    s = max(0.0, min(1.0, float(tag[SHOTBLOCKS_LOOK_AT_STRENGTH])))
+                    if s >= 1.0:
+                        live_rot = la_hpb
+                    elif s > 0.0:
+                        live_rot = _slerp_hpb(cached_rot, la_hpb, s)
+                    roll = float(tag[SHOTBLOCKS_LOOK_AT_ROLL] or 0.0)
+                    live_rot, _ = _apply_roll_and_bank_into_turns(
+                        live_rot, prev_heading=st.get("prev_heading"),
+                        roll_rad=roll, bank_into_turns=bank_into_turns,
+                        has_explicit_source=(up_target is not None))
+
+            _write_back(cam, cached_pos, live_rot,
+                        write_pos=owns_pos, write_rot=owns_rot)
             _apply_quick_zoom(tag, st, cam, doc, time, fps)
             return c4d.EXECUTIONRESULT_OK
 
@@ -617,7 +723,7 @@ class ShotblocksTag(c4d.plugins.TagData):
             rot, _ = spring["rot"]
             st["last_output_pos"] = pos
             st["last_output_rot"] = rot
-            _write_back(cam, pos, rot)
+            _write_back(cam, pos, rot, write_pos=owns_pos, write_rot=owns_rot)
             _apply_quick_zoom(tag, st, cam, doc, time, fps)
             return c4d.EXECUTIONRESULT_OK
         if st["reset_pending"]:
@@ -634,13 +740,21 @@ class ShotblocksTag(c4d.plugins.TagData):
         k_rot = k_from_damping(_read_damping(tag, st,
                                              SHOTBLOCKS_DAMPING_ROT,
                                              "damping_rot"))
-        # Aim Tracking (Chase only): blend the rotation stiffness UP toward
-        # the stiffest response so the aim can stay locked on the subject
-        # even when the body is heavily damped. This decouples "smooth
-        # body" (Linear) from "locked aim" — the user's request: 100%
-        # Linear for a glassy body, high Aim Tracking to keep the subject
-        # framed. k_from_damping(0.0) is the stiff end (K_MAX).
-        if bool(tag[SHOTBLOCKS_FOLLOW_ENABLED]):
+        # Aim Lock: blend the rotation stiffness UP toward the stiffest
+        # response so the AIM can stay locked on the target even when the
+        # body is heavily damped. Decouples "smooth body" (Angular) from
+        # "locked aim" — e.g. 100% Angular for glassy body motion, high
+        # Aim Lock to keep the subject framed. k_from_damping(0.0) is the
+        # stiff end (K_MAX). Applies whenever the rotation is aim-driven:
+        # an active look-at target OR Chase (whose aim is also look-at).
+        # Gated on aim being active so a plain damped camera (no target)
+        # isn't silently stiffened by a stale Aim Lock value.
+        aim_active = (
+            (look_at_target is not None
+             and float(tag[SHOTBLOCKS_LOOK_AT_STRENGTH] or 0.0) > 0.0)
+            or bool(tag[SHOTBLOCKS_FOLLOW_ENABLED])
+        )
+        if aim_active:
             aim_track = max(0.0, min(1.0, float(tag[SHOTBLOCKS_FOLLOW_AIM_TRACK] or 0.0)))
             if aim_track > 0.0:
                 k_stiff = k_from_damping(0.0)
@@ -741,9 +855,73 @@ class ShotblocksTag(c4d.plugins.TagData):
                      rhz + noise_post_rot[2])
         st["last_output_pos"] = final_pos
         st["last_output_rot"] = final_rot
-        _write_back(cam, final_pos, final_rot)
+        _write_back(cam, final_pos, final_rot,
+                    write_pos=owns_pos, write_rot=owns_rot)
         _apply_quick_zoom(tag, st, cam, doc, time, fps)
         return c4d.EXECUTIONRESULT_OK
+
+
+def _compute_target_pose(tag, st, cam, doc, time, fps, dt, cur_frame,
+                         look_at_target, up_target, is_reset,
+                         bank_into_turns):
+    """Compute the camera's target pose for this frame — everything the
+    spring would chase, plus the post-spring noise to add afterward.
+
+    This is the shared front half of the pipeline, used by BOTH the
+    damping-on (spring) path and the damping-off (instant) path so the
+    two can never drift. It does NOT touch the spring or write to the
+    camera; it only reads parameters + scene state and returns numbers.
+
+    Returns:
+        target_pos   (3-tuple) — desired local position incl. pre-noise
+        target_rot   (3-tuple) — desired local HPB incl. roll/bank + pre-noise
+        heading      (float)   — this frame's heading, for prev_heading bookkeeping
+        noise_post_pos (3-tuple) — high-freq position tremor to add post-spring
+        noise_post_rot (3-tuple) — high-freq rotation tremor to add post-spring
+
+    `is_reset` suppresses Bank-Into-Turns' yaw (no prior heading on a
+    boundary) and clears the chase smoothing.
+    """
+    target_pos, key_rot = _read_keyframed_target(cam, doc, time, fps)
+    chase_pos = _chase_local_target_pos(
+        tag, st, doc, time, fps, dt, is_reset=is_reset)
+    if chase_pos is not None:
+        target_pos = chase_pos
+    target_rot = key_rot
+
+    has_explicit_bank_source = False
+    if look_at_target is not None:
+        ou, ov = _read_frame_offset(tag)
+        aim_pt = _chase_aim_point_world(tag, st, look_at_target)
+        la_hpb = _compute_look_at_local_rot(
+            cam, look_at_target, up_target,
+            offset_u=ou, offset_v=ov, doc=doc,
+            aim_point_world=aim_pt)
+        if la_hpb is not None:
+            s = max(0.0, min(1.0, float(tag[SHOTBLOCKS_LOOK_AT_STRENGTH])))
+            if s >= 1.0:
+                target_rot = la_hpb
+            elif s > 0.0:
+                target_rot = _slerp_hpb(key_rot, la_hpb, s)
+            has_explicit_bank_source = (up_target is not None)
+
+    roll = float(tag[SHOTBLOCKS_LOOK_AT_ROLL] or 0.0)
+    target_rot, heading = _apply_roll_and_bank_into_turns(
+        target_rot,
+        prev_heading=None if is_reset else st.get("prev_heading"),
+        roll_rad=roll,
+        bank_into_turns=False if is_reset else bank_into_turns,
+        has_explicit_source=has_explicit_bank_source)
+
+    noise_pre_pos, noise_pre_rot, noise_post_pos, noise_post_rot = \
+        _sample_noise_world(tag, st, cur_frame, fps, cam, look_at_target, doc)
+    target_pos = (target_pos[0] + noise_pre_pos[0],
+                  target_pos[1] + noise_pre_pos[1],
+                  target_pos[2] + noise_pre_pos[2])
+    target_rot = (target_rot[0] + noise_pre_rot[0],
+                  target_rot[1] + noise_pre_rot[1],
+                  target_rot[2] + noise_pre_rot[2])
+    return target_pos, target_rot, heading, noise_post_pos, noise_post_rot
 
 
 # ---------------------------------------------------------------------------
@@ -1488,32 +1666,61 @@ def _slerp_hpb(a, b, t):
 
 
 
-def _write_back(cam, pos, rot):
-    """Write a smoothed pose back to the camera.
+def _write_back(cam, pos, rot, write_pos=True, write_rot=True):
+    """Write a pose back to the camera, but only the channels the tag
+    actually owns this frame.
 
     `pos` and `rot` are 3-tuples of floats (local position and HPB
     radians). The caller decides what they are — spring output
-    alone, or spring output plus post-spring noise — so this
-    function stays oblivious to the noise composition.
+    alone, or spring output plus post-spring noise, or an instant
+    target pose — so this function stays oblivious to the composition.
+
+    `write_pos` / `write_rot` gate whether the tag owns that channel.
+    A channel the tag does NOT own is left as the camera's OWN current
+    local value. This matters because we also write the world matrix
+    (SetMg), which would otherwise clobber the user's own value on the
+    un-owned axis: if look-at owns rotation but not position, we must
+    rebuild SetMg from (our rotation + the camera's live position), or
+    SetMg would freeze the position the user is trying to navigate.
+
+    When the tag owns NEITHER channel the caller skips us entirely —
+    a no-op tag must not touch the camera at all (full pass-through),
+    or it fights viewport navigation.
 
     Writes BOTH the local channels (SetRelPos/SetRelRot) AND the
-    world matrix (SetMg). The redundancy is intentional: C4D's
-    animation system may overwrite local-channel writes after we
-    return, but SetMg bypasses that — it sets the visible world
-    transform for this frame regardless of what's on the local
-    channels. Whichever path "wins" in C4D's evaluation order, the
-    smoothed value ends up at the camera.
+    world matrix (SetMg) for owned channels. The redundancy is
+    intentional: C4D's animation system may overwrite local-channel
+    writes after we return, but SetMg bypasses that — it sets the
+    visible world transform for this frame regardless of what's on
+    the local channels.
     """
-    cam.SetRelPos(c4d.Vector(pos[0], pos[1], pos[2]))
-    cam.SetRelRot(c4d.Vector(rot[0], rot[1], rot[2]))
+    if not write_pos and not write_rot:
+        return
 
-    # Build the local matrix from the smoothed pos+rot via HPB, then
+    # Resolve the effective local pos/rot: our value for owned
+    # channels, the camera's own current local value for un-owned ones
+    # (so SetMg below doesn't clobber what the user is manipulating).
+    if write_pos:
+        eff_pos = (pos[0], pos[1], pos[2])
+        cam.SetRelPos(c4d.Vector(pos[0], pos[1], pos[2]))
+    else:
+        cur = cam.GetRelPos()
+        eff_pos = (cur.x, cur.y, cur.z)
+
+    if write_rot:
+        eff_rot = (rot[0], rot[1], rot[2])
+        cam.SetRelRot(c4d.Vector(rot[0], rot[1], rot[2]))
+    else:
+        cur = cam.GetRelRot()
+        eff_rot = (cur.x, cur.y, cur.z)
+
+    # Build the local matrix from the effective pos+rot via HPB, then
     # promote to world by post-multiplying by the parent's world Mg.
     # For an unparented camera, parent_mg is identity and the local
     # matrix IS the world matrix.
     try:
-        local_mg = c4d.utils.HPBToMatrix(c4d.Vector(rot[0], rot[1], rot[2]))
-        local_mg.off = c4d.Vector(pos[0], pos[1], pos[2])
+        local_mg = c4d.utils.HPBToMatrix(c4d.Vector(eff_rot[0], eff_rot[1], eff_rot[2]))
+        local_mg.off = c4d.Vector(eff_pos[0], eff_pos[1], eff_pos[2])
         parent = cam.GetUp()
         if parent is not None:
             cam.SetMg(parent.GetMg() * local_mg)
