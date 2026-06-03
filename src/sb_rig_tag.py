@@ -139,8 +139,56 @@ _RUNTIME = {}
 # way that id(tag), GetUniqueIP() and similar all change every call).
 _BCKEY_TAG_MARKER = 1010002
 
+# This tag's plugin ID (matches PLUGIN_ID_TAG in shotblocks.pyp). Used to
+# find sibling Shotblocks tags when assigning a collision-free marker.
+_TAG_PLUGIN_ID = 1000001
+
 # Module-level counter for generating fresh markers.
 _NEXT_MARKER = [1]
+
+# Markers validated-unique THIS plugin session. A marker here is trusted on
+# every later frame without re-walking the document. Cleared on reload.
+_VALIDATED_MARKERS = set()
+
+
+def _markers_used_by_other_tags(tag):
+    """Set of _BCKEY_TAG_MARKER values held by every OTHER Shotblocks tag in
+    this tag's document. Walked ONLY when assigning a new marker (rare —
+    first Execute of a never-seen tag, or a clone that needs a fresh one),
+    never per frame, so the cost is negligible."""
+    used = set()
+    try:
+        doc = tag.GetDocument()
+    except Exception:
+        doc = None
+    if doc is None:
+        return used
+    try:
+        my_bc = tag.GetDataInstance()
+    except Exception:
+        my_bc = None
+    obj = doc.GetFirstObject()
+    stack = []
+    while obj is not None:
+        try:
+            for t in obj.GetTags():
+                if t.CheckType(_TAG_PLUGIN_ID):
+                    tbc = t.GetDataInstance()
+                    if tbc is not None and tbc is not my_bc:
+                        m = tbc.GetInt32(_BCKEY_TAG_MARKER)
+                        if m:
+                            used.add(m)
+        except Exception:
+            pass
+        nxt = obj.GetDown()
+        if nxt is not None:
+            stack.append(obj.GetNext())
+            obj = nxt
+        else:
+            obj = obj.GetNext()
+            while obj is None and stack:
+                obj = stack.pop()
+    return used
 
 
 def _state_key(tag):
@@ -148,16 +196,43 @@ def _state_key(tag):
     Python-wrapper churn C4D inflicts on Execute calls. Stamps a
     monotonic integer into the tag's BaseContainer on first use; the
     BC value is what survives.
+
+    The marker must be UNIQUE among all live Shotblocks tags, or two tags
+    share one _RUNTIME state entry and step on each other — the cross-tag
+    bug where adding a 2nd tag (or duplicating a camera, which copies the
+    marker) broke the new tag's framing/ownership. A marker collides when
+    (1) _NEXT_MARKER resets to 1 on plugin reload while existing tags keep
+    persisted markers, or (2) copy-paste clones the BaseContainer marker.
+    On assignment we scan the document so the new marker is unique; a tag
+    that already has a marker is trusted on later frames (no per-frame walk)
+    because clones are repaired once (the first time both are live) and
+    persisted markers are validated on a tag's first Execute this session.
     """
     try:
         bc = tag.GetDataInstance()
         if bc is not None:
             marker = bc.GetInt32(_BCKEY_TAG_MARKER)
-            if not marker:
-                marker = _NEXT_MARKER[0]
-                _NEXT_MARKER[0] += 1
-                bc.SetInt32(_BCKEY_TAG_MARKER, marker)
-            return ("bc", marker)
+            # Validate a marker only ONCE per session per tag (tracked in
+            # _VALIDATED_MARKERS keyed by marker) — if another live tag
+            # already holds it, this is a duplicate and we reassign.
+            if marker and marker not in _VALIDATED_MARKERS:
+                if marker in _markers_used_by_other_tags(tag):
+                    marker = 0  # duplicate → force reassignment below
+                else:
+                    _VALIDATED_MARKERS.add(marker)
+                    if marker >= _NEXT_MARKER[0]:
+                        _NEXT_MARKER[0] = marker + 1
+            if marker:
+                return ("bc", marker)
+            # Assign a fresh marker unique across the document.
+            used = _markers_used_by_other_tags(tag)
+            cand = _NEXT_MARKER[0]
+            while cand in used or cand in _VALIDATED_MARKERS:
+                cand += 1
+            _NEXT_MARKER[0] = cand + 1
+            _VALIDATED_MARKERS.add(cand)
+            bc.SetInt32(_BCKEY_TAG_MARKER, cand)
+            return ("bc", cand)
     except Exception:
         pass
     return ("pyid", id(tag))
@@ -664,6 +739,25 @@ class ShotblocksTag(c4d.plugins.TagData):
                         live_rot, prev_heading=st.get("prev_heading"),
                         roll_rad=roll, bank_into_turns=bank_into_turns,
                         has_explicit_source=(up_target is not None))
+            elif owns_rot and look_at_target is None:
+                # No-target Frame Offset is folded into the spring TARGET,
+                # so it only lands when the full step runs (scrub/play).
+                # While PARKED only this replay path runs, so dragging the
+                # joystick on a static frame wouldn't move the camera. Apply
+                # the DELTA between the live offset and the one already baked
+                # into cached_rot (last_fo_applied) — a live nudge with no
+                # double-count and without re-stepping the spring (which
+                # would erase the damping). When the offset is unchanged the
+                # delta is zero, so this is a no-op on ordinary replays.
+                cur_ou, cur_ov = _read_frame_offset(tag)
+                last_ou, last_ov = st.get("last_fo_applied", (0.0, 0.0))
+                d_ou, d_ov = cur_ou - last_ou, cur_ov - last_ov
+                if d_ou != 0.0 or d_ov != 0.0:
+                    try:
+                        live_rot = _apply_frame_offset_rotation(
+                            cached_rot, cam, doc, d_ou, d_ov)
+                    except Exception as e:
+                        _warn_frame_offset_failed(e)
 
             _write_back(cam, cached_pos, live_rot,
                         write_pos=owns_pos, write_rot=owns_rot)
@@ -839,8 +933,13 @@ class ShotblocksTag(c4d.plugins.TagData):
                 try:
                     target_rot = _apply_frame_offset_rotation(
                         target_rot, cam, doc, ou, ov)
-                except Exception:
-                    pass
+                except Exception as e:
+                    _warn_frame_offset_failed(e)
+            # Record the offset folded into this full-step output. The
+            # parked replay path uses it as the baseline so dragging the
+            # joystick while parked nudges the camera by the DELTA (no
+            # double-count, no spring re-step). See the replay branch.
+            st["last_fo_applied"] = (ou, ov)
 
         # Roll + Bank-Into-Turns are a post-step on whatever
         # target_rot the previous stage produced — keyframed, AtS,
@@ -971,8 +1070,8 @@ def _compute_target_pose(tag, st, cam, doc, time, fps, dt, cur_frame,
             try:
                 target_rot = _apply_frame_offset_rotation(
                     target_rot, cam, doc, ou, ov)
-            except Exception:
-                pass
+            except Exception as e:
+                _warn_frame_offset_failed(e)
 
     roll = float(tag[SHOTBLOCKS_LOOK_AT_ROLL] or 0.0)
     target_rot, heading = _apply_roll_and_bank_into_turns(
@@ -1469,6 +1568,29 @@ def _apply_frame_offset(local_dir, cam, doc, offset_u, offset_v):
         forward.y - right.y * dx - up.y * dy,
         forward.z - right.z * dx - up.z * dy,
     )
+
+
+_frame_offset_warned = False
+
+
+def _warn_frame_offset_failed(exc):
+    """Log a Frame-Offset rotation failure ONCE (with traceback) instead of
+    silently swallowing it. The target-less framing pan runs every Execute,
+    so a per-frame print would flood the Console — but a silent `except:
+    pass` hid the cause of an intermittent "framing offset does nothing /
+    playback stalls" bug. Logging once means the NEXT occurrence is
+    diagnosable from Extensions > Console. Never raises (error path)."""
+    global _frame_offset_warned
+    if _frame_offset_warned:
+        return
+    _frame_offset_warned = True
+    try:
+        import traceback
+        c4d.GePrint("[Shotblocks] Frame Offset rotation failed (logged "
+                    "once): {}\n{}".format(exc, traceback.format_exc()))
+    except Exception:
+        # Logging itself must never break Execute.
+        pass
 
 
 def _apply_frame_offset_rotation(rot_hpb, cam, doc, offset_u, offset_v):
