@@ -1668,8 +1668,8 @@ body.is-hand-panning * {
   border-width: 2px;
 }
 /* Bezier handles for the selected node's outgoing segment — round
-   (vs the diamond nodes), orange (audio kf accent), with thin
-   connector lines. */
+   (vs the diamond nodes), in the audio-kf accent (primary purple), with
+   thin connector lines. */
 .level-curve__handle-line {
   stroke: var(--color-audio-kf-accent);
   stroke-width: 1;
@@ -1687,7 +1687,7 @@ body.is-hand-panning * {
 /* Pen-tool marquee rectangle over the volume curve. */
 .level-curve__marquee {
   position: absolute;
-  background: rgba(255, 149, 0, 0.12);
+  background: color-mix(in srgb, var(--color-audio-kf-accent) 12%, transparent);
   border: 1px solid var(--color-audio-kf-accent);
   pointer-events: none;
 }

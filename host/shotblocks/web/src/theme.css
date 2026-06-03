@@ -14,12 +14,12 @@
   /* Timeline accents */
   --color-timeline-primary-highlight:    #824cee;
   --color-timeline-default-block:        #a47bf2;
-  /* Audio keyframe accent — orange to contrast against the audio
-     clip's green fill. Used on selected nodes, tangent handles +
-     connector lines, and the pen-tool marquee. Separate from the
-     primary-highlight blue so we can recolor without affecting the
-     rest of the "selected" UI. */
-  --color-audio-kf-accent:               #ff9500;
+  /* Audio keyframe accent — the brand primary-highlight purple. Used on
+     selected volume-curve nodes, tangent (Bezier) handles + connector
+     lines, and the pen-tool marquee. Was orange; switched to the primary
+     purple so keyframe selection reads consistently with the rest of the
+     UI. */
+  --color-audio-kf-accent:               #824cee;
   /* Keyframe-dot marquee accent — Maxon blue (design-system accent).
      The clip-mode marquee uses the purple primary-highlight, but a
      purple box over the purple video clips vanishes; the keyframe-dot
