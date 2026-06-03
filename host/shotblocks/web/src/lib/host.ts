@@ -133,6 +133,11 @@ export type HostOutbound =
   // camera appears in OM + AM. objectId=0 is a no-op (used for gap +
   // orphan cases; the OM selection is left untouched, not cleared).
   | { kind: 'select-in-om'; objectId: number }
+  // Dope-sheet key-highlight sync, driven by the timeline's CLIP
+  // selection (not the playhead). objectId>0 highlights that camera's
+  // keys in the Timeline/dope sheet; objectId=0 clears the highlight
+  // (empty selection / gap / non-camera clip). Does not touch OM/AM.
+  | { kind: 'sync-dope-keys'; objectId: number }
   // Plan 4.1 commit 2 — push the per-boundary camera event list to
   // C++, which rebuilds the hidden Stage helper's animation track.
   // Events are sorted by frame, deduplicated (no consecutive entries

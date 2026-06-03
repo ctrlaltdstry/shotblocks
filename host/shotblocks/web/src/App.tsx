@@ -14,6 +14,7 @@ import { useAltRightZoom } from './useAltRightZoom';
 import { useMmbPan } from './useMmbPan';
 import { useToolCursor } from './useToolCursor';
 import { useSelectionFollowsPlayhead } from './useSelectionFollowsPlayhead';
+import { useDopeSheetKeySync } from './useDopeSheetKeySync';
 import { useStore } from './store';
 import { onDecodeFailure } from './lib/audioStore';
 import { Ruler } from './components/Ruler';
@@ -89,6 +90,7 @@ function App() {
   useWheelScroll();
   useToolCursor();
   useSelectionFollowsPlayhead();
+  useDopeSheetKeySync();
   useAltKey();
   const lanesAreaRef = useRef<HTMLDivElement | null>(null);
   useMarquee(lanesAreaRef);

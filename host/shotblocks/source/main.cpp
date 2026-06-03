@@ -1696,6 +1696,7 @@ private:
 		if (body.find("\"kind\":\"get-camera-types\"") != std::string::npos) return HandleGetCameraTypes();
 		if (body.find("\"kind\":\"create-camera\"") != std::string::npos) return HandleCreateCamera(body);
 		if (body.find("\"kind\":\"select-in-om\"") != std::string::npos) return HandleSelectInOm(body);
+		if (body.find("\"kind\":\"sync-dope-keys\"") != std::string::npos) return HandleSyncDopeKeys(body);
 		if (body.find("\"kind\":\"set-stage-cameras\"") != std::string::npos) return HandleSetStageCameras(body);
 		if (body.find("\"kind\":\"audio-add\"") != std::string::npos)
 		{
@@ -2920,6 +2921,97 @@ private:
 		}
 	}
 
+	// Set or clear the Timeline (dope sheet) selection bit on every key +
+	// track that contributes to a camera's animation — the same cam + tag +
+	// children + parent-chain walk GatherKeyTimes uses. So selecting a shot
+	// in the timeline highlights exactly that camera's keys in the dope
+	// sheet, with no manual hunting. NBIT::TL1_SELECT is the public track
+	// bit; keys carry the per-key f-curve selection. EventAdd (caller)
+	// refreshes the Timeline.
+	void SetCameraKeysSelected(BaseObject* op, NBITCONTROL mode)
+	{
+		if (!op) return;
+		auto markTracks = [&](CTrack* head) {
+			for (CTrack* t = head; t; t = t->GetNext())
+			{
+				CCurve* c = t->GetCurve(CCURVE::CURVE, false);
+				if (!c) continue;
+				// Select the track itself (public TL1_SELECT) AND every key
+				// (per-key f-curve selection bit) so the dope sheet shows the
+				// track active with its keys highlighted. ChangeNBit is the
+				// C4DAtom API (not SetNBit).
+				t->ChangeNBit(NBIT::TL1_SELECT, mode);
+				Int32 n = c->GetKeyCount();
+				for (Int32 i = 0; i < n; ++i)
+				{
+					CKey* k = c->GetKey(i);
+					if (!k) continue;
+					k->ChangeNBit(NBIT::TL1_SELECT, mode);
+				}
+			}
+		};
+		auto markObject = [&](BaseObject* o) {
+			markTracks(o->GetFirstCTrack());
+			for (BaseTag* tag = o->GetFirstTag(); tag; tag = tag->GetNext())
+				markTracks(tag->GetFirstCTrack());
+		};
+		markObject(op);
+		// Children (recursive — v1 rig nulls) and parent chain, matching
+		// GatherKeyTimes so every track that drives the camera is covered.
+		auto markTree = [&](BaseObject* o, auto& self) -> void {
+			markObject(o);
+			for (BaseObject* ch = o->GetDown(); ch; ch = ch->GetNext())
+				self(ch, self);
+		};
+		for (BaseObject* ch = op->GetDown(); ch; ch = ch->GetNext())
+			markTree(ch, markTree);
+		for (BaseObject* p = op->GetUp(); p; p = p->GetUp())
+			markObject(p);
+	}
+
+	// Drive the dope-sheet (Timeline) key highlight to match the camera the
+	// timeline currently has selected. objectId>0 highlights that camera's
+	// keys (clearing the previously-synced one); objectId<=0 just clears the
+	// last one — used when the timeline selection goes empty / lands on a
+	// gap / a non-camera clip, so a stale highlight doesn't linger. Does NOT
+	// touch the OM/AM object selection (that's HandleSelectInOm's job).
+	// Returns true if anything changed (so the caller can skip EventAdd).
+	Bool ApplyDopeKeySelection(BaseDocument* doc, Int32 objectId)
+	{
+		if (!doc) return false;
+		Bool changed = false;
+		// Clear the previous camera's keys unless it's the same one.
+		if (_lastKeySelObjectId != 0 && _lastKeySelObjectId != objectId)
+		{
+			BaseObject* prev = ResolveCameraForObjectId(doc, _lastKeySelObjectId);
+			if (prev) { SetCameraKeysSelected(prev, NBITCONTROL::CLEAR); changed = true; }
+			_lastKeySelObjectId = 0;
+		}
+		if (objectId > 0)
+		{
+			BaseObject* cam = ResolveCameraForObjectId(doc, objectId);
+			if (cam && _lastKeySelObjectId != objectId)
+			{
+				SetCameraKeysSelected(cam, NBITCONTROL::SET);
+				_lastKeySelObjectId = objectId;
+				changed = true;
+			}
+		}
+		return changed;
+	}
+
+	// Keys-only sync, driven by the timeline's CLIP selection (not the
+	// playhead): clicking a camera shot highlights its keys immediately;
+	// an empty / gap / non-camera selection (objectId<=0) clears them.
+	std::string HandleSyncDopeKeys(const std::string& body)
+	{
+		Int32 objectId = ParseIntField(body, "objectId");
+		BaseDocument* doc = GetActiveDocument();
+		if (!doc) return "{\"ok\":false,\"error\":\"no doc\"}";
+		if (ApplyDopeKeySelection(doc, objectId)) EventAdd();
+		return "{\"ok\":true,\"kind\":\"sync-dope-keys-ack\"}";
+	}
+
 	std::string HandleSelectInOm(const std::string& body)
 	{
 		Int32 objectId = ParseIntField(body, "objectId");
@@ -2932,6 +3024,9 @@ private:
 		BaseObject* cam = static_cast<BaseObject*>(it->second->GetLink(doc));
 		if (!cam) return "{\"ok\":true,\"kind\":\"select-in-om-ack\",\"selected\":false}";
 		doc->SetActiveObject(cam, SELECTION_NEW);
+		// Also highlight this camera's keys in the dope sheet (shared with
+		// the clip-selection-driven sync-dope-keys path).
+		ApplyDopeKeySelection(doc, objectId);
 		EventAdd();
 		return "{\"ok\":true,\"kind\":\"select-in-om-ack\",\"selected\":true}";
 	}
@@ -3995,6 +4090,10 @@ private:
 	// but the camera link goes dead.
 	std::unordered_map<Int32, AutoAlloc<BaseLink>> _cameraLinks;
 	Int32                _nextObjectId{1};
+	// Last camera whose keys we selected in the dope sheet, so the next
+	// select-in-om can clear that camera's key/track selection before
+	// highlighting the new one (otherwise selections accumulate).
+	Int32                _lastKeySelObjectId{0};
 	// Pinned BaseDraw target — selected on first camera-set call so
 	// subsequent calls don't hijack other viewports (per Python
 	// _pick_target_basedraw / sb_canvas_playback.py:192).
