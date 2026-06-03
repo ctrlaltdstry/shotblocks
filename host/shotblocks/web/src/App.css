@@ -1148,6 +1148,21 @@ body.is-hand-panning * {
      clips exactly to the box (clip) edges. */
   clip-path: inset(-1000px 0 -1000px 0);
 }
+/* Connector line through the keyframe row — a faint horizontal anchor
+   spanning the clip at the pills' vertical centre, so the marks read as
+   one track rather than floating dots. Sits BEHIND the pills (pseudo-
+   element painted before the span children). Same vertical anchor as
+   .keyframe-dot (calc(50% + 4px)). Neutral low-alpha white, like the
+   beat-grid scaffolding. */
+.keyframe-dots::before {
+  content: "";
+  position: absolute;
+  left: 0; right: 0;
+  top: calc(50% + 4px);
+  height: 1px;
+  margin-top: -0.5px;
+  background: rgba(255, 255, 255, 0.22);
+}
 /* Vertical rounded pill, vertically centred in the clip. Black at 30%
    darkens the clip's own colour (no new hue, no stroke) — same treatment
    as the audio beat-dots, just a taller, lighter mark that's easier to
@@ -1157,11 +1172,12 @@ body.is-hand-panning * {
    negative margin-left pulls it back by half its width to centre it. */
 .keyframe-dot {
   position: absolute;
-  /* Centre in the BODY region, below the ~20px title band (3px pad + 14px
-     line + 3px pad), not the whole clip — so the pills sit between the
-     camera icon and the title background, visually balanced. Offset the
-     50% centre down by half the band height (~10px). */
-  top: calc(50% + 10px);
+  /* Sit in the body's upper-middle: below the ~20px title band, clear
+     ABOVE the camera icon pinned at the clip's bottom-left. A small +4px
+     bias off the clip's vertical centre keeps the row balanced in the
+     body without colliding with either. Must match the connector line's
+     top in .keyframe-dots::before. */
+  top: calc(50% + 4px);
   width: 4px;
   height: 14px;
   margin-top: -7px;
