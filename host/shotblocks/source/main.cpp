@@ -1139,8 +1139,36 @@ public:
 	{
 		BaseDocument* doc = GetActiveDocument();
 		if (!doc) return;
+
+		// Active document changed (closed project, switched tab, new
+		// scene)? Always reload from the new doc — JS re-runs load-state,
+		// which resets to the empty state when the new doc has no helper.
+		// Without this, the old doc's clips stayed on screen as orphans
+		// (their cameras don't resolve in the new doc). Reset version
+		// tracking so the post-reload version seed is taken fresh.
+		if (doc != _lastSeenDoc)
+		{
+			_lastSeenDoc = doc;
+			_lastSeenVersion = 0;
+			if (_htmlView && _navigated)
+				_htmlView->PostWebMessage("{\"kind\":\"state-changed\"}"_s);
+			return;
+		}
+
 		BaseObject* helper = FindV2Helper(doc);
-		if (!helper) return;
+		if (!helper)
+		{
+			// Helper went away within the SAME doc (e.g. undo past its
+			// creation, or the user deleted it). If we were showing
+			// content, tell JS to reset to empty.
+			if (_lastSeenVersion != 0)
+			{
+				_lastSeenVersion = 0;
+				if (_htmlView && _navigated)
+					_htmlView->PostWebMessage("{\"kind\":\"state-changed\"}"_s);
+			}
+			return;
+		}
 		BaseContainer* bc = helper->GetDataInstance();
 		if (!bc) return;
 		const Int32 curVersion = bc->GetInt32(BCKEY_VERSION);
@@ -1570,10 +1598,14 @@ private:
 			// reload — no need to re-drop the cameras.
 			BaseDocument* doc = GetActiveDocument();
 			if (!doc) return "{\"ok\":false,\"error\":\"no doc\"}";
+			// Mark this doc as the one we've now loaded from, so the
+			// CoreMessage doc-switch detector doesn't re-fire for it
+			// (the empty-doc reset below IS a valid load of the new doc).
+			_lastSeenDoc = doc;
 			BaseObject* helper = FindV2Helper(doc);
-			if (!helper) return "{\"ok\":true,\"kind\":\"load-state-ack\",\"json\":\"\"}";
+			if (!helper) { _lastSeenVersion = 0; _cameraLinks.clear(); return "{\"ok\":true,\"kind\":\"load-state-ack\",\"json\":\"\"}"; }
 			BaseContainer* bc = helper->GetDataInstance();
-			if (!bc) return "{\"ok\":true,\"kind\":\"load-state-ack\",\"json\":\"\"}";
+			if (!bc) { _lastSeenVersion = 0; _cameraLinks.clear(); return "{\"ok\":true,\"kind\":\"load-state-ack\",\"json\":\"\"}"; }
 
 			String raw = bc->GetString(BCKEY_CLIPS_JSON);
 			std::string rawUtf8;
@@ -4129,6 +4161,14 @@ private:
 	// back/forward to a different version, in which case we tell JS
 	// to reload (push notification → state-changed message).
 	Int32                _lastSeenVersion{0};
+	// The document we last loaded state from. When the active document
+	// changes (close project, switch tab, new scene), the panel must
+	// reload from the NEW doc — including resetting to empty if the new
+	// doc has no Shotblocks helper. Without tracking this, closing a
+	// project left the old doc's clips on screen as orphans (their
+	// cameras don't resolve in the new doc). Raw pointer used only for
+	// identity comparison — never dereferenced.
+	BaseDocument*        _lastSeenDoc{nullptr};
 	// v2 playback delegates to C4D's native transport (RunAnimation);
 	// see toggle-play and Timer(). _v2Playing tracks whether v2 started
 	// the playback (vs C4D's own play button) so scrub-begin/end can
