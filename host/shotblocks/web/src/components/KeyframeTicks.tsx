@@ -61,7 +61,19 @@ export function KeyframeTicks({ clip, thin }: { clip: Clip; thin: boolean }) {
   // transform with the clip and never recompute mid-drag. Measured: the
   // keyframe DATA never blips (keyTimes stays steady) — only the position
   // mechanism desyncs, so freezing the fractions is sufficient.
-  const dragging = useStore((s) => s.dragClip?.clipId === clip.id);
+  // True while THIS clip rides an active body-drag — as the grabbed clip
+  // OR as a co-member of a multi-select GROUP drag. A group drag commits
+  // live (moveClips updates every member's inFrame each pointermove) while
+  // the keys themselves only shift on release, so a non-grabbed keyframed
+  // member would otherwise show its clip sliding through stationary dots.
+  // dragClip.clipId is just the anchor; the moving group is the selection
+  // snapshot, so freeze any selected clip while the anchor is also selected.
+  const dragging = useStore((s) => {
+    if (!s.dragClip) return false;
+    if (s.dragClip.clipId === clip.id) return true;
+    const sel = s.selectedClipIds;
+    return sel.size > 1 && sel.has(clip.id) && sel.has(s.dragClip.clipId);
+  });
   // Selected keyframe-column frames on THIS clip's camera. Subscribe to
   // the whole set, derive the frames for our objectId (cheap; the set is
   // small). A dot renders selected when its frame is in here.
