@@ -2,11 +2,15 @@
 // test later. Splitting these out so both the ruler and the playhead
 // can use the same px-per-frame derivation.
 
+/** Minimum horizontal gap (px) between adjacent ruler labels. Drives both
+ *  the frame-step pick AND the proximity cull of the forced start/end
+ *  labels so numbers never overlap. */
+const MIN_LABEL_PX = 36;
+
 export function pickFrameStep(pxPerFrame: number): number {
   const candidates = [1, 2, 4, 8, 16, 32, 64, 128, 256, 512, 1024];
-  const minLabelPx = 36;
   for (const s of candidates) {
-    if (s * pxPerFrame >= minLabelPx) return s;
+    if (s * pxPerFrame >= MIN_LABEL_PX) return s;
   }
   return candidates[candidates.length - 1];
 }
@@ -35,24 +39,39 @@ export function computeRulerLayout(
     ticks.push({ x: (f - vMin) * pxPerFrame, isMajor: f % step === 0 });
   }
 
-  // Labels at step + the start and end of the visible window.
-  const labels: RulerLayout['labels'] = [];
-  const labelFrames = new Set<number>();
-  labelFrames.add(Math.max(0, Math.ceil(vMin)));
+  // Labels: the regular step grid, plus the start and end of the visible
+  // window so the exact bounds are always marked. The forced start/end can
+  // land very close to an adjacent grid label (e.g. vMax=1992 next to grid
+  // 1984) and the two would overlap. Cull by pixel proximity: the forced
+  // endpoints win (they're the meaningful "edge" markers), so a grid label
+  // within MIN_LABEL_PX of an endpoint is dropped.
+  const startFrame = Math.max(0, Math.ceil(vMin));
+  const endFrame = Math.floor(vMax);
+  const gridFrames: number[] = [];
   const firstLabel = Math.ceil(vMin / step) * step;
   const lastLabel = Math.floor(vMax / step) * step;
-  for (let f = firstLabel; f <= lastLabel; f += step) labelFrames.add(f);
-  labelFrames.add(Math.floor(vMax));
-  const sorted = [...labelFrames].sort((a, b) => a - b);
-  for (const f of sorted) {
-    const x = (f - vMin) * pxPerFrame;
-    const isFirst = f === sorted[0];
-    const isLast = f === sorted[sorted.length - 1];
-    labels.push({
-      x: isLast ? widthPx - 1 : x,
-      text: String(f),
-      align: isFirst ? 'left' : isLast ? 'right' : 'center',
-    });
+  for (let f = firstLabel; f <= lastLabel; f += step) {
+    if (f === startFrame || f === endFrame) continue; // endpoint covers it
+    gridFrames.push(f);
+  }
+  const xOf = (f: number) => (f - vMin) * pxPerFrame;
+  const startX = xOf(startFrame);
+  const endX = widthPx - 1; // end label pinned to the right edge
+  const keptGrid = gridFrames.filter((f) => {
+    const x = xOf(f);
+    return Math.abs(x - startX) >= MIN_LABEL_PX
+        && Math.abs(x - endX) >= MIN_LABEL_PX;
+  });
+
+  const labels: RulerLayout['labels'] = [];
+  labels.push({ x: startX, text: String(startFrame), align: 'left' });
+  for (const f of keptGrid) {
+    labels.push({ x: xOf(f), text: String(f), align: 'center' });
+  }
+  // Only emit the end label if it isn't the same frame as the start
+  // (a degenerate 1-frame window).
+  if (endFrame !== startFrame) {
+    labels.push({ x: endX, text: String(endFrame), align: 'right' });
   }
 
   return { ticks, labels };
