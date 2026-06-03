@@ -2973,9 +2973,17 @@ private:
 	// timeline currently has selected. objectId>0 highlights that camera's
 	// keys (clearing the previously-synced one); objectId<=0 just clears the
 	// last one — used when the timeline selection goes empty / lands on a
-	// gap / a non-camera clip, so a stale highlight doesn't linger. Does NOT
-	// touch the OM/AM object selection (that's HandleSelectInOm's job).
+	// gap / a non-camera clip, so a stale highlight doesn't linger.
 	// Returns true if anything changed (so the caller can skip EventAdd).
+	//
+	// Selecting a camera also makes it the ACTIVE OBJECT (SetActiveObject).
+	// This is required, not cosmetic: when the dope sheet is open ALONGSIDE
+	// the Shotblocks panel, setting the key NBIT bits + EventAdd alone does
+	// NOT make an already-visible dope sheet repaint the highlight — only an
+	// active-object change forces it to re-read. (It "worked" before only
+	// because switching to a docked dope-sheet tab forced a full repaint.)
+	// The playhead-follow path always did SetActiveObject, which is why that
+	// one refreshed both-visible; the clip-click path now matches it.
 	Bool ApplyDopeKeySelection(BaseDocument* doc, Int32 objectId)
 	{
 		if (!doc) return false;
@@ -2992,10 +3000,20 @@ private:
 			BaseObject* cam = ResolveCameraForObjectId(doc, objectId);
 			if (cam && _lastKeySelObjectId != objectId)
 			{
+				doc->SetActiveObject(cam, SELECTION_NEW);
 				SetCameraKeysSelected(cam, NBITCONTROL::SET);
 				_lastKeySelObjectId = objectId;
 				changed = true;
 			}
+		}
+		else if (changed)
+		{
+			// Deselect (objectId<=0) AND we just cleared a camera's key bits:
+			// drop the active object so an already-visible dope sheet actually
+			// repaints the cleared selection. Same reason the SET path needs
+			// SetActiveObject — EventAdd alone won't refresh a visible dope
+			// sheet; only an active-object change forces the re-read.
+			doc->SetActiveObject(nullptr, SELECTION_NEW);
 		}
 		return changed;
 	}
