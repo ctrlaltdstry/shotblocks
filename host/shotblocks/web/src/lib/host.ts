@@ -199,11 +199,36 @@ export function send(obj: HostOutbound): Promise<unknown> {
 // scrub-over-a-request-channel pattern.
 let seekInFlight = false;
 let seekPending: number | null = null;
+let lastSeekStartMs = 0;
+let seekPaceTimer: ReturnType<typeof setTimeout> | null = null;
+// Minimum wall-clock spacing between seek STARTS — a steady cadence floor.
+// Measured (2026-06-03): the C++ per-frame DrawViews cost is direction-
+// dependent in C4D itself — forward scrub is a steady ~49ms, reverse is
+// mostly ~10ms with occasional 40-90ms spikes. Firing the next seek the
+// instant the previous resolved let reverse run in uneven bursts (= felt
+// jittery). NOTE: the underlying reverse roughness is C4D's own animation
+// evaluation (its NATIVE timeline scrubs backward the same way) — not
+// something we can fully fix. This floor just decouples our seek cadence
+// from the variable draw cost so the stream is evenly paced; it noticeably
+// smooths slow reverse and is a no-op on forward (33ms ≈ 30fps is below
+// forward's natural ~49ms rate, so it never throttles forward).
+const MIN_SEEK_INTERVAL_MS = 33;
 function pumpSeek(): void {
   if (seekInFlight || seekPending === null) return;
+  // Hold the next seek until at least MIN_SEEK_INTERVAL_MS after the last
+  // one started, so a burst of cheap (fast) draws can't outrun the pace.
+  const now = (typeof performance !== 'undefined' ? performance.now() : Date.now());
+  const wait = MIN_SEEK_INTERVAL_MS - (now - lastSeekStartMs);
+  if (wait > 0) {
+    if (seekPaceTimer === null) {
+      seekPaceTimer = setTimeout(() => { seekPaceTimer = null; pumpSeek(); }, wait);
+    }
+    return;
+  }
   const frame = seekPending;
   seekPending = null;
   seekInFlight = true;
+  lastSeekStartMs = now;
   send({ kind: 'seek', frame })
     .catch(() => {})
     .then(() => { seekInFlight = false; pumpSeek(); });

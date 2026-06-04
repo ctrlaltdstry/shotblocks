@@ -1355,7 +1355,24 @@ private:
 			{
 				_v2ScrubPaused = false;
 				BaseDocument* doc = GetActiveDocument();
-				if (doc) RunAnimation(doc, true, false);  // play forward
+				if (doc)
+				{
+					// Force the resume position to the last scrubbed-to frame
+					// before restarting the transport. On a PURE CLICK during
+					// playback, scrub-begin's RunAnimation(stop) is async and
+					// often hasn't taken effect by the time this scrub-end
+					// fires, so a plain RunAnimation(play) resumed from C4D's
+					// still-drifting clock — the click appeared to "jump back
+					// then snap forward". Re-anchoring doc time (and the loop
+					// range) here makes playback continue from exactly where
+					// the user clicked, click or drag alike. (A tiny drag
+					// happened to work before only because its extra time let
+					// the async stop land first.)
+					if (_lastSeekAbsFrame >= 0)
+						SetDocumentTime(doc, BaseTime(_lastSeekAbsFrame, doc->GetFps()));
+					ApplyV2RangeToDocLoop(doc);
+					RunAnimation(doc, true, false);  // play forward
+				}
 			}
 			return "{\"ok\":true,\"kind\":\"scrub-end-ack\"}";
 		}
@@ -1943,6 +1960,15 @@ private:
 		// C4D timeline" setting — when that's off, audio responds to
 		// pluginPlaying only, so C4D-native scrub/play makes no sound.
 		bool externalPlaying = (nowMs - _lastTimeChangedTickMs) < 200.0;
+		// Reconcile a STALE scrub-pause. scrub-begin/scrub-end arrive as
+		// independent async fetches with no ordering guarantee, so rapid
+		// click-scrubbing during playback can drop or reorder the pair and
+		// leave _v2ScrubPaused stuck true — C4D transport keeps running but
+		// PostTick would force playing=false, desyncing the two timelines
+		// (the reported bug). A genuine scrub-hold STOPS transport, so if
+		// C4D is actually running here, the pause flag is a lie → clear it.
+		if (_v2ScrubPaused && CheckIsRunning(CHECKISRUNNING::ANIMATIONRUNNING))
+			_v2ScrubPaused = false;
 		bool playing = _v2Playing || externalPlaying;
 		bool pluginPlaying = _v2Playing;
 		// A scrub-hold during playback freezes transport — report
@@ -2068,6 +2094,9 @@ private:
 			absFrame = minFrame;
 		if (absFrame > maxFrame)
 			absFrame = maxFrame;
+		// Remember the scrubbed-to frame so scrub-end can resume playback
+		// from exactly here (see the click-to-jump-during-play fix).
+		_lastSeekAbsFrame = absFrame;
 		// SetDocumentTime is transport-aware (cooperates with a running
 		// RunAnimation) where raw SetTime is not.
 		SetDocumentTime(doc, BaseTime(absFrame, fps));
@@ -4169,6 +4198,14 @@ private:
 	// cameras don't resolve in the new doc). Raw pointer used only for
 	// identity comparison — never dereferenced.
 	BaseDocument*        _lastSeenDoc{nullptr};
+	// Last absolute frame a seek requested. scrub-end uses it to force the
+	// transport to resume from EXACTLY the scrubbed-to frame: on a pure
+	// click (no drag) during playback, scrub-begin's RunAnimation(stop) is
+	// async and hasn't landed before scrub-end fires, so a plain
+	// RunAnimation(play) resumed from C4D's drifted clock (ignoring the
+	// click). Re-anchoring doc time to this frame right before the resume
+	// makes click-to-jump deterministic. -1 = none seeked yet.
+	Int32                _lastSeekAbsFrame{-1};
 	// v2 playback delegates to C4D's native transport (RunAnimation);
 	// see toggle-play and Timer(). _v2Playing tracks whether v2 started
 	// the playback (vs C4D's own play button) so scrub-begin/end can

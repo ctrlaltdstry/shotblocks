@@ -99,6 +99,9 @@ export interface State {
   // The store still tracks currentFrame from C++; we just don't
   // *render* it while a scrub is active.
   scrubFrame: number | null;
+  // Wall-clock ms when scrubFrame was last set; drives setTick's
+  // playback grace window (stale-tick blip suppression on click-to-jump).
+  scrubFrameAtMs: number;
 
   // Scrollbar windows (vMin..vMax visible over min..max).
   // h = horizontal time in frames.

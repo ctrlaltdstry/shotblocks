@@ -1,6 +1,13 @@
 import type { StateCreator } from 'zustand';
 import type { State } from '../../store';
 
+/** Monotonic-ish wall clock for the scrub grace window. */
+const nowMs = () => (typeof performance !== 'undefined' ? performance.now() : Date.now());
+/** How long after a click/scrub-set to keep showing the optimistic
+ *  scrubFrame during playback, so stale in-flight ticks from the old
+ *  transport position don't flick the playhead before the resume lands. */
+const SCRUB_GRACE_MS = 120;
+
 /** Playback transport state — fps, current frame, play range, loop,
  *  and the optimistic scrub override. The C++ side is the source of
  *  truth for fps / docFrames / currentFrame and pushes them via
@@ -16,6 +23,9 @@ export interface PlaybackSlice {
   playRangeOut: number;
   loopEnabled: boolean;
   scrubFrame: number | null;
+  /** Wall-clock ms when scrubFrame was last set — drives the playback
+   *  grace window in setTick. */
+  scrubFrameAtMs: number;
   c4dAudioFollows: boolean;
 
   setTick: (frame: number, fps: number, playing: boolean) => void;
@@ -35,6 +45,7 @@ export const createPlaybackSlice: StateCreator<State, [], [], PlaybackSlice> = (
   playRangeOut: 150,
   loopEnabled: false,
   scrubFrame: null,
+  scrubFrameAtMs: 0,
   c4dAudioFollows: true,
 
   setTick: (frame, fps, playing) => set((s) => ({
@@ -51,10 +62,28 @@ export const createPlaybackSlice: StateCreator<State, [], [], PlaybackSlice> = (
     // scrub drag each move re-sets scrubFrame, so a transient clear
     // here is harmless. JS frameAt and C++ both clamp to the same
     // [0, docFrames] range, so the echo always hits the exact frame.
-    scrubFrame: s.scrubFrame !== null && frame === s.scrubFrame ? null : s.scrubFrame,
+    //
+    // BUT during PLAYBACK the transport keeps advancing through (and
+    // past) the seeked frame, so the echo never reports `=== scrubFrame`
+    // — leaving scrubFrame stuck and the playhead frozen at it while
+    // C4D plays on (the click-to-jump-during-playback desync bug). When
+    // playing, a live transport makes the optimistic hold obsolete, so
+    // clear it and let the playhead follow the live frame — EXCEPT for a
+    // brief grace window right after the click: the old transport has one
+    // or two in-flight ticks still reporting its pre-click position, and
+    // clearing immediately would flick the playhead forward to that stale
+    // frame before the re-anchored resume kicks in (the visible "jump
+    // forward then back" blip). Holding scrubFrame for ~120ms lets those
+    // stale ticks pass; by then the resume ticks reflect the clicked
+    // frame and clearing is seamless.
+    scrubFrame:
+      s.scrubFrame === null ? null
+      : playing
+        ? (nowMs() - s.scrubFrameAtMs > SCRUB_GRACE_MS ? null : s.scrubFrame)
+        : (frame === s.scrubFrame ? null : s.scrubFrame),
   })),
 
-  setScrubFrame: (frame) => set({ scrubFrame: frame }),
+  setScrubFrame: (frame) => set({ scrubFrame: frame, scrubFrameAtMs: nowMs() }),
 
   // Cross-slice write: also fixes the h-window's max when docFrames
   // changes. Conceptually this is "C++ shipped new doc info; update
