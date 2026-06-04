@@ -6,11 +6,11 @@ import motionLibraryUrl from '../icons/motion-library.svg';
  *  no click handler.
  *
  *  Chrome unchanged: 50x50, --color-grey-12 fill, 0.5px --color-grey-16
- *  border, 6px radius. Only the inner glyph was updated to the new
- *  Figma mark (357:878) — three rounded shapes (two pills + a dot).
- *  Rendered as a plain <img> (the SVG carries its own grey-50 fill);
- *  state tints exist in Figma but aren't wired until the library panel
- *  has real behaviour.
+ *  border, 6px radius. The inner glyph is the Shotblocks brand mark
+ *  (Figma 442:2728 "Union") — two offset rounded bars, 20x14. Rendered
+ *  as a plain <img> (the SVG carries its own grey-50 fill); state tints
+ *  exist in Figma but aren't wired until the library panel has real
+ *  behaviour.
  *
  *  Inactive placeholder — no click handler, no tooltip, no pointer
  *  cursor (see .motion-library-btn CSS). */
