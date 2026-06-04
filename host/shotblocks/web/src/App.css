@@ -103,8 +103,8 @@ body.is-resizing-headers .body { transition: none; }
    dot, from icons/motion-library.svg. The SVG carries its own grey-50
    fill, so it's a plain <img> sized to the icon's 22x15 aspect. */
 .motion-library-btn__glyph {
-  width: 22px;
-  height: 15px;
+  width: 20px;
+  height: 14px;
   flex-shrink: 0;
   display: block;
   user-select: none;
@@ -1569,9 +1569,20 @@ body.is-hand-panning * {
 .shot-block.is-orphaned.is-selected {
   background: var(--color-timeline-orphan-block-selected);
 }
-.shot-block.is-locked   {
-  background: var(--color-timeline-locked);
-  border-color: color-mix(in srgb, var(--color-timeline-locked) 70%, black);
+/* Locked clip — keep the clip's own colour and lay a 60% black overlay
+   on top (was a grey background swap). Overlay via ::after so it darkens
+   the fill + waveform + keyframe marks uniformly without changing the
+   base colour, matching the child-div clip-state pattern. inset:0 +
+   the clip's radius so it stays inside the rounded corners; pointer-
+   events:none so it never blocks the click that selects/unlocks it. */
+.shot-block.is-locked::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  border-radius: 4px;
+  background: rgba(0, 0, 0, 0.6);
+  pointer-events: none;
+  z-index: 6;
 }
 
 /* Audio waveform — covers only the lane-visible intersection of the

@@ -136,6 +136,16 @@ export function useKeyboard(): void {
         void send({ kind: 'set-play-range', inFrame: s.playRangeIn, outFrame: newOut });
         return;
       }
+      // `Ctrl+/` → set the play range to the current selection (or all
+      // clips if nothing is selected). Same as the right-click menu's
+      // "Set Play Range to Selection". Checked before the plain-`/`
+      // (reset) branch so the modifier combo wins.
+      if (mod && !ev.altKey && ev.key === '/') {
+        ev.preventDefault();
+        ev.stopPropagation();
+        rangeToSelectionOrAll(useStore.getState());
+        return;
+      }
       // `/` → reset the play range to the full timeline (0 → docFrames).
       if (!mod && !ev.altKey && ev.key === '/') {
         ev.preventDefault();
@@ -210,6 +220,25 @@ export function useKeyboard(): void {
         return;
       }
 
+      // Ctrl+L → lock / unlock the selected clip(s) (mirrors the clip
+      // right-click menu's Lock/Unlock). No-op with an empty selection.
+      if (mod && !ev.altKey && !ev.shiftKey && (ev.key === 'l' || ev.key === 'L')) {
+        const sel = useStore.getState().selectedClipIds;
+        if (sel.size === 0) return;
+        ev.preventDefault();
+        ev.stopPropagation();
+        useStore.getState().toggleLockSelection(sel);
+        return;
+      }
+
+      // Shift+Z → zoom the horizontal view out to the whole timeline.
+      // (Bare Z is the Zoom tool, gated on !shiftKey above, so no clash.)
+      if (!mod && !ev.altKey && ev.shiftKey && (ev.key === 'z' || ev.key === 'Z')) {
+        ev.preventDefault();
+        useStore.getState().zoomAll();
+        return;
+      }
+
       // Delete / Backspace → delete selection. Priority: a selected
       // keyframe COLUMN (dot) first, then a pen-tool level-keyframe
       // selection, then clips. Each is a distinct selection model; the
@@ -271,8 +300,11 @@ export function useKeyboard(): void {
 /** Compute the bounding [in, out] frame range over the current
  *  selection (or all clips on every track if nothing is selected),
  *  then write it as the new play range. Out frame is exclusive in
- *  the v2 model — we use the rightmost clip's outFrame directly. */
-function rangeToSelectionOrAll(s: ReturnType<typeof useStore.getState>) {
+ *  the v2 model — we use the rightmost clip's outFrame directly.
+ *  Exported so the clip context menu and the Ctrl+/ shortcut share one
+ *  implementation. Works for any selection size; with an empty selection
+ *  it falls back to all clips (the `?` shortcut's behavior). */
+export function rangeToSelectionOrAll(s: ReturnType<typeof useStore.getState>) {
   const sel = s.selectedClipIds;
   const tracks = [...s.videoTracks, ...s.audioTracks];
   let minIn = Infinity;

@@ -486,7 +486,7 @@
 
         <section class="doc-section" id="keyframe-dots" data-nav-title="Keyframe dots">
           <h2>Keyframe dots</h2>
-          <p>A camera shot shows its camera's keyframes as small orange marks across the clip — a glance at where the motion happens. Each mark is a <em>column</em>: every keyframe at that frame, across the camera and any of its tags, collapses into one. Keys outside the clip's window aren't drawn, so trimming a shot shorter shows fewer of them.</p>
+          <p>A camera shot shows its camera's keyframes as small marks along a thin line across the clip — a glance at where the motion happens. Each mark is a <em>column</em>: every keyframe at that frame, across the camera and any of its tags, collapses into one. Keys outside the clip's window aren't drawn, so trimming a shot shorter shows fewer of them.</p>
           <p>The dots are editable directly from the timeline:</p>
           <ul>
             <li><strong>Select</strong> — click a dot to select that column. <kbd>Shift</kbd>-click adds or removes columns from the selection.</li>
@@ -495,6 +495,10 @@
             <li><strong>Delete</strong> — with dots selected, press <kbd>Delete</kbd> to remove those keyframe columns from the camera.</li>
           </ul>
           <p>Every dot edit flows through Cinema&nbsp;4D's undo, so <kbd>Ctrl</kbd>+<kbd>Z</kbd> reverts it. To edit individual channels or tangents, use Cinema&nbsp;4D's own dope sheet — the dots are a fast overview and bulk-move tool, not a replacement for it.</p>
+          <div class="tip">
+            <span class="tip__label">Dope-sheet sync</span>
+            Selecting a camera shot in the timeline also selects that camera's keyframes in Cinema&nbsp;4D's Timeline / dope sheet, so the right keys are already highlighted when you switch over — no hunting. Deselecting clears the highlight. (This updates live even with the dope sheet open beside Shotblocks.)
+          </div>
           <div class="tip">
             <span class="tip__label">Slip vs. move</span>
             To shift the <em>entire</em> animation at once without selecting every dot, use the <a href="#tools">Slip tool</a> on the shot — it slides all the keyframes together under the fixed clip.
@@ -534,7 +538,7 @@
             <tr><td>Paste</td><td><kbd>Ctrl</kbd>+<kbd>V</kbd></td></tr>
             <tr><td>Delete</td><td><kbd>Delete</kbd> or <kbd>Backspace</kbd></td></tr>
           </table>
-          <p>Paste drops onto the active chip's track at the playhead. You can also right-click a clip for these actions plus <strong>Split at Playhead</strong> and <strong>Lock</strong>/<strong>Unlock</strong>. A locked clip (or any clip on a locked track) ignores edits until unlocked.</p>
+          <p>Paste drops onto the active chip's track at the playhead. You can also right-click a clip for these actions plus <strong>Set Play Range to Selection</strong> (<kbd>Ctrl</kbd>+<kbd>/</kbd> — works with one clip or many) and <strong>Lock</strong>/<strong>Unlock</strong> (<kbd>Ctrl</kbd>+<kbd>L</kbd>). A locked clip can't be moved, trimmed, retimed, or split until unlocked (a clip on a locked track is likewise frozen); it's shown dimmed under a dark overlay. You can still select a locked clip to unlock it.</p>
         </section>
 
         <section class="doc-section" id="snapping" data-nav-title="Snapping">
@@ -633,6 +637,7 @@
             <tr><td><kbd>O</kbd></td><td>Set the out point to the playhead.</td></tr>
             <tr><td><kbd>/</kbd></td><td>Reset the range to the whole timeline.</td></tr>
             <tr><td><kbd>?</kbd> (Shift+/)</td><td>Set the range to the current selection (or all clips if nothing is selected).</td></tr>
+            <tr><td><kbd>Ctrl</kbd>+<kbd>/</kbd></td><td>Set the range to the selected clip(s). Also on the clip right-click menu.</td></tr>
           </table>
         </section>
 
@@ -714,6 +719,7 @@
             <tr><td><kbd>O</kbd></td><td>Set play-range out point to the playhead</td></tr>
             <tr><td><kbd>/</kbd></td><td>Reset play range to the whole timeline</td></tr>
             <tr><td><kbd>?</kbd></td><td>Set play range to the selection (or all clips)</td></tr>
+            <tr><td><kbd>Ctrl</kbd>+<kbd>/</kbd></td><td>Set play range to the selected clip(s)</td></tr>
             <tr><td><kbd>Shift</kbd>+<kbd>L</kbd></td><td>Toggle Loop</td></tr>
           </table>
 
@@ -726,6 +732,7 @@
             <tr><td><kbd>H</kbd></td><td>Hand</td></tr>
             <tr><td><kbd>Z</kbd></td><td>Zoom</td></tr>
             <tr><td><kbd>S</kbd></td><td>Slip</td></tr>
+            <tr><td><kbd>Shift</kbd>+<kbd>Z</kbd></td><td>Zoom out to fit the whole timeline</td></tr>
           </table>
 
           <h3>Editing</h3>
@@ -738,6 +745,7 @@
             <tr><td><kbd>&larr;</kbd> / <kbd>&rarr;</kbd></td><td>Nudge selection 1 frame (<kbd>Shift</kbd> = 10)</td></tr>
             <tr><td><kbd>[</kbd> / <kbd>]</kbd></td><td>Move selected clip so its start / end lands on the playhead</td></tr>
             <tr><td><kbd>Alt</kbd>+<kbd>[</kbd> / <kbd>Alt</kbd>+<kbd>]</kbd></td><td>Trim selected clip's in / out edge to the playhead</td></tr>
+            <tr><td><kbd>Ctrl</kbd>+<kbd>L</kbd></td><td>Lock / unlock the selected clip(s)</td></tr>
             <tr><td><kbd>Delete</kbd> / <kbd>Backspace</kbd></td><td>With keyframe dots selected, remove those keyframe columns</td></tr>
           </table>
           <p>Some edits are mouse-with-modifier rather than a single key:</p>

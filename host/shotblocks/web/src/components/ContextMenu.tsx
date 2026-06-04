@@ -1,5 +1,6 @@
 import { useEffect, useRef } from 'react';
 import { useStore, type LevelInterp } from '../store';
+import { rangeToSelectionOrAll } from '../useKeyboard';
 
 /** Right-click context menu. Rendered only when state.contextMenu is
  *  non-null. Closes on outside-click, Escape, or after any item is
@@ -228,14 +229,16 @@ export function ContextMenu() {
         },
         {
           kind: 'item',
-          label: 'Split at Playhead',
+          label: 'Set Range to Selection',
+          hint: 'Ctrl+/',
           disabled: !hasSelection,
-          onPick: () => run(() => { state.splitSelectionAtPlayhead(sel); }),
+          onPick: () => run(() => { rangeToSelectionOrAll(useStore.getState()); }),
         },
         { kind: 'separator' },
         {
           kind: 'item',
           label: lockLabel,
+          hint: 'Ctrl+L',
           disabled: !hasSelection,
           onPick: () => run(() => { state.toggleLockSelection(sel); }),
         },
@@ -246,7 +249,7 @@ export function ContextMenu() {
   const visibleItems = items.filter((i) => i.kind === 'item').length;
   const separators = items.filter((i) => i.kind === 'separator').length;
   const menuH = visibleItems * ITEM_HEIGHT + separators * 9 + MENU_VPADDING * 2;
-  const menuW = 180;
+  const menuW = 210;
   const vw = window.innerWidth;
   const vh = window.innerHeight;
   const left = Math.min(menu.x, vw - menuW - 4);

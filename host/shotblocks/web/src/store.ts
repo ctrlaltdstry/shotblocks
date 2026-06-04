@@ -386,6 +386,7 @@ export interface State {
   setPlayRange: (inFrame: number, outFrame: number) => void;
   setLoopEnabled: (on: boolean) => void;
   setHVisible: (vMin: number, vMax: number) => void;
+  zoomAll: () => void;
   setVVideoVisible: (vMin: number, vMax: number) => void;
   setVAudioVisible: (vMin: number, vMax: number) => void;
   setVaShare: (share: number) => void;

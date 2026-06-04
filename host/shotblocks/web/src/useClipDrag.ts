@@ -473,6 +473,27 @@ export function useClipDrag(
       // never even enters a drag preview that would snap back.
       if (isTrackLocked(trackId)) return;
 
+      // A locked CLIP is likewise immovable/unresizable — bail before any
+      // drag preview. Read fresh from the store (the closure's `clip` can
+      // be stale; lock toggles between renders). Selection is still
+      // allowed so the user can right-click → Unlock. We let the press
+      // through to selection by NOT returning here for a plain click —
+      // instead we only block the drag setup below.
+      {
+        const liveClip = (() => {
+          for (const tt of [...useStore.getState().videoTracks, ...useStore.getState().audioTracks]) {
+            const c = tt.clips.find((cc) => cc.id === clip.id);
+            if (c) return c;
+          }
+          return undefined;
+        })();
+        if (liveClip && (liveClip.locked || liveClip.state === 'locked')) {
+          // Still select it (so right-click/Unlock works), but no drag.
+          useStore.getState().setSelectedClip(clip.id, ev.shiftKey || ev.ctrlKey || ev.metaKey);
+          return;
+        }
+      }
+
       // LevelCurve's React onPointerDown calls stopPropagation when it
       // owns the gesture (pen tool, or keyframe-node / handle press
       // under Select). React's stopPropagation halts native bubble

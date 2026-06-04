@@ -15,6 +15,9 @@ export interface ViewSlice {
   headersWidth: number;
 
   setHVisible: (vMin: number, vMax: number) => void;
+  /** Zoom the horizontal view out to show the WHOLE timeline (0 →
+   *  docFrames). Bound to Shift+Z and the "zoom all" affordance. */
+  zoomAll: () => void;
   setVVideoVisible: (vMin: number, vMax: number) => void;
   setVAudioVisible: (vMin: number, vMax: number) => void;
   setVaShare: (share: number) => void;
@@ -34,6 +37,15 @@ export const createViewSlice: StateCreator<State, [], [], ViewSlice> = (set) => 
   setHVisible: (vMin, vMax) => set((s) => ({
     h: { ...s.h, vMin, vMax },
   })),
+
+  zoomAll: () => set((s) => {
+    // Show the entire timeline. docFrames is the doc length; widen the
+    // scroll extent (max) to match so the full span fits in view, then
+    // set the visible window to the whole thing. Mirrors the full-reset
+    // shape used elsewhere ({min:0, max:docFrames, vMin:0, vMax:docFrames}).
+    const full = Math.max(1, s.docFrames);
+    return { h: { min: 0, max: full, vMin: 0, vMax: full } };
+  }),
 
   setVVideoVisible: (vMin, vMax) => set((s) => ({
     vVideo: { ...s.vVideo, vMin, vMax },

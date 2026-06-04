@@ -263,6 +263,8 @@ export const createTimelineSlice: StateCreator<State, [], [], TimelineSlice> = (
       if (destTrack && destTrack.locked) return s;
       const moving = tracks[fromIdx].clips.find((c) => c.id === clipId);
       if (!moving) return s;
+      // A locked clip can't be moved (same guard as resize/split below).
+      if (moving.locked || moving.state === 'locked') return s;
       const duration = moving.outFrame - moving.inFrame;
 
       // Spawn-target case: dest track doesn't exist yet. Allow only one
@@ -450,6 +452,14 @@ export const createTimelineSlice: StateCreator<State, [], [], TimelineSlice> = (
       const anchorLocs: Loc[] = [];
       const otherLocs: Loc[] = [];
       let anchorLoc: Loc | null = null;
+      // A locked clip anywhere in the group vetoes the whole move (same
+      // all-or-nothing rule as the locked-track guard below — you can't
+      // half-move a group).
+      for (const t of [...anchorTracks, ...otherTracks]) {
+        for (const c of t.clips) {
+          if (clipIds.has(c.id) && (c.locked || c.state === 'locked')) return s;
+        }
+      }
       for (const t of anchorTracks) {
         for (const c of t.clips) {
           if (!clipIds.has(c.id)) continue;
