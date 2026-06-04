@@ -17,8 +17,8 @@
 [CmdletBinding()]
 param(
     # Version string stamped into artifact filenames. Keep in sync with the
-    # manual's release-notes version ("v1.0.0") and shotblocks.iss.
-    [string]$Version = "1.0.0",
+    # manual's release-notes version ("v1.1.0") and shotblocks.iss.
+    [string]$Version = "1.1.0",
     # Skip the C++ / web rebuild and package whatever is already built.
     # Useful for iterating on the packaging itself.
     [switch]$SkipBuild

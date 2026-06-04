@@ -246,7 +246,7 @@
         <div class="sidebar__mark"><img src="images/icon.png" alt="Shotblocks" /></div>
         <div>
           <div class="sidebar__name">Shotblocks</div>
-          <div class="sidebar__ver" id="brand-version">v1.0.0&nbsp;&middot;&nbsp;Manual</div>
+          <div class="sidebar__ver" id="brand-version">v1.1.0&nbsp;&middot;&nbsp;Manual</div>
         </div>
       </div>
       <nav class="nav" id="nav"><!-- built from the section list by script --></nav>
@@ -255,7 +255,7 @@
     <!-- ============ CONTENT ============ -->
     <main class="content">
       <div class="topbar">
-        <span class="topbar__tag" id="version-tag">v1.0.0</span>
+        <span class="topbar__tag" id="version-tag">v1.1.0</span>
       </div>
       <div class="content__inner" id="content">
         <!-- Sections are authored here. Each <section class="doc-section">
@@ -293,7 +293,7 @@
 
           <h3>Option A — the installer (recommended)</h3>
           <ol>
-            <li>Run <code>shotblocks-v1.0.0-setup.exe</code>.</li>
+            <li>Run <code>shotblocks-v1.1.0-setup.exe</code>.</li>
             <li>The installer detects your Cinema&nbsp;4D&nbsp;2026 plugins folder. Confirm it (or browse to it if you keep plugins somewhere custom), then click <strong>Install</strong>.</li>
             <li><strong>Restart Cinema&nbsp;4D</strong> if it was running.</li>
           </ol>
@@ -306,7 +306,7 @@
 
           <h3>Option B — the zip (manual install)</h3>
           <ol>
-            <li>Unzip <code>shotblocks-v1.0.0.zip</code>. Inside is a single <code>shotblocks</code> folder (and a <code>README.txt</code>).</li>
+            <li>Unzip <code>shotblocks-v1.1.0.zip</code>. Inside is a single <code>shotblocks</code> folder (and a <code>README.txt</code>).</li>
             <li>Copy that whole <code>shotblocks</code> folder into your Cinema&nbsp;4D&nbsp;2026 <code>plugins</code> directory. The usual location is:
               <br /><code>%APPDATA%\Maxon\Maxon Cinema 4D 2026_&lt;id&gt;\plugins\</code>
               <br />(the <code>&lt;id&gt;</code> suffix is unique to your install — paste <code>%APPDATA%\Maxon</code> into Explorer's address bar and open the <code>Maxon Cinema 4D 2026_…</code> folder, then <code>plugins\</code>).</li>
@@ -315,7 +315,7 @@
 
           <h3>Verifying your download (optional)</h3>
           <p>Each download ships with a <code>.sha256</code> checksum so you can confirm the file arrived intact. In PowerShell, run:</p>
-          <p><code>Get-FileHash shotblocks-v1.0.0.zip -Algorithm SHA256</code></p>
+          <p><code>Get-FileHash shotblocks-v1.1.0.zip -Algorithm SHA256</code></p>
           <p>and check the printed hash matches the one in the <code>.sha256</code> file.</p>
 
           <h3>Confirming it loaded</h3>
@@ -797,11 +797,23 @@
         <section class="doc-section" id="release-notes" data-nav-group="About" data-nav-title="Release notes">
           <h2>Release notes</h2>
 
+          <h3>v1.1.0</h3>
+          <p>A feature + polish release on top of v1.0.0:</p>
+          <ul>
+            <li><strong>Keyframe dots, editable</strong> — camera keyframes show as marks on a connector line across each shot; select, marquee, drag, delete, and snap edits to them; slip the whole animation under a fixed clip; Alt+Ctrl-drag an edge to retime.</li>
+            <li><strong>Dope-sheet sync</strong> — selecting a shot highlights that camera's keys in C4D's Timeline / dope sheet, and clears them when you deselect.</li>
+            <li><strong>Clip lock that holds</strong> — a locked clip (<kbd>Ctrl</kbd>+<kbd>L</kbd> or the right-click menu) can't be moved, trimmed, retimed, or split until unlocked, and is shown dimmed under a dark overlay.</li>
+            <li><strong>New shortcuts &amp; menu</strong> — <strong>Set Range to Selection</strong> (<kbd>Ctrl</kbd>+<kbd>/</kbd>, one clip or many) on the clip menu; <kbd>Shift</kbd>+<kbd>Z</kbd> zooms out to the whole timeline.</li>
+            <li><strong>Smoother transport</strong> — clicking the ruler during playback restarts cleanly from the clicked frame; the Shotblocks playhead stays in sync with C4D.</li>
+            <li><strong>Camera rig fixes</strong> — Frame Offset works reliably (including with damping on and with more than one rig tag in the scene); each tag keeps its own state.</li>
+            <li><strong>Refreshed branding</strong> — new app, installer, plugin, and manual icons.</li>
+          </ul>
+
           <h3>v1.0.0</h3>
           <p>The first Shotblocks release: a complete, polished camera-sequencing timeline for Cinema&nbsp;4D&nbsp;2026 on Windows. It includes:</p>
           <ul>
             <li><strong>The timeline</strong> — multi-track shot sequencing with hard cuts; move, trim, roll, ripple, retime, and slip (on audio and camera shots); replace/ripple overlap handling; top-track-wins resolution.</li>
-            <li><strong>Keyframe editing from the timeline</strong> — camera keyframes show as orange marks on each shot; select, marquee, drag, and delete them, snap edits to them, slip the whole animation, or Alt+Ctrl-drag an edge to retime — all without leaving the timeline.</li>
+            <li><strong>Keyframe editing from the timeline</strong> — camera keyframes show as marks on each shot; select, marquee, drag, and delete them, snap edits to them, slip the whole animation, or Alt+Ctrl-drag an edge to retime — all without leaving the timeline.</li>
             <li><strong>Cameras</strong> — drag from the Object Manager or create in place with Add&nbsp;Camera (inherits your viewport view and lens); per-side active chips; selection follows the playhead; orphan detection and relink when a camera is deleted.</li>
             <li><strong>Audio</strong> — drag-in WAV/MP3, zoom-adaptive waveforms, a live stereo dB meter, audio scrubbing, per-track mute/solo, pen-tool volume curves, and automatic beat detection with a snap-to-beat grid.</li>
             <li><strong>Playback &amp; range</strong> — native-transport playback, loop, a draggable play range with I/O hotkeys, markers, and an "audio follows C4D timeline" option.</li>

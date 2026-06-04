@@ -8,14 +8,14 @@
 ;
 ; Build (after installing Inno Setup 6 and running package.ps1):
 ;   "C:\Program Files (x86)\Inno Setup 6\ISCC.exe" scripts\shotblocks.iss
-; Output: dist\shotblocks-v1.0.0-setup.exe
+; Output: dist\shotblocks-v1.1.0-setup.exe
 ;
 ; UNSIGNED - SmartScreen will show a one-time warning (EV cert deferred
 ; to a later release). See .agent/plans/v1-plan-6-beta-installer.md for
 ; the trust rationale.
 
 #define AppName "Shotblocks"
-#define AppVersion "1.0.0"
+#define AppVersion "1.1.0"
 #define AppPublisher "mkslate"
 #define AppURL "https://mkslate.com"
 ; Staged clean tree, relative to this .iss file (scripts/ -> ..\dist\shotblocks).
