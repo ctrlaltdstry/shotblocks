@@ -1,6 +1,7 @@
 # Plan: "Shotblocks Motion" — object motion tag
 
-Status: **BUILT, user-approved feel (2026-06-07).** Awaiting commit. Exploration mode.
+Status: **BUILT + COMMITTED + PUSHED (2026-06-07).** Commits e500384 (noise
+gain_scale), 1c7fb16 (the tag), b7828a2 (plan). On origin/main. Exploration mode.
 
 ## FINAL DESIGN (what shipped this session — read this first)
 

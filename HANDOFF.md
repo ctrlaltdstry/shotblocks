@@ -1,143 +1,84 @@
-# Handoff — end of 2026-05-29 session
+# Handoff — end of 2026-06-07 session
 
-Next session's job: **build the Chase / Follow-Target camera behavior.**
-The design is already done and specced — this is an implementation
-session, not a design one. Read the spec, then start building.
+This session: built the **object Motion tag** (inertia/weight) and **rebuilt
+the camera Chase** as a world-anchored sphere, then reorganized the camera
+tag UI into tabs. All committed and **pushed** (origin/main = `1a6e5b9`).
+
+There is **no committed-but-unfinished work** and **no open bug**. A new
+session can start fresh on whatever's next.
 
 ## Read these first
+1. `CLAUDE.md` — rules. Especially the **dev loop**, **measure-before-fixing**,
+   and **two failed attempts → stop and instrument**. This session held to
+   that with gitignored `src/_*.py` probes (pure-math checks before C4D
+   wiring); it paid off repeatedly. Keep doing it.
+2. `.agent/router.md` + `.agent/constitution.md` — project shape & scope.
+3. The two plans written this session (below) for the rig details.
 
-1. `CLAUDE.md` — non-negotiable rules. Especially the **dev loop**, the
-   **"measure before fixing"** rule, and **"two failed attempts on the
-   same bug → stop and surface the architectural alternative."** (This
-   session lost time guessing at a layout bug and at a playback bug
-   before resetting to measurement — don't repeat that. After the FIRST
-   failed fix, reset to the known-good baseline and re-apply one change
-   at a time.)
-2. **`.agent/plans/rig-chase-follow.md`** — the full Chase/Follow spec.
-   This is the task. All the key decisions are already made (see below).
-3. `.agent/skills/spring-damper.md` — the lag/overshoot engine the chase
-   reuses.
-4. `src/sb_rig_tag.py` + `src/sb_rig_spring.py` — the rig tag and the
-   spring it composes. Read how `_read_keyframed_target` /
-   `_execute` / `_write_back` work; chase plugs in as a new position-
-   target source.
+## What shipped this session (commits on origin/main, all past tag v1.1.0)
+- `e500384` noise: add `gain_scale` (Contrast) to the fBm sampler.
+- `1c7fb16` **Shotblocks Motion tag** — 2nd Python tag (id 1000002) giving ANY
+  object inertial weight: Weight / Drift / Lean / Turn-Ease + Handheld noise.
+  Aim-down-DRIFTED-travel (the nose follows the drifted path, not the rigid
+  spline tangent, so body + nose share one physics world). Engine
+  `src/sb_rig_inertia.py`. Plan: `.agent/plans/motion-tag-object.md`.
+- `b7828a2` Motion-tag plan + gitignore generalized to `src/_*.py`.
+- `1a6e5b9` **Chase = world-anchored sphere** rewrite + camera tag UI tabs.
+  Plan: `.agent/plans/rig-chase-sphere.md`.
 
-## The task — Chase / Follow-Target (decided design)
+## Current rig state
+- **Camera rig tag** (`src/sb_rig_tag.py`, id 1000001): AM is now 4 TABS —
+  General (Aim / Smoothing / Advanced) · Chase · Framing (Frame Offset /
+  Handheld) · Zoom. Chase = the sphere model: Radius + Strength + Orbit
+  (longitude) + Height Angle (latitude) + Camera Roll + Look-Ahead; always
+  aims at the target; world-anchored so placement never fights itself.
+  Artist-friendly labels throughout (Position/Rotation, Aim Strength, Lean
+  Into Turns, Punch In/Ease Out/Settle, etc.).
+- **Object Motion tag** (`src/sb_motion_tag.py`, id 1000002): Weight/Drift/
+  Lean/Turn-Ease + noise. **Object nose must point -Z** (the aim axis) —
+  needs a user-manual note before release.
+- Engines (pure functions, no `c4d` import, standalone-testable):
+  `sb_rig_spring`, `sb_rig_noise` (has `gain_scale`), `sb_rig_quat`,
+  `sb_rig_follow` (gutted to a small sphere `camera_position` + `lead_point`),
+  `sb_rig_inertia` (new — offset-spring drift + g-lean + aim-down-travel).
 
-A camera that **pursues a moving object with its own momentum** — trails
-it, lags, overshoots on turns — instead of being rigidly parented. Use
-case: a camera chasing a flying mouse-cursor as it darts between objects.
+## Open follow-ups (none blocking; pick up if relevant)
+1. **User-manual note: Motion tag nose must point -Z.** In
+   `host/shotblocks/web` manual page, before any release.
+2. **Camera Chase + object Motion tag as one workflow.** "Follow a flying
+   object without motion sickness" = Motion tag on the object + Chase on the
+   camera pointed at it. Built separately; never verified as a combined rig.
+3. **Eyeball-tuned gains** live as constants atop `sb_rig_inertia.py`
+   (drift/lean) and in the chase radius-lock / turn-ease easing. Adjust vs
+   real scenes if the feel drifts; behavior is correct, only the *amounts*
+   are taste.
+4. **Not released.** 7 commits sit on main past v1.1.0; none of this rig work
+   is in a release build. Release only when the user asks (bump 3 version
+   files → package.ps1 → ISCC → tag; see `reference_release_process` memory).
 
-**Decisions already locked in (do NOT re-litigate; build to these):**
-- **New pure-function module `src/sb_rig_follow.py`** — no `c4d` import,
-  exactly like `sb_rig_spring`/`sb_rig_noise`/`sb_rig_zoom`. Signature
-  idea: given (target pos, target velocity, current cam state, knobs) →
-  return the **desired camera position**. The existing position spring
-  does the lag/overshoot. This module is **front-end-agnostic** on
-  purpose: the tag drives it now, the v2 motion-layers Targeting "Chase"
-  pill drives the *same module* later. Build the math once.
-- **Velocity-relative pursuit:** desired pos =
-  `target_pos − (velocity_dir × follow_distance)` + a small height/side
-  bias. The "behind it along its heading" model.
-- **Position only.** Chase drives the camera *body*. **Aim stays on the
-  existing Look-At Target + angular spring** (they compose — you can
-  chase one object and look at another, or set both to the cursor).
-- The two **failure modes are the real work** (need live tuning against
-  a real flying-cursor anim, not theory):
-  1. *Low-speed direction jitter* — velocity direction flips when slow;
-     fix = low-pass the velocity + fade the velocity-relative offset out
-     to a neutral world-offset hold below a speed threshold.
-  2. *Reverse whip-around* — cap how fast the "behind" point re-orients
-     on a sharp reversal (a re-orient damping knob).
-- **Implied knobs:** Follow Target (own object link, separate from
-  Look-At Target), Follow Distance, Position Damping (exists), Velocity
-  Smoothing, Re-orient Speed, Height/Side Bias.
-
-**Open questions to resolve before/while implementing** (in the spec):
-- Velocity source: target frame-to-frame position delta (simplest, fits
-  the stateless-sample philosophy) vs CTrack-derived. Delta + low-pass
-  is probably enough.
-- Chase needs prev-frame smoothed velocity → per-tag runtime state.
-  Decide how it **resets on scrub-back / shot boundary** (likely: snap
-  to current desired spot on reset, like the spring's `reset_to_target`
-  already does — see `_RUNTIME` / `request_reset` in sb_rig_tag.py).
-- The world-offset "gentle hold" shape at low speed.
-
-**How to verify:** you'll need a scene with an animated object to chase.
-Make one (animate a null/cube flying around), drop the rig tag on a
-camera, set Follow Target to the flying object, scrub/play and judge the
-feel. There's a `scenes/dev-test.c4d` on disk (now gitignored) you can
-use or replace.
-
-## Where it fits the roadmap
-
-Built **pre-v2 as a rig-tag knob**, deliberately so the v2 motion-layers
-Targeting "Chase" pill reuses the same `sb_rig_follow.py` engine
-(Plans 2–4 of `.agent/plans/motion-layers-roadmap.md`, which now links to
-the chase spec). It may end up its own small pre-v2 release increment
-(like v1.2 Live Aim) — that placement is an open call.
-
-## Current rig-tag state (just reworked this session — context)
-
-The camera-rig tag AM was reworked and **committed** this session
-(commit `5dc0fe1`):
-- **Additive-only** — the Replace mode was removed (never built).
-- **Damping** = Linear / Angular **percent sliders**, default 0%.
-- **Look At + Framing** are still separate groups (an "Aim" merge was
-  tried and reverted — left as-is).
-- **Noise** = "Handheld Noise" checkbox (was a profile dropdown);
-  sliders + artist labels (Shake Amount, Drift Speed, Walk Cycle, Seed).
-- **Zoom** = sliders + renamed section "Zoom" (Frequency, Amount, Hold,
-  Snap In, Pull Back, Return).
-- **`.res` slider lesson (important for any AM work):** a
-  `CUSTOMGUI REALSLIDER` fills width by default — **do NOT add
-  `FIT_H`/`SCALE_H`**, it breaks the layout (collapses sliders + sibling
-  fields). Copy the SDK's own working `.res` form
-  (`c4d_sdk_2026/plugins/.../oenoise.res`). Memory:
-  `feedback_c4d_res_slider_no_fit_h`.
-
-## Also shipped this session (context, all committed + pushed)
-
-- **Playback fix** (`ad83fa1`): v2 spacebar now delegates to C4D's native
-  `RunAnimation` transport instead of a hand-rolled per-frame `SetTime`
-  timer. Cached sims/Alembic now play smoothly; uncached sims run; the
-  earlier per-frame-`ExecutePasses` approach **crashed** (re-entered the
-  sim/Alembic cache build). I/O play range now sets C4D's loop times
-  live. Memory: `feedback_c4d_playback_delegate_to_runanimation`. Don't
-  reintroduce a manual playback timer.
-- **Live Aim roadmap** (`9c1d41e`): the mouse→keyframes performance-
-  capture feature, planned as **v1.2**. Research in
-  `.agent/research/live-camera-control.md`. (Separate from chase; both
-  are "procedural camera authoring.")
-
-## Git / GitHub (set up this session)
-
-- Repo is now on GitHub (**private**): `github.com/ctrlaltdstry/shotblocks`.
-  `origin` is configured, `main` tracks `origin/main`.
-- **Workflow is trunk-based on `main`** — commit straight to main, no
-  branches (solo project; CLAUDE.md confirms). Push to back up.
-- **Mike is new to git** — explain in plain terms, no unexplained jargon.
-  Commit only when asked; push only when asked (it's outward-facing).
-- One commit per atomic, verified change. End commit messages with the
-  `Co-Authored-By: Claude Opus 4.8 (1M context)` line.
+## Process lessons that worked (reuse these)
+- Pure engines tested STANDALONE with `python` before C4D wiring.
+- **Test through the tag's own module namespace**, not by importing a symbol
+  directly — a missing `from_basis` import slipped past a standalone test that
+  imported it itself.
+- C4D gotchas confirmed this session: DEGREE params read in RADIANS;
+  `CUSTOMGUI_VECTOR2D` joystick is too sensitive + its number fields aren't
+  editable (we replaced both joysticks with plain sliders); `MatrixToHPB`
+  flips representation near +/-90 pitch (use quaternions / basis); `SetMg`
+  corrupts pos/rot/scale under a scaled parent (use `SetRel*`); un-keyed
+  rotation axes persist our writes (read the authored pose from the matrix /
+  CTracks, not `GetRel*`); Align-to-Spline leaves an object's BANK free.
 
 ## Dev loop (re-stated)
+- `powershell -ExecutionPolicy Bypass -File scripts\dev-loop.ps1` from repo
+  ROOT — kills C4D, deploys `src/`, relaunches with `dev-test.c4d`. Python rig
+  changes need NO build step. (C++ timeline changes would need a cmake build
+  first, but none of this session touched C++.)
+- Verify in the live app before committing. Commit/push only when asked.
 
-- `powershell -ExecutionPolicy Bypass -File scripts\dev-loop.ps1` from
-  the repo ROOT — kills C4D, deploys, relaunches with `dev-test.c4d`.
-- **Python rig** changes (`src/`) ship via that deploy — **no build
-  step.** The chase work is Python-only, so the loop is fast: edit
-  `sb_rig_follow.py` / `sb_rig_tag.py` → dev-loop → judge feel.
-- (C++ timeline changes would need
-  `cmake --build c:/Dev/c4d_sdk_2026/build-win64 --target shotblocks
-  --config Release` first — but chase doesn't touch C++.)
-- Verify in the live app before committing.
-
-## Working tree
-
-Untracked debris safe to ignore or delete: the two `HANDOFF-*SCRUB-BUG*`
-files (that bug is long fixed), `Icons/`, and random junk scenes
-(`ertergerg34.c4d`, `sdfsdfsdfsd.c4d`, `test.c4d`). `dev-test.c4d` is now
-gitignored (autosave noise). Nothing uncommitted that matters.
-
-Good luck with the chase camera.
+## Git
+- Trunk-based on `main`; `origin` = github.com/ctrlaltdstry/shotblocks (private).
+- One commit per atomic verified change; end messages with the
+  `Co-Authored-By: Claude Opus 4.8 (1M context)` line.
+- Untracked debris safe to ignore: `Cursors/`, `Icons/`, `wizard art/`, junk
+  `scenes/*.c4d`, old `HANDOFF-*SCRUB-BUG*` files. Not ours to commit.
