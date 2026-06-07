@@ -50,12 +50,17 @@ SHOTBLOCKS_UP_TARGET            = 1021
 SHOTBLOCKS_LOOK_AT_STRENGTH     = 1022
 SHOTBLOCKS_LOOK_AT_ROLL         = 1023  # bank offset in radians (param is degrees in .res; C4D converts)
 SHOTBLOCKS_BANK_INTO_TURNS      = 1024
+# Framing Offset as plain PERCENT sliders (H, V); 0 = centred, +/-100% =
+# frame edge. Replaced the CUSTOMGUI_VECTOR2D joystick.
+SHOTBLOCKS_FRAME_OFFSET_H       = 1025
+SHOTBLOCKS_FRAME_OFFSET_V       = 1026
 SHOTBLOCKS_NOISE_ENABLED        = 1030  # bool; was a profile cycle, now just on/off (single Handheld profile)
 SHOTBLOCKS_NOISE_STRENGTH       = 1031
 SHOTBLOCKS_NOISE_SEED           = 1032
 SHOTBLOCKS_NOISE_WALKING        = 1033
 SHOTBLOCKS_NOISE_STEP_RATE      = 1034
 SHOTBLOCKS_NOISE_SPEED          = 1035
+SHOTBLOCKS_NOISE_CONTRAST       = 1036  # smooth (low) vs spiky (high), 0..1
 SHOTBLOCKS_ZOOM_ENABLED         = 1040
 SHOTBLOCKS_ZOOM_RATE            = 1041
 SHOTBLOCKS_ZOOM_STRENGTH        = 1042
@@ -63,44 +68,40 @@ SHOTBLOCKS_ZOOM_HOLD            = 1043
 SHOTBLOCKS_ZOOM_RAMP_IN         = 1044
 SHOTBLOCKS_ZOOM_RAMP_OUT        = 1045
 SHOTBLOCKS_ZOOM_RETURN          = 1046
-# Chase / Follow-Target. Chase drives the camera BODY (position only);
-# aim stays on the look-at + angular spring. The pursuit math lives in
-# sb_rig_follow (pure functions, no c4d), so the v2 Targeting "Chase"
-# pill can reuse the same engine. See .agent/plans/rig-chase-follow.md.
+# Chase = a world-anchored SPHERE around the target. The camera sits on the
+# sphere surface (Radius = distance) at the Orbit Position (a 2D joystick:
+# longitude X spins around, latitude Y goes overhead/underneath), aiming at
+# the target. Placement math lives in sb_rig_follow (pure, no c4d). See
+# .agent/plans/rig-chase-sphere.md.
 SHOTBLOCKS_FOLLOW_ENABLED       = 1050
 SHOTBLOCKS_FOLLOW_TARGET        = 1051
-SHOTBLOCKS_FOLLOW_DISTANCE      = 1052
-SHOTBLOCKS_FOLLOW_VEL_SMOOTH    = 1053
-SHOTBLOCKS_FOLLOW_REORIENT      = 1054
-SHOTBLOCKS_FOLLOW_HEIGHT_BIAS   = 1055
-SHOTBLOCKS_FOLLOW_SIDE_BIAS     = 1056
-# Aim Tracking: when Chase is on, lets the AIM (rotation) spring respond
-# faster than the body's Angular damping. 0% = aim uses Angular as-is
-# (smooth, laggy); 100% = aim snaps to keep the subject framed even when
-# the body is heavily smoothed. Decouples "smooth body" from "locked aim".
+SHOTBLOCKS_FOLLOW_DISTANCE      = 1052  # Radius: sphere size = camera distance
+# Chase Strength 0..1 (keyframeable): blends the FOLLOW from full chase (1)
+# to none (0). Implemented by lerping the spring's position TARGET from the
+# sphere spot toward the camera's current position; at 0 the target is "stay
+# put," so with damping on the spring coasts to a stop (the subject flies out
+# of frame). Aim is independent (Look-At Strength).
+SHOTBLOCKS_FOLLOW_STRENGTH      = 1053
+# 1053-1056, 1060-1064 RETIRED (velocity-relative + orbit machinery removed;
+# see tshotblocks.h). The sphere is always world-anchored; Orbit Position
+# (the joystick) replaces orbit/pitch/plane; no biases/re-orient/vel-smooth.
+# Aim Lock: lets the AIM (rotation) spring stay locked on the target even
+# when the body position is heavily damped (subject doesn't slide off-frame
+# during the swoop). Lives in the Look-At group (shared id).
 SHOTBLOCKS_FOLLOW_AIM_TRACK     = 1057
-# Aim Lead: aim AHEAD of the subject along its travel (anticipation), so a
-# fast subject doesn't ride the trailing edge of frame. LEAD_DIST is how
-# far ahead at full speed (scene units); AIM_LEAD is a 0..1 blend from
-# aiming dead-on the subject (0) to fully at the lead point (1).
+# Look-Ahead: aim AHEAD of the subject along its travel (anticipation). AIM-
+# ONLY — never affects the sphere placement. LEAD_DIST = how far ahead at
+# speed; AIM_LEAD = 0..1 blend from dead-on (0) to fully at the lead (1).
 SHOTBLOCKS_FOLLOW_LEAD_DIST     = 1058
 SHOTBLOCKS_FOLLOW_AIM_LEAD      = 1059
-# Orbit: a horizontal azimuth (degrees) that swings the camera around the
-# subject, keyframeable for a 360 sweep. Pitch (-1..+1) tilts the camera
-# from behind (0) to directly overhead (+1) or underneath (-1) — orbit
-# still spins it at any pitch short of the pole. Orbit-In-World makes the
-# azimuth reference world space (turntable) instead of the subject's
-# heading. Position-only; aim stays Look-At driven.
-SHOTBLOCKS_FOLLOW_ORBIT         = 1060
-SHOTBLOCKS_FOLLOW_PITCH         = 1061
-SHOTBLOCKS_FOLLOW_ORBIT_WORLD   = 1062
-SHOTBLOCKS_FOLLOW_ORBIT_PLANE   = 1063
-# Absolute Roll: when ABS_ROLL is on, CAM_ROLL sets the camera's bank
-# directly about its view axis (no auto horizon-level), so the framing can
-# be rolled during an orbit. HPB bank is a clean roll about the view axis at
-# any aim, including straight-down (verified) — only DERIVING bank from
-# world-up is pole-ambiguous, which is exactly what this bypasses.
-SHOTBLOCKS_FOLLOW_ABS_ROLL      = 1064
+# Orbit Position on the sphere (plain DEGREE sliders, not a joystick — the
+# VECTOR2D widget was too sensitive and its number fields weren't editable).
+# Longitude spins about world Y (0 = world -Z = behind); no clamp, so it can
+# keyframe multi-turn sweeps. Latitude tilts overhead(+90)/under(-90), clamped.
+SHOTBLOCKS_FOLLOW_LONGITUDE     = 1060
+SHOTBLOCKS_FOLLOW_LATITUDE      = 1061
+# Camera Roll: absolute bank about the view axis (deg). Auto horizon-level
+# otherwise. Always available now (the old ABS_ROLL opt-in toggle is gone).
 SHOTBLOCKS_FOLLOW_CAM_ROLL      = 1065
 SHOTBLOCKS_GRP_FRAMING          = 1103  # group host in tshotblocks.res for the UD-injected Frame Offset
 
@@ -117,17 +118,6 @@ _NOISE_FALLBACK_DISTANCE = 1000.0
 # Tunable — increase to make banking subtler, decrease to make it
 # more aggressive.
 _BANK_FULL_YAW_RATE = 0.1
-
-# Frame Offset is NOT a .res-defined parameter — C4D's resource-file
-# compiler doesn't recognise CUSTOMGUI_VECTOR2D as a keyword (the
-# constant exists in Python but isn't accepted in .res syntax, and
-# we verified that adding it empties the AM). Instead we add it as
-# a UserData slot on the tag at tag-apply time, configured with
-# DESC_CUSTOMGUI = CUSTOMGUI_VECTOR2D — the exact widget the User
-# Data dialog labels "2D Vector Field." The slot's DescID's index
-# is stored in the tag's BaseContainer so we can find it back
-# deterministically across reloads.
-_BCKEY_FRAME_OFFSET_UD_IDX = 1010003
 
 
 # Per-tag mutable runtime state lives ON THE NodeData INSTANCE (self),
@@ -177,7 +167,7 @@ def _new_state():
         "zoom_focal_baseline": None,
         "follow": sb_rig_follow.make_state(),
         "follow_lead_world": None,   # world aim-lead point, set per-frame
-        "follow_orbit": None,        # post-spring orbit re-place data, per-frame
+        "follow_eased_radius": None, # eased Radius value, for smooth zoom
         "seed": seed,
     }
 
@@ -225,131 +215,31 @@ def _read_damping(tag, st, key, override_key):
     return float(tag[key])
 
 
-def _frame_offset_descid(tag):
-    """Return the DescID of the tag's Frame Offset UserData slot,
-    or None if it hasn't been added yet. The slot's index is stored
-    in the tag's BaseContainer at tag-apply time."""
-    try:
-        bc = tag.GetDataInstance()
-        if bc is None:
-            return None
-        idx = bc.GetInt32(_BCKEY_FRAME_OFFSET_UD_IDX)
-        if idx <= 0:
-            return None
-        return c4d.DescID(
-            c4d.DescLevel(c4d.ID_USERDATA, c4d.DTYPE_SUBCONTAINER, 0),
-            c4d.DescLevel(idx, c4d.DTYPE_VECTOR, 0),
-        )
-    except Exception:
-        return None
-
-
-def _frame_offset_parent_group_descid():
-    """The DescID of the Framing group host we declared in
-    tshotblocks.res. Reparenting the UD slot into this group keeps
-    the joystick inside the main tag interface (instead of in a
-    separate User Data tab)."""
-    # GROUP IDs from a .res live as single-level DescIDs.
-    return c4d.DescID(c4d.DescLevel(SHOTBLOCKS_GRP_FRAMING, c4d.DTYPE_GROUP, 0))
-
-
-def _frame_offset_ud_container():
-    """Build the UserData descriptor BC for the Frame Offset slot.
-    Shared by add-new and refresh-existing paths so they can't drift."""
-    bc = c4d.GetCustomDataTypeDefault(c4d.DTYPE_VECTOR)
-    bc[c4d.DESC_NAME]       = "Frame Offset"
-    bc[c4d.DESC_SHORT_NAME] = "Frame Offset"
-    bc[c4d.DESC_CUSTOMGUI]  = c4d.CUSTOMGUI_VECTOR2D
-    bc[c4d.DESC_ANIMATE]    = c4d.DESC_ANIMATE_ON
-    bc[c4d.DESC_DEFAULT]    = c4d.Vector(0.0, 0.0, 0.0)
-    # Reparent under our Framing group (declared in tshotblocks.res
-    # as an empty group host) so the joystick renders inside the
-    # main tag interface, not in a separate "User Data" tab.
-    bc[c4d.DESC_PARENTGROUP] = _frame_offset_parent_group_descid()
-    # Values are screen-space fractions (0.167 = a rule-of-thirds
-    # line, 0.5 = the edge of the frame). Display as percent and
-    # step in small increments — without these, the joystick
-    # treats each pixel of drag as ~millions of units.
-    bc[c4d.DESC_UNIT]       = c4d.DESC_UNIT_PERCENT
-    bc[c4d.DESC_STEP]       = 0.001
-    # Hard clamp at ±300% = up to three viewports off either edge. The
-    # extra range past ±100% (target at frame edge) lets the user
-    # keyframe a pan that brings the target from well off-screen to
-    # on-screen — animate the offset and the aim swings the subject into
-    # frame. The joystick drag-area maps to MIN..MAX, so the everyday
-    # ±100% framing range occupies the center third of the pad (coarser
-    # drag is the accepted trade for the pan capability); type or
-    # keyframe values for the extreme end. Hard clamp (not MINSLIDER/
-    # MAXSLIDER soft) because the soft-only path produced a half-working
-    # widget in C4D 2026 — empty dragbox, no scrub.
-    bc[c4d.DESC_MIN]        = c4d.Vector(-3.0, -3.0, 0.0)
-    bc[c4d.DESC_MAX]        = c4d.Vector( 3.0,  3.0, 0.0)
-    return bc
-
-
-def _ensure_frame_offset_userdata(tag):
-    """Add the Frame Offset UserData slot to `tag` if missing, or
-    refresh its descriptor (unit, step, custom GUI) if it already
-    exists. The refresh path lets us roll out sensitivity / display
-    changes to tags created by earlier plugin versions without
-    forcing the user to delete and re-add the tag.
-
-    Stashes the slot's index in the tag's BaseContainer so reads can
-    rebuild the DescID deterministically.
-    """
-    if tag is None:
-        return
-    try:
-        desc_id = _frame_offset_descid(tag)
-        bc = _frame_offset_ud_container()
-        if desc_id is not None:
-            # Refresh the existing slot's descriptor (preserves the
-            # stored value). SetUserDataContainer is the per-slot
-            # update; it does not move the slot or change its index.
-            try:
-                tag.SetUserDataContainer(desc_id, bc)
-            except Exception as e:
-                print("[Shotblocks] Failed to refresh Frame Offset UD: {}".format(e))
-            return
-        desc_id = tag.AddUserData(bc)
-        if desc_id is None:
-            print("[Shotblocks] AddUserData returned None for Frame Offset")
-            return
-        # Persist the slot's index so future reads can rebuild the
-        # DescID. UserData DescIDs are 2-level; the second level's
-        # id is the per-tag slot index.
-        idx = desc_id[1].id
-        tag_bc = tag.GetDataInstance()
-        if tag_bc is not None:
-            tag_bc.SetInt32(_BCKEY_FRAME_OFFSET_UD_IDX, idx)
-        tag[desc_id] = c4d.Vector(0.0, 0.0, 0.0)
-    except Exception as e:
-        print("[Shotblocks] Failed to add Frame Offset UserData: {}".format(e))
-
-
 def _read_frame_offset(tag):
-    """Return (offset_u, offset_v) from the tag's Frame Offset
-    UserData slot. Falls back to (0, 0) if the slot isn't present
-    (e.g. tag loaded from an older save before user-data was added).
+    """Return (offset_u, offset_v) — where the subject sits in frame — from
+    the Frame Offset H / V PERCENT sliders (0 = centred; +/-1.0 = frame edge).
+    H + => subject sits right; V + => subject sits up. (These replaced the
+    CUSTOMGUI_VECTOR2D joystick — too sensitive, fields not editable.)"""
+    u = float(tag[SHOTBLOCKS_FRAME_OFFSET_H] or 0.0)
+    v = float(tag[SHOTBLOCKS_FRAME_OFFSET_V] or 0.0)
+    return u, v
 
-    The joystick convention is "drag the dot to where you want the
-    *subject* to appear in the frame." The vertical axis is inverted
-    from the raw slot value to match that intent; the horizontal axis
-    is NOT — passing v.x straight through is what makes "drag right ->
-    subject sits right." (Previously both axes were negated, which
-    compounded with the subtraction in _apply_frame_offset to flip the
-    horizontal feel: dragging the dot right pushed the subject left.)
+
+def _read_orbit_pos(tag):
+    """Return (lon_rad, lat_rad) — the camera's spot on the chase sphere,
+    from the Longitude / Latitude DEGREE params (C4D returns them in radians).
+    Longitude is free (multi-turn keyframing); latitude is clamped to the
+    poles (+/-90 deg) so it can't flip over. (0, 0) = behind (world -Z) + level.
     """
-    desc_id = _frame_offset_descid(tag)
-    if desc_id is None:
-        return 0.0, 0.0
-    try:
-        v = tag[desc_id]
-    except Exception:
-        return 0.0, 0.0
-    if v is None:
-        return 0.0, 0.0
-    return float(v.x), -float(v.y)
+    from math import pi
+    lon = float(tag[SHOTBLOCKS_FOLLOW_LONGITUDE] or 0.0)
+    lat = float(tag[SHOTBLOCKS_FOLLOW_LATITUDE]  or 0.0)
+    half = pi * 0.5
+    if lat > half:
+        lat = half
+    elif lat < -half:
+        lat = -half
+    return lon, lat
 
 
 def _cam_has_pos_rot_tracks(cam):
@@ -483,6 +373,7 @@ class ShotblocksTag(c4d.plugins.TagData):
         node[SHOTBLOCKS_NOISE_WALKING]      = False
         node[SHOTBLOCKS_NOISE_STEP_RATE]    = 1.8
         node[SHOTBLOCKS_NOISE_SPEED]        = 1.0
+        node[SHOTBLOCKS_NOISE_CONTRAST]     = 0.5   # midway: established feel
         node[SHOTBLOCKS_ZOOM_ENABLED]       = False
         node[SHOTBLOCKS_ZOOM_RATE]          = 0.2
         node[SHOTBLOCKS_ZOOM_STRENGTH]      = 1.5
@@ -491,27 +382,18 @@ class ShotblocksTag(c4d.plugins.TagData):
         node[SHOTBLOCKS_ZOOM_RAMP_OUT]      = 0.6
         node[SHOTBLOCKS_ZOOM_RETURN]        = 0.7
         node[SHOTBLOCKS_FOLLOW_ENABLED]     = False
-        node[SHOTBLOCKS_FOLLOW_DISTANCE]    = 300.0
-        node[SHOTBLOCKS_FOLLOW_VEL_SMOOTH]  = 0.5
-        node[SHOTBLOCKS_FOLLOW_REORIENT]    = 0.5
-        node[SHOTBLOCKS_FOLLOW_HEIGHT_BIAS] = 50.0
-        node[SHOTBLOCKS_FOLLOW_SIDE_BIAS]   = 0.0
-        node[SHOTBLOCKS_FOLLOW_AIM_TRACK]   = 0.7   # aim tracks tighter than body by default
-        node[SHOTBLOCKS_FOLLOW_LEAD_DIST]   = 0.0   # lead off until dialed in
+        node[SHOTBLOCKS_FOLLOW_DISTANCE]    = 300.0  # Radius
+        node[SHOTBLOCKS_FOLLOW_STRENGTH]    = 1.0     # full chase by default
+        node[SHOTBLOCKS_FOLLOW_AIM_TRACK]   = 0.7    # aim tracks tighter than body by default
+        node[SHOTBLOCKS_FOLLOW_LEAD_DIST]   = 0.0    # look-ahead off until dialed in
         node[SHOTBLOCKS_FOLLOW_AIM_LEAD]    = 0.0
-        node[SHOTBLOCKS_FOLLOW_ORBIT]       = 0.0   # 0 = dead behind
-        node[SHOTBLOCKS_FOLLOW_PITCH]       = 0.0   # 0 = behind, +1 = overhead, -1 = underneath
-        node[SHOTBLOCKS_FOLLOW_ORBIT_WORLD] = False # orbit follows heading by default
-        node[SHOTBLOCKS_FOLLOW_ORBIT_PLANE] = 0.0   # 0 = front-back circle, 90 = side circle
-        node[SHOTBLOCKS_FOLLOW_ABS_ROLL]    = False # auto horizon-level by default
-        node[SHOTBLOCKS_FOLLOW_CAM_ROLL]    = 0.0   # absolute roll angle (when ABS_ROLL on)
-        # Follow Target starts unset (BaseLink defaults to None).
-        # Target and Up Target start unset (BaseLinks default to None).
-        # Frame Offset is a UserData slot — added in _on_tag_applied
-        # (Init is called for fresh tags before they're attached to
-        # an object, and AddUserData is safer once the tag is on a
-        # node). _ensure_frame_offset_userdata is also called
-        # defensively in Execute so old/loaded tags get fixed up.
+        node[SHOTBLOCKS_FOLLOW_LONGITUDE]   = 0.0    # 0 = behind (world -Z)
+        node[SHOTBLOCKS_FOLLOW_LATITUDE]    = 0.0    # 0 = equator (level)
+        node[SHOTBLOCKS_FOLLOW_CAM_ROLL]    = 0.0    # absolute roll angle (deg)
+        node[SHOTBLOCKS_FRAME_OFFSET_H]     = 0.0    # 0 = subject centred
+        node[SHOTBLOCKS_FRAME_OFFSET_V]     = 0.0
+        # Follow Target, Look-At Target, Up Target start unset (BaseLinks
+        # default to None).
         return True
 
     def Message(self, node, type, data):
@@ -533,11 +415,10 @@ class ShotblocksTag(c4d.plugins.TagData):
     # ------------------------------------------------------------------
 
     def _on_tag_applied(self, tag):
-        cam = tag.GetObject()
-        if cam is None:
-            return
-        # Add the Frame Offset UserData slot (2D Vector Field).
-        _ensure_frame_offset_userdata(tag)
+        # Framing Offset and Orbit Position are now plain .res sliders, so
+        # there's no UserData to inject on tag-apply. Hook kept for any
+        # future apply-time setup.
+        return
 
     # ------------------------------------------------------------------
     # Per-frame execution
@@ -565,12 +446,6 @@ class ShotblocksTag(c4d.plugins.TagData):
         cam = tag.GetObject()
         if cam is None:
             return c4d.EXECUTIONRESULT_OK
-
-        # Backstop: tag-apply is supposed to add the Frame Offset
-        # UserData slot, but a tag loaded from a scene saved before
-        # the UD slot existed will be missing it. Add it on first
-        # Execute (no-op if already present).
-        _ensure_frame_offset_userdata(tag)
 
         st = self._state()
 
@@ -648,11 +523,25 @@ class ShotblocksTag(c4d.plugins.TagData):
             chase_last = st["follow"].get("last_frame")
             chase_reset = chase_active and (chase_last is None
                                             or cur_frame < chase_last)
+            # Bank-Into-Turns is a TIME-based effect (yaw RATE). When the
+            # frame hasn't advanced — Execute re-firing at a static frame
+            # while the user scrubs a slider (e.g. orbit Longitude) — there's
+            # no real yaw rate, so suppress BiT's delta. Otherwise scrubbing
+            # Longitude swings the heading and BiT banks wildly (the reported
+            # jump). Only measure yaw when the playhead actually moves forward.
+            bit_last = st.get("bit_last_frame")
+            frame_advanced = (bit_last is None or cur_frame != bit_last)
             tp, tr, heading, npost_pos, npost_rot = _compute_target_pose(
                 tag, st, cam, doc, time, fps, dt, cur_frame,
                 look_at_target, up_target,
-                is_reset=chase_reset, bank_into_turns=bank_into_turns)
-            st["prev_heading"] = heading
+                is_reset=chase_reset, bank_into_turns=bank_into_turns,
+                bit_suppress_yaw=not frame_advanced)
+            # Only record the heading as the yaw baseline when the frame
+            # advanced, so a static-frame scrub doesn't move the baseline
+            # (which would make the NEXT real frame measure a giant delta).
+            if frame_advanced:
+                st["prev_heading"] = heading
+                st["bit_last_frame"] = cur_frame
             final_pos = (tp[0] + npost_pos[0], tp[1] + npost_pos[1],
                          tp[2] + npost_pos[2])
             final_rot = (tr[0] + npost_rot[0], tr[1] + npost_rot[1],
@@ -729,7 +618,8 @@ class ShotblocksTag(c4d.plugins.TagData):
                 # No-target Frame Offset is folded into the spring TARGET,
                 # so it only lands when the full step runs (scrub/play).
                 # While PARKED only this replay path runs, so dragging the
-                # joystick on a static frame wouldn't move the camera. Apply
+                # Frame Offset slider on a static frame wouldn't move the
+                # camera. Apply
                 # the DELTA between the live offset and the one already baked
                 # into cached_rot (last_fo_applied) — a live nudge with no
                 # double-count and without re-stepping the spring (which
@@ -924,8 +814,8 @@ class ShotblocksTag(c4d.plugins.TagData):
                     _warn_frame_offset_failed(e)
             # Record the offset folded into this full-step output. The
             # parked replay path uses it as the baseline so dragging the
-            # joystick while parked nudges the camera by the DELTA (no
-            # double-count, no spring re-step). See the replay branch.
+            # Frame Offset slider while parked nudges the camera by the DELTA
+            # (no double-count, no spring re-step). See the replay branch.
             st["last_fo_applied"] = (ou, ov)
 
         # Roll + Bank-Into-Turns are a post-step on whatever
@@ -966,6 +856,12 @@ class ShotblocksTag(c4d.plugins.TagData):
                                k_pos, c_pos, threshold_fps)
         spring["pos"] = [(nx, ny, nz), (nvx, nvy, nvz)]
 
+        # Chase radius-lock: re-project the spring output onto the sphere so
+        # the camera's DISTANCE stays at (eased) Radius — the spring's follow-
+        # lag otherwise trails further out, making Radius behave differently
+        # with damping on. Keeps the smoothed DIRECTION (the tangential swoop).
+        nx, ny, nz = _lock_chase_radius(tag, st, cam, (nx, ny, nz), dt)
+
         # Unwrap rotation target so each HPB component is the
         # shortest-path delta from the spring's current value.
         # Without this, the spring chases a wraparound (e.g. -π to
@@ -990,32 +886,9 @@ class ShotblocksTag(c4d.plugins.TagData):
 
         spring["last_frame"] = cur_frame
 
-        # Orbit/pitch bypass position damping: the spring smoothed the
-        # UN-orbited follow anchor, so re-apply the exact orbit/pitch to the
-        # smoothed position now (post-spring). place_around_subject keeps the
-        # smoothed follow DISTANCE but sets the exact orbit ANGLE, so a
-        # keyframed orbit stays crisp and the subject stays framed under
-        # damping. Works in WORLD space (subject/dirs are world); the spring
-        # output is local, so convert local->world, re-place, convert back.
-        orb = st.get("follow_orbit")
-        if orb is not None:
-            parent = cam.GetUp()
-            try:
-                pm = parent.GetMg() if parent is not None else None
-                local_v = c4d.Vector(nx, ny, nz)
-                world_v = (pm * local_v) if pm is not None else local_v
-                placed = sb_rig_follow.place_around_subject(
-                    (world_v.x, world_v.y, world_v.z),
-                    orb["subject"], orb["anchor_dir"],
-                    orb["place_dir"], orb["side_bias"])
-                placed_v = c4d.Vector(placed[0], placed[1], placed[2])
-                if pm is not None:
-                    placed_v = ~pm * placed_v
-                nx, ny, nz = placed_v.x, placed_v.y, placed_v.z
-            except Exception as e:
-                if not getattr(ShotblocksTag, "_orbit_warned", False):
-                    ShotblocksTag._orbit_warned = True
-                    print("[Shotblocks] orbit re-place failed: {}".format(e))
+        # (The old orbit-bypass-damping re-place step is gone: the sphere
+        # model feeds the spring the final sphere-spot directly, so the spring
+        # just chases it — no post-spring orbit re-application needed.)
 
         # Post-spring noise: tremor (high-freq) added after the
         # spring so the spring's low-pass doesn't eat it. The
@@ -1036,7 +909,7 @@ class ShotblocksTag(c4d.plugins.TagData):
 
 def _compute_target_pose(tag, st, cam, doc, time, fps, dt, cur_frame,
                          look_at_target, up_target, is_reset,
-                         bank_into_turns):
+                         bank_into_turns, bit_suppress_yaw=False):
     """Compute the camera's target pose for this frame — everything the
     spring would chase, plus the post-spring noise to add afterward.
 
@@ -1069,7 +942,8 @@ def _compute_target_pose(tag, st, cam, doc, time, fps, dt, cur_frame,
         la_hpb = _compute_look_at_local_rot(
             cam, look_at_target, up_target,
             offset_u=ou, offset_v=ov, doc=doc,
-            aim_point_world=aim_pt)
+            aim_point_world=aim_pt,
+            aim_origin_local=chase_pos)  # aim from the chase spot, not stale pos
         if la_hpb is not None:
             s = max(0.0, min(1.0, float(tag[SHOTBLOCKS_LOOK_AT_STRENGTH])))
             if s >= 1.0:
@@ -1089,9 +963,14 @@ def _compute_target_pose(tag, st, cam, doc, time, fps, dt, cur_frame,
                 _warn_frame_offset_failed(e)
 
     roll = float(tag[SHOTBLOCKS_LOOK_AT_ROLL] or 0.0)
+    # Suppress the BiT yaw delta on a static-frame scrub (prev_heading=None
+    # is the same "no yaw this step" signal the reset path uses), so dragging
+    # the orbit Longitude slider doesn't register as a turn.
+    bit_prev_heading = (None if (is_reset or bit_suppress_yaw)
+                        else st.get("prev_heading"))
     target_rot, heading = _apply_roll_and_bank_into_turns(
         target_rot,
-        prev_heading=None if is_reset else st.get("prev_heading"),
+        prev_heading=bit_prev_heading,
         roll_rad=roll,
         bank_into_turns=False if is_reset else bank_into_turns,
         has_explicit_source=has_explicit_bank_source,
@@ -1187,35 +1066,93 @@ def _read_keyframed_target(cam, doc, time, fps):
 
 def _chase_abs_roll(tag):
     """Absolute camera roll (radians) for the chase, or None when not active.
-    Active only when Chase is on, a follow target is set, and the Absolute
-    Roll toggle is on — so normal behind-chase keeps its auto horizon-level
-    until the user opts in. CAM_ROLL is a DEGREE param (returned in radians)."""
+    Active when Chase is on, a target is set, and Camera Roll is non-zero
+    (it's always available now — the old opt-in ABS_ROLL toggle is gone).
+    CAM_ROLL is a DEGREE param (C4D returns it in radians)."""
     if not bool(tag[SHOTBLOCKS_FOLLOW_ENABLED]):
         return None
     if tag[SHOTBLOCKS_FOLLOW_TARGET] is None:
         return None
-    if not bool(tag[SHOTBLOCKS_FOLLOW_ABS_ROLL]):
-        return None
-    return float(tag[SHOTBLOCKS_FOLLOW_CAM_ROLL] or 0.0)
+    roll = float(tag[SHOTBLOCKS_FOLLOW_CAM_ROLL] or 0.0)
+    return roll if roll != 0.0 else None
+
+
+def _lock_chase_radius(tag, st, cam, local_pos, dt):
+    """Re-project a spring-smoothed LOCAL camera position onto the chase
+    sphere: keep its smoothed DIRECTION from the target (so it still swoops/
+    lags tangentially — the weight), but force its DISTANCE to the (eased)
+    Radius. Without this, the position spring's follow-lag makes the camera
+    trail FURTHER than Radius (you can't get close with damping on); locking
+    the distance makes Radius behave the same damping on/off.
+
+    Radius itself is eased toward the param so keyframing a zoom in/out stays
+    smooth (locking the distance would otherwise snap it).
+
+    `local_pos` is the spring output (3-tuple, parent-local). Returns a new
+    local 3-tuple, or `local_pos` unchanged when chase is off/unavailable.
+    """
+    if not bool(tag[SHOTBLOCKS_FOLLOW_ENABLED]):
+        return local_pos
+    follow_obj = tag[SHOTBLOCKS_FOLLOW_TARGET]
+    if follow_obj is None or cam is None:
+        return local_pos
+    # Strength < 1 means we're deliberately NOT fully on the sphere (coasting
+    # away), so don't force the radius — let it drift out.
+    if float(tag[SHOTBLOCKS_FOLLOW_STRENGTH]) < 1.0:
+        return local_pos
+    try:
+        tgt_w = follow_obj.GetMg().off
+        parent = cam.GetUp()
+        pm = parent.GetMg() if parent is not None else None
+        # spring output local -> world
+        lv = c4d.Vector(local_pos[0], local_pos[1], local_pos[2])
+        wv = (pm * lv) if pm is not None else lv
+        radial = wv - tgt_w
+        dist = radial.GetLength()
+        if dist < 1e-6:
+            return local_pos
+        # Ease the Radius value so a keyframed zoom doesn't snap.
+        target_r = float(tag[SHOTBLOCKS_FOLLOW_DISTANCE] or 0.0)
+        eased = st.get("follow_eased_radius")
+        if eased is None:
+            eased = target_r
+        else:
+            # critically-ish damped follow on the scalar radius; ~6 frame
+            # settle at 24fps. Frame-rate-normalized.
+            from math import exp
+            a = 1.0 - exp(-dt * 8.0)
+            eased = eased + (target_r - eased) * a
+        st["follow_eased_radius"] = eased
+        placed_w = tgt_w + radial * (eased / dist)
+        # world -> local
+        if pm is not None:
+            placed_l = ~pm * placed_w
+        else:
+            placed_l = placed_w
+        return (placed_l.x, placed_l.y, placed_l.z)
+    except Exception as e:
+        if not getattr(ShotblocksTag, "_radius_lock_warned", False):
+            ShotblocksTag._radius_lock_warned = True
+            print("[Shotblocks] chase radius-lock failed: {}".format(e))
+        return local_pos
 
 
 def _chase_local_target_pos(tag, st, doc, time, fps, dt, is_reset):
     """If Chase is enabled and a Follow Target is set, return the camera's
-    desired LOCAL position (parent-relative 3-tuple) for this frame —
-    the position the existing position spring should chase. Returns None
-    when Chase is off or unset, so the caller falls back to the camera's
-    own keyframed position.
+    desired LOCAL position (parent-relative 3-tuple) — the spot on the
+    world-anchored sphere around the target that the position spring should
+    chase. Returns None when Chase is off / unset (caller falls back to the
+    camera's own keyframed position).
 
-    The chase math (sb_rig_follow) runs in WORLD space: it reads the
-    follow target's world position, low-passes its velocity, and places
-    the camera behind the target's heading. We then convert the single
-    resulting world point to the camera's parent-local frame — the same
-    frame the spring and _write_back use (so they compose cleanly).
+    The sphere model (sb_rig_follow.camera_position) is pure spherical
+    coordinates: camera = target_world + radius * sphere_dir(lon, lat), with
+    the sphere anchored to WORLD axes. No velocity, no heading, no orbit-on-
+    top — so nothing competes with the radius/placement. The position spring
+    chases this single world point, giving the swoop (lag/overshoot) when
+    damping is on. Look-Ahead is computed separately for AIM only.
 
-    `is_reset` is True on a boundary / scrub reset; we clear the chase
-    smoothing first so the seed equals the freshly computed desired spot
-    (mirroring the spring's reset_to_target), and so the heading low-pass
-    doesn't carry stale velocity across the cut.
+    `is_reset` clears the Look-Ahead velocity smoothing so it doesn't carry
+    stale velocity across a cut.
     """
     if not bool(tag[SHOTBLOCKS_FOLLOW_ENABLED]):
         return None
@@ -1230,61 +1167,46 @@ def _chase_local_target_pos(tag, st, doc, time, fps, dt, is_reset):
     follow_state = st["follow"]
     if is_reset:
         sb_rig_follow.reset_state(follow_state)
+        st["follow_eased_radius"] = None   # snap Radius clean across a cut
 
-    # Follow target's world position this frame.
     try:
         tgt_w = follow_obj.GetMg().off
     except Exception:
         return None
     target_world = (tgt_w.x, tgt_w.y, tgt_w.z)
 
+    radius = float(tag[SHOTBLOCKS_FOLLOW_DISTANCE] or 0.0)
+    lon, lat = _read_orbit_pos(tag)
+    cam_world = sb_rig_follow.camera_position(target_world, radius, lon, lat)
+
+    # Chase Strength: blend the desired spot from the sphere position (1.0)
+    # toward the camera's CURRENT world position (0.0). At <1 the spring is
+    # told to chase a point part-way (or, at 0, "stay where you are"), so with
+    # damping ON it coasts to a stop and the subject flies out of frame —
+    # keyframe Strength 100->0 to "let it go". Aim is untouched (Look-At
+    # Strength fades that separately). At exactly 1.0 this is a no-op.
+    strength = float(tag[SHOTBLOCKS_FOLLOW_STRENGTH])
+    if strength < 1.0:
+        s = max(0.0, min(1.0, strength))
+        try:
+            cur_w = cam.GetMg().off
+            cam_world = (cur_w.x + (cam_world[0] - cur_w.x) * s,
+                         cur_w.y + (cam_world[1] - cur_w.y) * s,
+                         cur_w.z + (cam_world[2] - cur_w.z) * s)
+        except Exception:
+            pass
+
+    # Look-Ahead aim point (AIM-ONLY; never affects cam_world). Updates the
+    # velocity-smoothing state too. Stash for the look-at aim-blend path;
+    # None when lead is off so the aim goes dead-on the subject.
     lead_dist = float(tag[SHOTBLOCKS_FOLLOW_LEAD_DIST] or 0.0)
-    result = sb_rig_follow.desired_position(
-        follow_state, target_world, dt,
-        follow_distance=float(tag[SHOTBLOCKS_FOLLOW_DISTANCE]   or 0.0),
-        velocity_smoothing=float(tag[SHOTBLOCKS_FOLLOW_VEL_SMOOTH] or 0.0),
-        reorient_speed=float(tag[SHOTBLOCKS_FOLLOW_REORIENT]    or 0.0),
-        height_bias=float(tag[SHOTBLOCKS_FOLLOW_HEIGHT_BIAS]    or 0.0),
-        side_bias=float(tag[SHOTBLOCKS_FOLLOW_SIDE_BIAS]        or 0.0),
-        lead_distance=lead_dist,
-        # SHOTBLOCKS_FOLLOW_ORBIT is a DEGREE param — C4D stores/returns it
-        # in RADIANS, so pass it straight through (no deg->rad conversion,
-        # which previously double-converted and made a 360 keyframe read as
-        # ~6 degrees of orbit). PITCH is a -1..+1 fraction (PERCENT param).
-        orbit_rad=float(tag[SHOTBLOCKS_FOLLOW_ORBIT]           or 0.0),
-        pitch=float(tag[SHOTBLOCKS_FOLLOW_PITCH]               or 0.0),
-        orbit_world=bool(tag[SHOTBLOCKS_FOLLOW_ORBIT_WORLD]),
-        orbit_plane_rad=float(tag[SHOTBLOCKS_FOLLOW_ORBIT_PLANE] or 0.0),
-    )
-    # Stash the world-space aim-lead point so the look-at path can blend
-    # the aim toward it (anticipation). Cleared to None when lead is off
-    # so the look-at path knows to aim dead-on the subject.
-    st["follow_lead_world"] = result["lead"] if lead_dist != 0.0 else None
+    lead = sb_rig_follow.lead_point(follow_state, target_world, dt, lead_dist)
+    st["follow_lead_world"] = lead if lead_dist != 0.0 else None
     follow_state["last_frame"] = time.GetFrame(fps)
 
-    # Orbit/pitch must bypass position damping so a keyframed orbit stays
-    # crisp and keeps the subject framed (the spring would otherwise lag the
-    # fast-moving orbited spot). We therefore spring-smooth the UN-orbited
-    # `anchor` and re-apply the exact orbit/pitch AFTER the spring. Stash the
-    # world-space data the post-spring step needs; the damping-OFF path has no
-    # spring so it uses the fully-placed `camera` directly (no stale orbit).
-    has_orbit = (float(tag[SHOTBLOCKS_FOLLOW_ORBIT] or 0.0) != 0.0
-                 or float(tag[SHOTBLOCKS_FOLLOW_PITCH] or 0.0) != 0.0
-                 or float(tag[SHOTBLOCKS_FOLLOW_ORBIT_PLANE] or 0.0) != 0.0)
-    st["follow_orbit"] = {
-        "subject": result["subject"],
-        "anchor_dir": result["anchor_dir"],
-        "place_dir": result["place_dir"],
-        "side_bias": result["side_bias"],
-    } if has_orbit else None
-
-    # Damping-ON springs the anchor; damping-OFF uses the placed camera.
-    damping_on = bool(tag[SHOTBLOCKS_DAMPING_ENABLED])
-    src_world = result["anchor"] if (damping_on and has_orbit) else result["camera"]
-
-    # Convert the chosen world point to the camera's parent-local frame,
-    # matching _read_keyframed_target's local convention.
-    desired_v = c4d.Vector(src_world[0], src_world[1], src_world[2])
+    # Convert the world sphere-spot to the camera's parent-local frame
+    # (matching _read_keyframed_target's convention) so the spring composes.
+    desired_v = c4d.Vector(cam_world[0], cam_world[1], cam_world[2])
     parent = cam.GetUp()
     if parent is not None:
         try:
@@ -1347,7 +1269,7 @@ def _matrix_to_hpb_safe(mg):
 
 def _compute_look_at_local_rot(cam, target_obj, up_obj,
                                offset_u=0.0, offset_v=0.0, doc=None,
-                               aim_point_world=None):
+                               aim_point_world=None, aim_origin_local=None):
     """Compute the local (relative-to-parent) HPB rotation that aims
     the camera's -Z axis at `target_obj`, optionally framing the
     target at a screen-space offset.
@@ -1416,7 +1338,15 @@ def _compute_look_at_local_rot(cam, target_obj, up_obj,
         aim_off = target_obj.GetMg().off
     try:
         inv_parent_frozen = ~parent_frozen
-        local_dir = inv_parent_frozen * aim_off - cam.GetRelPos()
+        # Aim origin: where the camera WILL be this frame. When Chase drives
+        # the position, that's the new sphere spot (aim_origin_local), NOT
+        # cam.GetRelPos() (the stale pre-write position) — otherwise the aim
+        # is solved from where the camera WAS, so a moving chase position
+        # leaves the target off-centre / jumping as the sphere is scrubbed.
+        origin = (c4d.Vector(aim_origin_local[0], aim_origin_local[1],
+                             aim_origin_local[2])
+                  if aim_origin_local is not None else cam.GetRelPos())
+        local_dir = inv_parent_frozen * aim_off - origin
     except Exception:
         # Defensive: very rare edge case where parent matrix isn't
         # invertible. Fall back to world-only aim.
@@ -1882,9 +1812,14 @@ def _sample_noise_world(tag, st, cur_frame, fps, cam, look_at_target, doc):
     walking = bool(tag[SHOTBLOCKS_NOISE_WALKING])
     step_rate = float(tag[SHOTBLOCKS_NOISE_STEP_RATE] or 1.8)
     speed = float(tag[SHOTBLOCKS_NOISE_SPEED] or 1.0)
+    # Contrast (0..1) -> fBm gain_scale (0.5..1.6): smooth/even drift at 0,
+    # spiky/punchy bursts at 1. Default mid keeps the established handheld feel.
+    contrast = max(0.0, min(1.0, float(tag[SHOTBLOCKS_NOISE_CONTRAST] or 0.0)))
+    gain_scale = 0.5 + contrast * 1.1
     sample = sb_rig_noise.sample_profile(
         sb_rig_noise.PROFILE_HANDHELD, cur_frame, fps, seed,
-        walking=walking, step_rate_hz=step_rate, speed=speed)
+        walking=walking, step_rate_hz=step_rate, speed=speed,
+        gain_scale=gain_scale)
 
     # Convert position-fraction → world units.
     distance = _noise_reference_distance(cam, look_at_target)
