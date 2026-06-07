@@ -47,5 +47,5 @@ scenes/ES_*.mp3
 # presets/**/*.gif
 # presets/**/*.png
 
-# Local scratch (geometry sanity checks, etc.)
-src/_orbit_test.py
+# Local scratch (geometry sanity checks, probes, etc.) — any src/_*.py
+src/_*.py
