@@ -23,14 +23,16 @@ if _HERE not in sys.path:
     sys.path.insert(0, _HERE)
 
 from sb_rig_tag import ShotblocksTag
+from sb_motion_tag import ShotblocksMotionTag
 
 
-# Tag plugin id (testing range).
-PLUGIN_ID_TAG = 1000001
+# Tag plugin ids (testing range).
+PLUGIN_ID_TAG = 1000001         # camera rig tag
+PLUGIN_ID_MOTION_TAG = 1000002  # object motion tag
 
 
-def _load_icon():
-    icon_path = os.path.join(_HERE, "res", "icons", "sb_camera_tag.png")
+def _load_icon(filename):
+    icon_path = os.path.join(_HERE, "res", "icons", filename)
     bmp = c4d.bitmaps.BaseBitmap()
     result, _ = bmp.InitWith(icon_path)
     if result != c4d.IMAGERESULT_OK:
@@ -39,7 +41,8 @@ def _load_icon():
 
 
 if __name__ == "__main__":
-    icon = _load_icon()
+    cam_icon = _load_icon("sb_camera_tag.png")
+    motion_icon = _load_icon("sb_motion_tag.png")
 
     c4d.plugins.RegisterTagPlugin(
         id=PLUGIN_ID_TAG,
@@ -47,7 +50,22 @@ if __name__ == "__main__":
         info=c4d.TAG_VISIBLE | c4d.TAG_EXPRESSION,
         g=ShotblocksTag,
         description="tshotblocks",
-        icon=icon,
+        icon=cam_icon,
     )
 
     print("[Shotblocks] camera rig tag loaded (id={})".format(PLUGIN_ID_TAG))
+
+    # Object motion tag — applies to ANY object (no object-type filter),
+    # smooths animated pos/rot/scale + adds handheld noise. Reuses the
+    # same rig engines. See sb_motion_tag.py and
+    # .agent/plans/motion-tag-object.md.
+    c4d.plugins.RegisterTagPlugin(
+        id=PLUGIN_ID_MOTION_TAG,
+        str="Shotblocks Motion",
+        info=c4d.TAG_VISIBLE | c4d.TAG_EXPRESSION,
+        g=ShotblocksMotionTag,
+        description="tsbsmooth",
+        icon=motion_icon,
+    )
+
+    print("[Shotblocks] object motion tag loaded (id={})".format(PLUGIN_ID_MOTION_TAG))

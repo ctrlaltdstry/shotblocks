@@ -1,0 +1,20 @@
+STRINGTABLE Tsbsmooth
+{
+    Tsbsmooth                         "Shotblocks Motion";
+    SBMOTION_ENABLED                  "Enabled";
+    SBMOTION_INERTIA_ENABLED          "Enable Weight";
+    SBMOTION_WEIGHT                   "Weight";
+    SBMOTION_DRIFT                    "Drift";
+    SBMOTION_LEAN                     "Lean";
+    SBMOTION_TURN_EASE                "Turn Ease";
+    SBMOTION_NOISE_ENABLED            "Noise";
+    SBMOTION_NOISE_STRENGTH           "Amount";
+    SBMOTION_NOISE_SPEED              "Speed";
+    SBMOTION_NOISE_CONTRAST           "Contrast";
+    SBMOTION_NOISE_SEED               "Seed";
+    SBMOTION_SUBSTEP_THRESHOLD        "Substep Threshold (fps)";
+    SBMOTION_RESET_ON_BOUNDARY        "Reset On Backward Jump";
+    SBMOTION_GRP_INERTIA             "Weight";
+    SBMOTION_GRP_NOISE                "Noise";
+    SBMOTION_GRP_ADVANCED             "Advanced";
+}
