@@ -229,7 +229,8 @@ _ZERO_SAMPLE = {
 # ---------------------------------------------------------------------------
 
 def sample_profile(profile_id, frame, fps, seed,
-                   walking=False, step_rate_hz=1.8, speed=1.0):
+                   walking=False, step_rate_hz=1.8, speed=1.0,
+                   gain_scale=1.0):
     """Sample the named noise profile at integer `frame`. Returns a
     NoiseSample dict:
 
@@ -247,6 +248,14 @@ def sample_profile(profile_id, frame, fps, seed,
     `seed` perturbs the noise everywhere so two tags using the same
     profile produce visibly different shake.
 
+    `gain_scale` (default 1.0 = unchanged) controls the CONTRAST of the
+    noise — the fBm per-octave amplitude rolloff (`gain`) is multiplied by
+    it. <1.0 lowers gain -> low-contrast: smooth, rounded, even drift with
+    the low frequencies dominating. >1.0 raises gain -> high-contrast:
+    busier, spikier, punchy bursts as the higher octaves carry more weight.
+    Clamped internally to keep fBm bounded. The camera tag leaves it at the
+    default, so its noise is byte-for-byte unchanged.
+
     When `walking=True`, a periodic walk-cycle layer is added on top
     of the aperiodic handheld noise: vertical bob and pitch nod at
     2× `step_rate_hz` (head goes up and dips forward on each
@@ -257,7 +266,8 @@ def sample_profile(profile_id, frame, fps, seed,
     can shape it into a believable bounce with weight.
     """
     if profile_id == PROFILE_HANDHELD:
-        return _sample_handheld(frame, fps, seed, walking, step_rate_hz, speed)
+        return _sample_handheld(frame, fps, seed, walking, step_rate_hz,
+                                speed, gain_scale)
     return _ZERO_SAMPLE
 
 
@@ -271,18 +281,19 @@ def zero_sample():
 # Implementation
 # ---------------------------------------------------------------------------
 
-def _sample_handheld(frame, fps, seed, walking, step_rate_hz, speed):
+def _sample_handheld(frame, fps, seed, walking, step_rate_hz, speed,
+                     gain_scale=1.0):
     # `speed` multiplies time — 0.5 = slower (lazier) noise, 2.0 =
     # faster. Applied to the fBm noise's `t` and NOT to the walk
     # cycle (the walk cycle has its own Step Rate control).
     raw_t = float(frame) / max(1.0, float(fps))
     t = raw_t * max(0.01, float(speed))
-    rh_pre, rh_post = _eval_channel(_CHAN_RH, t, seed)
-    rp_pre, rp_post = _eval_channel(_CHAN_RP, t, seed)
-    rb_pre, rb_post = _eval_channel(_CHAN_RB, t, seed)
-    px_pre, px_post = _eval_channel(_CHAN_PX, t, seed)
-    py_pre, py_post = _eval_channel(_CHAN_PY, t, seed)
-    pz_pre, pz_post = _eval_channel(_CHAN_PZ, t, seed)
+    rh_pre, rh_post = _eval_channel(_CHAN_RH, t, seed, gain_scale)
+    rp_pre, rp_post = _eval_channel(_CHAN_RP, t, seed, gain_scale)
+    rb_pre, rb_post = _eval_channel(_CHAN_RB, t, seed, gain_scale)
+    px_pre, px_post = _eval_channel(_CHAN_PX, t, seed, gain_scale)
+    py_pre, py_post = _eval_channel(_CHAN_PY, t, seed, gain_scale)
+    pz_pre, pz_post = _eval_channel(_CHAN_PZ, t, seed, gain_scale)
 
     if walking and step_rate_hz > 0.0:
         # Walk cycle uses real time (not the speed-scaled time), so
@@ -373,7 +384,7 @@ def _cos(x):
     return math.cos(x)
 
 
-def _eval_channel(channel_id, t, seed):
+def _eval_channel(channel_id, t, seed, gain_scale=1.0):
     """Evaluate one channel's two bands. Returns (pre, post)."""
     cfg = _HANDHELD[channel_id]
     pre_cfg  = cfg["pre"]
@@ -381,17 +392,26 @@ def _eval_channel(channel_id, t, seed):
     # Fold channel id and band marker into the seed so different
     # channels (and the two bands within a channel) sample
     # independent noise patterns from the same global seed.
-    pre  = _fbm_with(pre_cfg,  t, hash((seed, channel_id, "pre")))  if pre_cfg  else 0.0
-    post = _fbm_with(post_cfg, t, hash((seed, channel_id, "post"))) if post_cfg else 0.0
+    pre  = _fbm_with(pre_cfg,  t, hash((seed, channel_id, "pre")),  gain_scale) if pre_cfg  else 0.0
+    post = _fbm_with(post_cfg, t, hash((seed, channel_id, "post")), gain_scale) if post_cfg else 0.0
     return pre, post
 
 
-def _fbm_with(cfg, t, seed):
+def _fbm_with(cfg, t, seed, gain_scale=1.0):
+    # Contrast: scale the per-octave gain. Clamp to [0.25, 0.85] — below
+    # 0.25 the higher octaves vanish (pure low-freq drift, fine) and above
+    # ~0.85 the fBm geometric series stops converging and the amplitude
+    # blows up. The user's 0..1 contrast knob maps onto this range.
+    gain = cfg["gain"] * float(gain_scale)
+    if gain < 0.05:
+        gain = 0.05
+    elif gain > 0.85:
+        gain = 0.85
     return cfg["amplitude"] * _fbm(
         t,
         octaves=cfg["octaves"],
         base_hz=cfg["base_hz"],
         lacunarity=cfg["lacunarity"],
-        gain=cfg["gain"],
+        gain=gain,
         seed=seed,
     )
