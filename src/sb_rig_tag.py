@@ -85,6 +85,23 @@ SHOTBLOCKS_FOLLOW_AIM_TRACK     = 1057
 # aiming dead-on the subject (0) to fully at the lead point (1).
 SHOTBLOCKS_FOLLOW_LEAD_DIST     = 1058
 SHOTBLOCKS_FOLLOW_AIM_LEAD      = 1059
+# Orbit: a horizontal azimuth (degrees) that swings the camera around the
+# subject, keyframeable for a 360 sweep. Pitch (-1..+1) tilts the camera
+# from behind (0) to directly overhead (+1) or underneath (-1) — orbit
+# still spins it at any pitch short of the pole. Orbit-In-World makes the
+# azimuth reference world space (turntable) instead of the subject's
+# heading. Position-only; aim stays Look-At driven.
+SHOTBLOCKS_FOLLOW_ORBIT         = 1060
+SHOTBLOCKS_FOLLOW_PITCH         = 1061
+SHOTBLOCKS_FOLLOW_ORBIT_WORLD   = 1062
+SHOTBLOCKS_FOLLOW_ORBIT_PLANE   = 1063
+# Absolute Roll: when ABS_ROLL is on, CAM_ROLL sets the camera's bank
+# directly about its view axis (no auto horizon-level), so the framing can
+# be rolled during an orbit. HPB bank is a clean roll about the view axis at
+# any aim, including straight-down (verified) — only DERIVING bank from
+# world-up is pole-ambiguous, which is exactly what this bypasses.
+SHOTBLOCKS_FOLLOW_ABS_ROLL      = 1064
+SHOTBLOCKS_FOLLOW_CAM_ROLL      = 1065
 SHOTBLOCKS_GRP_FRAMING          = 1103  # group host in tshotblocks.res for the UD-injected Frame Offset
 
 # Fallback distance (cm) for converting viewport-fraction noise into
@@ -160,6 +177,7 @@ def _new_state():
         "zoom_focal_baseline": None,
         "follow": sb_rig_follow.make_state(),
         "follow_lead_world": None,   # world aim-lead point, set per-frame
+        "follow_orbit": None,        # post-spring orbit re-place data, per-frame
         "seed": seed,
     }
 
@@ -481,6 +499,12 @@ class ShotblocksTag(c4d.plugins.TagData):
         node[SHOTBLOCKS_FOLLOW_AIM_TRACK]   = 0.7   # aim tracks tighter than body by default
         node[SHOTBLOCKS_FOLLOW_LEAD_DIST]   = 0.0   # lead off until dialed in
         node[SHOTBLOCKS_FOLLOW_AIM_LEAD]    = 0.0
+        node[SHOTBLOCKS_FOLLOW_ORBIT]       = 0.0   # 0 = dead behind
+        node[SHOTBLOCKS_FOLLOW_PITCH]       = 0.0   # 0 = behind, +1 = overhead, -1 = underneath
+        node[SHOTBLOCKS_FOLLOW_ORBIT_WORLD] = False # orbit follows heading by default
+        node[SHOTBLOCKS_FOLLOW_ORBIT_PLANE] = 0.0   # 0 = front-back circle, 90 = side circle
+        node[SHOTBLOCKS_FOLLOW_ABS_ROLL]    = False # auto horizon-level by default
+        node[SHOTBLOCKS_FOLLOW_CAM_ROLL]    = 0.0   # absolute roll angle (when ABS_ROLL on)
         # Follow Target starts unset (BaseLink defaults to None).
         # Target and Up Target start unset (BaseLinks default to None).
         # Frame Offset is a UserData slot — added in _on_tag_applied
@@ -699,7 +723,8 @@ class ShotblocksTag(c4d.plugins.TagData):
                     live_rot, _ = _apply_roll_and_bank_into_turns(
                         live_rot, prev_heading=st.get("prev_heading"),
                         roll_rad=roll, bank_into_turns=bank_into_turns,
-                        has_explicit_source=(up_target is not None))
+                        has_explicit_source=(up_target is not None),
+                        abs_roll_rad=_chase_abs_roll(tag))
             elif owns_rot and look_at_target is None:
                 # No-target Frame Offset is folded into the spring TARGET,
                 # so it only lands when the full step runs (scrub/play).
@@ -812,7 +837,8 @@ class ShotblocksTag(c4d.plugins.TagData):
             target_rot, heading = _apply_roll_and_bank_into_turns(
                 target_rot, prev_heading=None,
                 roll_rad=roll, bank_into_turns=False,
-                has_explicit_source=has_explicit_bank_source)
+                has_explicit_source=has_explicit_bank_source,
+                abs_roll_rad=_chase_abs_roll(tag))
             st["prev_heading"] = heading
             reset_to_target(spring, target_pos, target_rot)
             st["reset_pending"] = False
@@ -912,7 +938,8 @@ class ShotblocksTag(c4d.plugins.TagData):
         target_rot, heading = _apply_roll_and_bank_into_turns(
             target_rot, prev_heading=st.get("prev_heading"),
             roll_rad=roll, bank_into_turns=bank_into_turns,
-            has_explicit_source=has_explicit_bank_source)
+            has_explicit_source=has_explicit_bank_source,
+            abs_roll_rad=_chase_abs_roll(tag))
         st["prev_heading"] = heading
 
         # Noise: stateless sample at the current frame. `*_pre` adds
@@ -962,6 +989,33 @@ class ShotblocksTag(c4d.plugins.TagData):
         spring["rot"] = [(rhx, rhy, rhz), (rhvx, rhvy, rhvz)]
 
         spring["last_frame"] = cur_frame
+
+        # Orbit/pitch bypass position damping: the spring smoothed the
+        # UN-orbited follow anchor, so re-apply the exact orbit/pitch to the
+        # smoothed position now (post-spring). place_around_subject keeps the
+        # smoothed follow DISTANCE but sets the exact orbit ANGLE, so a
+        # keyframed orbit stays crisp and the subject stays framed under
+        # damping. Works in WORLD space (subject/dirs are world); the spring
+        # output is local, so convert local->world, re-place, convert back.
+        orb = st.get("follow_orbit")
+        if orb is not None:
+            parent = cam.GetUp()
+            try:
+                pm = parent.GetMg() if parent is not None else None
+                local_v = c4d.Vector(nx, ny, nz)
+                world_v = (pm * local_v) if pm is not None else local_v
+                placed = sb_rig_follow.place_around_subject(
+                    (world_v.x, world_v.y, world_v.z),
+                    orb["subject"], orb["anchor_dir"],
+                    orb["place_dir"], orb["side_bias"])
+                placed_v = c4d.Vector(placed[0], placed[1], placed[2])
+                if pm is not None:
+                    placed_v = ~pm * placed_v
+                nx, ny, nz = placed_v.x, placed_v.y, placed_v.z
+            except Exception as e:
+                if not getattr(ShotblocksTag, "_orbit_warned", False):
+                    ShotblocksTag._orbit_warned = True
+                    print("[Shotblocks] orbit re-place failed: {}".format(e))
 
         # Post-spring noise: tremor (high-freq) added after the
         # spring so the spring's low-pass doesn't eat it. The
@@ -1040,7 +1094,8 @@ def _compute_target_pose(tag, st, cam, doc, time, fps, dt, cur_frame,
         prev_heading=None if is_reset else st.get("prev_heading"),
         roll_rad=roll,
         bank_into_turns=False if is_reset else bank_into_turns,
-        has_explicit_source=has_explicit_bank_source)
+        has_explicit_source=has_explicit_bank_source,
+        abs_roll_rad=_chase_abs_roll(tag))
 
     noise_pre_pos, noise_pre_rot, noise_post_pos, noise_post_rot = \
         _sample_noise_world(tag, st, cur_frame, fps, cam, look_at_target, doc)
@@ -1130,6 +1185,20 @@ def _read_keyframed_target(cam, doc, time, fps):
     return (px, py, pz), (rx, ry, rz)
 
 
+def _chase_abs_roll(tag):
+    """Absolute camera roll (radians) for the chase, or None when not active.
+    Active only when Chase is on, a follow target is set, and the Absolute
+    Roll toggle is on — so normal behind-chase keeps its auto horizon-level
+    until the user opts in. CAM_ROLL is a DEGREE param (returned in radians)."""
+    if not bool(tag[SHOTBLOCKS_FOLLOW_ENABLED]):
+        return None
+    if tag[SHOTBLOCKS_FOLLOW_TARGET] is None:
+        return None
+    if not bool(tag[SHOTBLOCKS_FOLLOW_ABS_ROLL]):
+        return None
+    return float(tag[SHOTBLOCKS_FOLLOW_CAM_ROLL] or 0.0)
+
+
 def _chase_local_target_pos(tag, st, doc, time, fps, dt, is_reset):
     """If Chase is enabled and a Follow Target is set, return the camera's
     desired LOCAL position (parent-relative 3-tuple) for this frame —
@@ -1178,17 +1247,44 @@ def _chase_local_target_pos(tag, st, doc, time, fps, dt, is_reset):
         height_bias=float(tag[SHOTBLOCKS_FOLLOW_HEIGHT_BIAS]    or 0.0),
         side_bias=float(tag[SHOTBLOCKS_FOLLOW_SIDE_BIAS]        or 0.0),
         lead_distance=lead_dist,
+        # SHOTBLOCKS_FOLLOW_ORBIT is a DEGREE param — C4D stores/returns it
+        # in RADIANS, so pass it straight through (no deg->rad conversion,
+        # which previously double-converted and made a 360 keyframe read as
+        # ~6 degrees of orbit). PITCH is a -1..+1 fraction (PERCENT param).
+        orbit_rad=float(tag[SHOTBLOCKS_FOLLOW_ORBIT]           or 0.0),
+        pitch=float(tag[SHOTBLOCKS_FOLLOW_PITCH]               or 0.0),
+        orbit_world=bool(tag[SHOTBLOCKS_FOLLOW_ORBIT_WORLD]),
+        orbit_plane_rad=float(tag[SHOTBLOCKS_FOLLOW_ORBIT_PLANE] or 0.0),
     )
-    desired_world = result["camera"]
     # Stash the world-space aim-lead point so the look-at path can blend
     # the aim toward it (anticipation). Cleared to None when lead is off
     # so the look-at path knows to aim dead-on the subject.
     st["follow_lead_world"] = result["lead"] if lead_dist != 0.0 else None
     follow_state["last_frame"] = time.GetFrame(fps)
 
-    # Convert the world desired point to the camera's parent-local frame,
+    # Orbit/pitch must bypass position damping so a keyframed orbit stays
+    # crisp and keeps the subject framed (the spring would otherwise lag the
+    # fast-moving orbited spot). We therefore spring-smooth the UN-orbited
+    # `anchor` and re-apply the exact orbit/pitch AFTER the spring. Stash the
+    # world-space data the post-spring step needs; the damping-OFF path has no
+    # spring so it uses the fully-placed `camera` directly (no stale orbit).
+    has_orbit = (float(tag[SHOTBLOCKS_FOLLOW_ORBIT] or 0.0) != 0.0
+                 or float(tag[SHOTBLOCKS_FOLLOW_PITCH] or 0.0) != 0.0
+                 or float(tag[SHOTBLOCKS_FOLLOW_ORBIT_PLANE] or 0.0) != 0.0)
+    st["follow_orbit"] = {
+        "subject": result["subject"],
+        "anchor_dir": result["anchor_dir"],
+        "place_dir": result["place_dir"],
+        "side_bias": result["side_bias"],
+    } if has_orbit else None
+
+    # Damping-ON springs the anchor; damping-OFF uses the placed camera.
+    damping_on = bool(tag[SHOTBLOCKS_DAMPING_ENABLED])
+    src_world = result["anchor"] if (damping_on and has_orbit) else result["camera"]
+
+    # Convert the chosen world point to the camera's parent-local frame,
     # matching _read_keyframed_target's local convention.
-    desired_v = c4d.Vector(desired_world[0], desired_world[1], desired_world[2])
+    desired_v = c4d.Vector(src_world[0], src_world[1], src_world[2])
     parent = cam.GetUp()
     if parent is not None:
         try:
@@ -1366,7 +1462,8 @@ def _compute_look_at_local_rot(cam, target_obj, up_obj,
 
 def _apply_roll_and_bank_into_turns(target_rot, prev_heading,
                                     roll_rad, bank_into_turns,
-                                    has_explicit_source):
+                                    has_explicit_source,
+                                    abs_roll_rad=None):
     """Add the Roll slider's contribution to `target_rot`'s bank
     channel, optionally scaled by yaw rate for Bank-Into-Turns.
 
@@ -1381,10 +1478,18 @@ def _apply_roll_and_bank_into_turns(target_rot, prev_heading,
     case: AtS-driven heading with no keyed bank), Roll drives bank
     from zero rather than compounding on top of stale prior bank.
 
+    `abs_roll_rad` (Chase Absolute Roll): when not None, the bank is set
+    ABSOLUTELY to this value about the camera's view axis — the auto
+    horizon-level and BiT/Roll additions are bypassed entirely. HPB bank is
+    a clean view-axis roll at any aim (including straight-down), so this
+    holds a fixed framing roll during an orbit without pole flipping.
+
     Returns `(new_target_rot, current_heading)`. Caller stashes the
     heading so the next frame can compute the yaw delta.
     """
     h, p, b = target_rot
+    if abs_roll_rad is not None:
+        return (h, p, abs_roll_rad), h
     new_bank = b if has_explicit_source else 0.0
 
     if bank_into_turns and prev_heading is not None and roll_rad != 0.0:

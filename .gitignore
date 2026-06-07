@@ -46,3 +46,6 @@ scenes/ES_*.mp3
 # Generated thumbnails (regenerable; uncomment if you want to exclude)
 # presets/**/*.gif
 # presets/**/*.png
+
+# Local scratch (geometry sanity checks, etc.)
+src/_orbit_test.py

@@ -40,6 +40,24 @@ CONTAINER Tshotblocks
             REAL SHOTBLOCKS_FOLLOW_REORIENT    { UNIT PERCENT; MIN 0.0; MAXSLIDER 100.0; CUSTOMGUI REALSLIDER; }
             REAL SHOTBLOCKS_FOLLOW_HEIGHT_BIAS { UNIT METER; MINSLIDER -500.0; MAXSLIDER 500.0; STEP 1.0; CUSTOMGUI REALSLIDER; }
             REAL SHOTBLOCKS_FOLLOW_SIDE_BIAS   { UNIT METER; MINSLIDER -500.0; MAXSLIDER 500.0; STEP 1.0; CUSTOMGUI REALSLIDER; }
+            // Orbit: horizontal azimuth around the subject. Keyframe for a
+            // 360 sweep. Pitch tilts from behind (0%) to straight overhead
+            // (+100%) or straight underneath (-100%); orbit still spins the
+            // camera at any pitch short of the pole.
+            REAL SHOTBLOCKS_FOLLOW_ORBIT       { UNIT DEGREE; MINSLIDER -360.0; MAXSLIDER 360.0; STEP 1.0; CUSTOMGUI REALSLIDER; }
+            REAL SHOTBLOCKS_FOLLOW_PITCH       { UNIT PERCENT; MIN -100.0; MAX 100.0; MINSLIDER -100.0; MAXSLIDER 100.0; CUSTOMGUI REALSLIDER; }
+            // Orbit Plane: rotates the orbit circle's orientation. At full
+            // pitch, 0 = over->behind->under (front-back), 90 = over->side->
+            // under. At pitch 0 it just offsets the horizontal start angle.
+            REAL SHOTBLOCKS_FOLLOW_ORBIT_PLANE { UNIT DEGREE; MINSLIDER -360.0; MAXSLIDER 360.0; STEP 1.0; CUSTOMGUI REALSLIDER; }
+            // Absolute Roll: when on, Camera Roll sets the camera's bank
+            // directly about its view axis (no auto horizon-level), so the
+            // framing can be rolled e.g. 90deg during an orbit. When off,
+            // the camera auto-levels Y-up to the subject as usual and
+            // Camera Roll is ignored.
+            BOOL SHOTBLOCKS_FOLLOW_ABS_ROLL    { }
+            REAL SHOTBLOCKS_FOLLOW_CAM_ROLL    { UNIT DEGREE; MINSLIDER -180.0; MAX 180.0; MIN -180.0; MAXSLIDER 180.0; STEP 1.0; CUSTOMGUI REALSLIDER; }
+            BOOL SHOTBLOCKS_FOLLOW_ORBIT_WORLD { }
             // Aim Lock lives in the Look At group now (shared param, same
             // ID) so it works for plain look-at too, not just Chase.
             REAL SHOTBLOCKS_FOLLOW_LEAD_DIST   { UNIT METER; MIN 0.0; MAXSLIDER 1000.0; STEP 1.0; CUSTOMGUI REALSLIDER; }

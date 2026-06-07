@@ -42,7 +42,9 @@ spec) are both handled here:
    eases around instead of snapping.
 """
 
-from math import sqrt, acos, sin, cos
+from math import sqrt, acos, sin, cos, pi
+
+_PI = pi
 
 
 # ---------------------------------------------------------------------------
@@ -138,6 +140,64 @@ def _lerp(a, b, t):
     )
 
 
+def _rotate_about_axis(v, axis, angle):
+    """Rodrigues rotation: rotate vector `v` about unit `axis` by `angle`
+    radians. Returns a vector of the same magnitude as `v`."""
+    c = cos(angle)
+    s = sin(angle)
+    kxv = _cross(axis, v)
+    kdotv = _dot(axis, v)
+    return (
+        v[0] * c + kxv[0] * s + axis[0] * kdotv * (1.0 - c),
+        v[1] * c + kxv[1] * s + axis[1] * kdotv * (1.0 - c),
+        v[2] * c + kxv[2] * s + axis[2] * kdotv * (1.0 - c),
+    )
+
+
+def _great_circle_dir(base, orbit, pitch, plane=0.0):
+    """Unit placement direction for a great-circle orbit around the subject.
+
+    `base` is the horizontal behind direction (unit). `orbit` is the angle
+    (radians) traveled along the circle. `pitch` (-1..+1) tilts the circle's
+    plane from horizontal (0) to vertical (±1), so orbit always moves the
+    camera on a full-radius circle — over the top / underneath at the poles,
+    not a degenerate point. `plane` (radians) rotates the circle's
+    orientation around world-up: at full pitch, plane 0 sweeps over->behind->
+    under (front-back), plane 90deg sweeps over->side->under. At pitch 0 it
+    just offsets the horizontal start angle. Returns None if `base` unusable.
+
+    Construction: orbit revolves about an axis that blends from world-up
+    (pitch 0 -> horizontal circle) toward the horizontal 'side' axis
+    (|pitch|=1 -> vertical circle). The orbit=0 start point is `base` tilted
+    toward the pole by the pitch angle. At |pitch|=1 the start is the pole
+    itself and the axis is `side`, so orbit sweeps a clean vertical circle.
+    """
+    b = _normalize(base)
+    if b is None:
+        return None
+    up = (0.0, 1.0, 0.0)
+    # Orbit Plane: rotate the base horizontal direction around world-up so
+    # the whole circle construction tips toward a different horizontal
+    # direction (front-back vs side-to-side at the poles).
+    if plane != 0.0:
+        b = _normalize(_rotate_about_axis(b, up, plane)) or b
+    side = _normalize(_cross(up, b)) or (1.0, 0.0, 0.0)
+    phi = pitch * (_PI * 0.5)
+    aphi = abs(phi)
+    pole = up if pitch >= 0.0 else (0.0, -1.0, 0.0)
+    # orbit=0 start: base tilted toward the pole by |phi|.
+    start = _normalize(_add(_scale(b, cos(phi)),
+                            _scale(pole, sin(aphi))))
+    if start is None:
+        return None
+    # Orbit axis: blend up -> side as |pitch| goes 0 -> 1.
+    axis = _normalize(_add(_scale(up, cos(aphi)),
+                           _scale(side, sin(aphi))))
+    if axis is None:
+        return _normalize(start)
+    return _normalize(_rotate_about_axis(start, axis, orbit))
+
+
 def _smoothstep(edge0, edge1, x):
     """Hermite smoothstep — 0 below edge0, 1 above edge1, eased between."""
     if edge1 <= edge0:
@@ -228,7 +288,11 @@ def desired_position(state, target_pos, dt,
                      reorient_speed,
                      height_bias,
                      side_bias,
-                     lead_distance=0.0):
+                     lead_distance=0.0,
+                     orbit_rad=0.0,
+                     pitch=0.0,
+                     orbit_world=False,
+                     orbit_plane_rad=0.0):
     """Compute the chase result for this frame.
 
     Args:
@@ -302,28 +366,70 @@ def desired_position(state, target_pos, dt,
 
     # --- 5. Re-orient damping (failure mode #2). -----------------------
     # Slew the held offset direction toward the target_behind, capped at
-    # the per-frame max angle from the reorient knob. First frame (no
-    # held dir): adopt the target directly so we don't slowly ramp in
-    # from the default behind.
+    # the per-frame max angle from the reorient knob.
+    #
+    # SNAP-AT-START: until the chase has locked a real heading, don't commit
+    # offset_dir to the world-default behind. If we did, the first frames
+    # (no velocity yet) would set offset_dir = default, and once the subject
+    # starts moving the re-orient cap would SLEW it from default to the true
+    # heading — a visible wrong-way swing at the shot start (most obvious
+    # with orbit, whose base direction is offset_dir). Instead, hold
+    # offset_dir at None through the velocity-less frames and SNAP straight
+    # to the true heading on the first frame that has one. After that, the
+    # re-orient slew governs normally (the corner-easing it exists for).
     knob_r = _clamp01(reorient_speed)
     max_angle = _REORIENT_MIN + (_REORIENT_MAX - _REORIENT_MIN) * knob_r
     if state.get("offset_dir") is None:
-        offset_dir = target_behind
+        if heading is not None:
+            # First real heading → snap the base to it (no slew).
+            offset_dir = _scale(heading, -1.0)
+            state["offset_dir"] = offset_dir
+        else:
+            # No heading yet → place using the default behind for THIS
+            # frame, but don't persist it, so the first real heading snaps.
+            offset_dir = target_behind
     else:
         offset_dir = _slerp_unit(state["offset_dir"], target_behind, max_angle)
-    state["offset_dir"] = offset_dir
+        state["offset_dir"] = offset_dir
+
+    # --- 5b. Orbit + pitch placement direction (great-circle). ---------
+    # offset_dir is the chase's tracking "behind" direction (kept intact
+    # for the aim-lead below). place_dir is where the camera actually SITS
+    # relative to the subject. Orbit revolves the camera on a FULL great
+    # circle around the subject whose plane is tilted by pitch — so it works
+    # at every pitch, with no dead spot at the poles:
+    #   - pitch 0  : orbit sweeps a HORIZONTAL circle (behind->side->front).
+    #   - pitch ±1 : orbit sweeps a VERTICAL circle (over the top, down the
+    #                side, underneath) — full revolution while looking down.
+    #   - between  : the circle's plane tilts smoothly.
+    # base is the subject-heading behind dir, or world +Z (a fixed turntable)
+    # when Orbit-In-World is on. orbit_rad is RADIANS (C4D DEGREE params read
+    # in radians); pitch is -1..+1 (latitude, +1 = overhead, -1 = underneath).
+    base = (0.0, 0.0, 1.0) if orbit_world else offset_dir
+    place_dir = _great_circle_dir(base, orbit_rad, _clamp(pitch, -1.0, 1.0),
+                                  orbit_plane_rad) or offset_dir
 
     # --- 6. Desired spot. ----------------------------------------------
-    desired = _add(target_pos, _scale(offset_dir, follow_distance))
+    # `desired` is the fully-placed camera position (orbit + pitch applied),
+    # used directly by the damping-OFF path. The damping-ON path instead
+    # smooths the un-orbited `anchor` with the position spring and re-applies
+    # the orbit/pitch exactly afterward (see place_around_subject), so the
+    # authored orbit move stays crisp and keeps the subject framed while the
+    # chase FOLLOW still eases. `anchor` is the behind-follow point with no
+    # orbit/pitch/side-bias; height bias (world-up) is common to both.
+    anchor = _add(target_pos, _scale(offset_dir, follow_distance))
+    if height_bias != 0.0:
+        anchor = _add(anchor, (0.0, height_bias, 0.0))
 
+    desired = _add(target_pos, _scale(place_dir, follow_distance))
     # Height bias is along world up. Side bias is perpendicular to both
-    # the offset direction and world up (a horizontal sidestep), so the
+    # the placement direction and world up (a horizontal sidestep), so the
     # camera isn't dead-behind — flatters the framing. Both stay oriented
     # to the horizon regardless of how the target banks.
     if height_bias != 0.0:
         desired = _add(desired, (0.0, height_bias, 0.0))
     if side_bias != 0.0:
-        side = _cross(offset_dir, (0.0, 1.0, 0.0))
+        side = _cross(place_dir, (0.0, 1.0, 0.0))
         side_n = _normalize(side)
         if side_n is not None:
             desired = _add(desired, _scale(side_n, side_bias))
@@ -347,7 +453,90 @@ def desired_position(state, target_pos, dt,
 
     # --- 7. Bookkeeping. -----------------------------------------------
     state["prev_target_pos"] = target_pos
-    return {"camera": desired, "lead": lead}
+    return {
+        "camera": desired,    # fully-placed (orbit+pitch); damping-OFF path
+        "lead": lead,
+        # For the damping-ON path: spring-smooth `anchor` (un-orbited follow
+        # point), then call place_around_subject(smoothed, subject, ...) to
+        # re-apply the exact orbit/pitch so the authored move stays crisp.
+        "anchor": anchor,
+        "subject": target_pos,
+        "anchor_dir": offset_dir,   # un-orbited radius direction
+        "place_dir": place_dir,     # orbited+pitched radius direction
+        "side_bias": side_bias,
+    }
+
+
+def place_around_subject(smoothed_pos, subject, anchor_dir, place_dir,
+                         side_bias):
+    """Re-apply the exact orbit/pitch to a spring-smoothed follow position.
+
+    The position spring smooths the UN-orbited anchor, so `smoothed_pos`
+    trails the follow nicely but carries no orbit. Rotate its radius vector
+    (smoothed_pos - subject) by the rotation that maps anchor_dir -> place_dir
+    — the exact orbit+pitch the user authored — preserving the smoothed
+    radius MAGNITUDE (so distance still eases) while the ANGLE is exact (so a
+    keyframed orbit keeps the subject framed and doesn't lag). Then add the
+    side bias perpendicular to the placed direction.
+    """
+    r = _sub(smoothed_pos, subject)
+    mag = _length(r)
+    if mag < 1e-9:
+        placed = subject
+    else:
+        # Rotate the radius vector from anchor_dir toward place_dir. The
+        # result already carries r's magnitude (the smoothed follow radius),
+        # so add it to subject directly — do NOT re-scale by mag.
+        placed_r = _rotate_a_to_b(r, anchor_dir, place_dir)
+        placed = _add(subject, placed_r)
+    if side_bias != 0.0:
+        side = _cross(place_dir, (0.0, 1.0, 0.0))
+        side_n = _normalize(side)
+        if side_n is not None:
+            placed = _add(placed, _scale(side_n, side_bias))
+    return placed
+
+
+def _rotate_a_to_b(v, a, b):
+    """Rotate vector `v` by the rotation that takes unit vector `a` to unit
+    vector `b`. Returns a vector with the SAME magnitude as `v`. If a and b
+    are ~equal, returns v unchanged; if ~antiparallel, rotates 180 about an
+    arbitrary perpendicular."""
+    an = _normalize(a)
+    bn = _normalize(b)
+    if an is None or bn is None:
+        return v
+    d = _dot(an, bn)
+    if d > 1.0:
+        d = 1.0
+    elif d < -1.0:
+        d = -1.0
+    if d > 0.999999:
+        return v   # no rotation
+    mag = _length(v)
+    axis = _cross(an, bn)
+    axis_n = _normalize(axis)
+    if axis_n is None:
+        # Antiparallel: pick any perpendicular to an.
+        axis_n = _normalize(_cross(an, (0.0, 1.0, 0.0))) \
+            or _normalize(_cross(an, (1.0, 0.0, 0.0)))
+        if axis_n is None:
+            return v
+        angle = _PI
+    else:
+        angle = acos(d)
+    # Rodrigues rotation of v about axis_n by `angle`.
+    c = cos(angle)
+    s = sin(angle)
+    vdotk = _dot(v, axis_n)
+    kxv = _cross(axis_n, v)
+    out = (
+        v[0] * c + kxv[0] * s + axis_n[0] * vdotk * (1.0 - c),
+        v[1] * c + kxv[1] * s + axis_n[1] * vdotk * (1.0 - c),
+        v[2] * c + kxv[2] * s + axis_n[2] * vdotk * (1.0 - c),
+    )
+    on = _normalize(out)
+    return _scale(on, mag) if on is not None else v
 
 
 def _clamp01(x):
@@ -356,4 +545,13 @@ def _clamp01(x):
         return 0.0
     if x > 1.0:
         return 1.0
+    return x
+
+
+def _clamp(x, lo, hi):
+    x = float(x)
+    if x < lo:
+        return lo
+    if x > hi:
+        return hi
     return x

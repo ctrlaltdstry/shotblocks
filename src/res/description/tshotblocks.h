@@ -39,6 +39,12 @@ enum
     SHOTBLOCKS_FOLLOW_AIM_TRACK     = 1057,
     SHOTBLOCKS_FOLLOW_LEAD_DIST     = 1058,
     SHOTBLOCKS_FOLLOW_AIM_LEAD      = 1059,
+    SHOTBLOCKS_FOLLOW_ORBIT         = 1060,  // horizontal orbit azimuth around the subject (deg, keyframeable)
+    SHOTBLOCKS_FOLLOW_PITCH         = 1061,  // vertical orbit: 0 = behind, +100% = overhead, -100% = underneath
+    SHOTBLOCKS_FOLLOW_ORBIT_WORLD   = 1062,  // orbit angle relative to World (on) vs subject Heading (off)
+    SHOTBLOCKS_FOLLOW_ORBIT_PLANE   = 1063,  // rotates the orbit circle's plane (0=front-back, 90=side-to-side)
+    SHOTBLOCKS_FOLLOW_ABS_ROLL      = 1064,  // toggle: Camera Roll sets bank absolutely (no auto horizon-level)
+    SHOTBLOCKS_FOLLOW_CAM_ROLL      = 1065,  // absolute camera roll about the view axis (deg), when ABS_ROLL on
     SHOTBLOCKS_GRP_DAMPING          = 1100,
     SHOTBLOCKS_GRP_LOOK_AT          = 1102,
     SHOTBLOCKS_GRP_FRAMING          = 1103,

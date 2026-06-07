@@ -32,6 +32,12 @@ STRINGTABLE Tshotblocks
     SHOTBLOCKS_FOLLOW_REORIENT        "Swing Speed";
     SHOTBLOCKS_FOLLOW_HEIGHT_BIAS     "Height Offset";
     SHOTBLOCKS_FOLLOW_SIDE_BIAS       "Side Offset";
+    SHOTBLOCKS_FOLLOW_ORBIT           "Orbit";
+    SHOTBLOCKS_FOLLOW_PITCH           "Pitch";
+    SHOTBLOCKS_FOLLOW_ORBIT_PLANE     "Orbit Plane";
+    SHOTBLOCKS_FOLLOW_ABS_ROLL        "Absolute Roll";
+    SHOTBLOCKS_FOLLOW_CAM_ROLL        "Camera Roll";
+    SHOTBLOCKS_FOLLOW_ORBIT_WORLD     "Orbit In World Space";
     SHOTBLOCKS_FOLLOW_AIM_TRACK       "Aim Lock";
     SHOTBLOCKS_FOLLOW_LEAD_DIST       "Look Ahead Distance";
     SHOTBLOCKS_FOLLOW_AIM_LEAD        "Look Ahead";
