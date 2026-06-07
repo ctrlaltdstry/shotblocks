@@ -113,171 +113,88 @@ _BANK_FULL_YAW_RATE = 0.1
 _BCKEY_FRAME_OFFSET_UD_IDX = 1010003
 
 
-# Per-tag mutable state. Keyed by tag.GetUniqueIP() (a persistent
-# C4D-side identifier that survives across the multiple Python
-# wrappers C4D creates for the same BaseTag). NOT keyed by id(tag) —
-# we tried that and discovered C4D produces a fresh Python wrapper
-# for almost every Execute call, so id(tag) changes every time and
-# every call would get a fresh state dict (no lag accumulation).
-# The data is a dict:
+# Per-tag mutable runtime state lives ON THE NodeData INSTANCE (self),
+# NOT in a module-level dict. C4D 2026 gives each tag node its own
+# persistent ShotblocksTag instance (verified: id(self) is stable across
+# Executes and DISTINCT per node), and hands a DUPLICATED tag a brand-new
+# instance. So state stored on self is automatically per-node and a clone
+# starts fresh — which is exactly the documented SDK convention (per-
+# instance state belongs in member variables; the BaseContainer, copied
+# automatically on duplicate, holds only the user-facing parameters).
+#
+# This replaces an older design that kept state in a global dict keyed by
+# a "marker" integer stashed in the BaseContainer. Because C4D copies the
+# BaseContainer (marker included) on duplicate, a cloned camera pointed at
+# the ORIGINAL's state entry — so edits to the copy's chase/framing didn't
+# take. No identity-tracking, marker dedup, or document walks are needed
+# once state lives on self.
+#
+# The state is a dict:
 #   {
 #     "spring":         spring state (from sb_rig_spring.make_state)
-#     "overrides":      per-shot overrides pushed in by the canvas at
-#                       active-shot transitions. None means "no shot
-#                       active / no overrides; use tag's persisted
-#                       params."
-#     "reset_pending":  bool — set by the canvas at shot-boundary
-#                       transitions; consumed on the next Execute,
-#                       which snaps the spring to target.
+#     "overrides":      per-shot overrides (legacy v1 canvas hook). None
+#                       means "no overrides; use the tag's persisted params".
+#     "reset_pending":  bool — set at shot-boundary / scrub jumps; consumed
+#                       on the next Execute, which snaps the spring to target.
+#     "seed":           a stable per-instance integer used as the default
+#                       noise/zoom seed so each tag differs without the user
+#                       setting one. Stable for this instance's lifetime.
 #   }
-_RUNTIME = {}
+
+# Sequential default-seed source. Each instance grabs one fresh value on
+# first use, so two tags get different default noise/zoom schedules without
+# any persisted identity. Wraps to stay a small positive int.
+_NEXT_SEED = [1]
 
 
-# Container key used to stash a unique per-tag marker. Lives in the
-# tag's BaseContainer, which DOES persist across the Python wrapper
-# churn that C4D inflicts on Execute calls (we discovered the hard
-# way that id(tag), GetUniqueIP() and similar all change every call).
-_BCKEY_TAG_MARKER = 1010002
-
-# This tag's plugin ID (matches PLUGIN_ID_TAG in shotblocks.pyp). Used to
-# find sibling Shotblocks tags when assigning a collision-free marker.
-_TAG_PLUGIN_ID = 1000001
-
-# Module-level counter for generating fresh markers.
-_NEXT_MARKER = [1]
-
-# Markers validated-unique THIS plugin session. A marker here is trusted on
-# every later frame without re-walking the document. Cleared on reload.
-_VALIDATED_MARKERS = set()
-
-
-def _markers_used_by_other_tags(tag):
-    """Set of _BCKEY_TAG_MARKER values held by every OTHER Shotblocks tag in
-    this tag's document. Walked ONLY when assigning a new marker (rare —
-    first Execute of a never-seen tag, or a clone that needs a fresh one),
-    never per frame, so the cost is negligible."""
-    used = set()
-    try:
-        doc = tag.GetDocument()
-    except Exception:
-        doc = None
-    if doc is None:
-        return used
-    try:
-        my_bc = tag.GetDataInstance()
-    except Exception:
-        my_bc = None
-    obj = doc.GetFirstObject()
-    stack = []
-    while obj is not None:
-        try:
-            for t in obj.GetTags():
-                if t.CheckType(_TAG_PLUGIN_ID):
-                    tbc = t.GetDataInstance()
-                    if tbc is not None and tbc is not my_bc:
-                        m = tbc.GetInt32(_BCKEY_TAG_MARKER)
-                        if m:
-                            used.add(m)
-        except Exception:
-            pass
-        nxt = obj.GetDown()
-        if nxt is not None:
-            stack.append(obj.GetNext())
-            obj = nxt
-        else:
-            obj = obj.GetNext()
-            while obj is None and stack:
-                obj = stack.pop()
-    return used
-
-
-def _state_key(tag):
-    """Return a stable identity for this tag that survives the
-    Python-wrapper churn C4D inflicts on Execute calls. Stamps a
-    monotonic integer into the tag's BaseContainer on first use; the
-    BC value is what survives.
-
-    The marker must be UNIQUE among all live Shotblocks tags, or two tags
-    share one _RUNTIME state entry and step on each other — the cross-tag
-    bug where adding a 2nd tag (or duplicating a camera, which copies the
-    marker) broke the new tag's framing/ownership. A marker collides when
-    (1) _NEXT_MARKER resets to 1 on plugin reload while existing tags keep
-    persisted markers, or (2) copy-paste clones the BaseContainer marker.
-    On assignment we scan the document so the new marker is unique; a tag
-    that already has a marker is trusted on later frames (no per-frame walk)
-    because clones are repaired once (the first time both are live) and
-    persisted markers are validated on a tag's first Execute this session.
-    """
-    try:
-        bc = tag.GetDataInstance()
-        if bc is not None:
-            marker = bc.GetInt32(_BCKEY_TAG_MARKER)
-            # Validate a marker only ONCE per session per tag (tracked in
-            # _VALIDATED_MARKERS keyed by marker) — if another live tag
-            # already holds it, this is a duplicate and we reassign.
-            if marker and marker not in _VALIDATED_MARKERS:
-                if marker in _markers_used_by_other_tags(tag):
-                    marker = 0  # duplicate → force reassignment below
-                else:
-                    _VALIDATED_MARKERS.add(marker)
-                    if marker >= _NEXT_MARKER[0]:
-                        _NEXT_MARKER[0] = marker + 1
-            if marker:
-                return ("bc", marker)
-            # Assign a fresh marker unique across the document.
-            used = _markers_used_by_other_tags(tag)
-            cand = _NEXT_MARKER[0]
-            while cand in used or cand in _VALIDATED_MARKERS:
-                cand += 1
-            _NEXT_MARKER[0] = cand + 1
-            _VALIDATED_MARKERS.add(cand)
-            bc.SetInt32(_BCKEY_TAG_MARKER, cand)
-            return ("bc", cand)
-    except Exception:
-        pass
-    return ("pyid", id(tag))
-
-
-def _state_for(tag):
-    """Lazily allocate per-tag runtime state, keyed on the tag's
-    persistent C4D identity (not its Python id)."""
-    key = _state_key(tag)
-    st = _RUNTIME.get(key)
-    if st is None:
-        st = {
-            "spring": make_state(),
-            "overrides": None,
-            "reset_pending": True,    # first Execute snaps to target
-            "prev_heading": None,     # for Bank-Into-Turns yaw rate
-            "zoom_schedule": sb_rig_zoom.make_schedule_state(),
-            "zoom_focal_baseline": None,
-            "follow": sb_rig_follow.make_state(),
-            "follow_lead_world": None,   # world aim-lead point, set per-frame
-        }
-        _RUNTIME[key] = st
-    return st
+def _new_state():
+    """Build a fresh per-instance runtime-state dict."""
+    seed = _NEXT_SEED[0]
+    _NEXT_SEED[0] = seed + 1
+    return {
+        "spring": make_state(),
+        "overrides": None,
+        "reset_pending": True,    # first Execute snaps to target
+        "prev_heading": None,     # for Bank-Into-Turns yaw rate
+        "zoom_schedule": sb_rig_zoom.make_schedule_state(),
+        "zoom_focal_baseline": None,
+        "follow": sb_rig_follow.make_state(),
+        "follow_lead_world": None,   # world aim-lead point, set per-frame
+        "seed": seed,
+    }
 
 
 def request_reset(tag):
-    """Public API: the canvas calls this at active-shot transitions
-    (a hard cut between two shots) and on scrub jumps. The next
-    Execute snaps the spring to its target with zero velocity."""
-    if tag is None:
-        return
-    st = _state_for(tag)
-    st["reset_pending"] = True
+    """Public API: request a spring reset on the next Execute (snap to
+    target, zero velocity). Legacy v1-canvas hook — the v2 timeline drives
+    resets through its own path now, so this is currently uncalled but kept
+    for the documented rig API. Best-effort: reaches the per-instance state
+    via the tag's NodeData if the running Python build exposes it."""
+    nd = _nodedata_of(tag)
+    if nd is not None:
+        nd._state()["reset_pending"] = True
 
 
 def push_overrides(tag, overrides):
-    """Public API: the canvas calls this when the active shot changes,
-    passing the shot's `rig_state` dict (or None for no overrides).
-    Override keys (any subset):
-      - damping_pos, damping_rot, damping_focal, damping_focus  (float)
-    """
+    """Public API: push per-shot rig overrides (legacy v1-canvas hook;
+    currently uncalled). See request_reset for the NodeData caveat."""
+    nd = _nodedata_of(tag)
+    if nd is not None:
+        nd._state()["overrides"] = overrides or None
+
+
+def _nodedata_of(tag):
+    """Best-effort: get the ShotblocksTag NodeData instance from a BaseTag.
+    Returns None if the API doesn't expose it (older Python builds). Only
+    used by the legacy public reset/override API, which has no live callers,
+    so a None return is acceptable."""
     if tag is None:
-        return
-    st = _state_for(tag)
-    st["overrides"] = overrides or None
+        return None
+    try:
+        nd = tag.GetNodeData()
+        return nd if isinstance(nd, ShotblocksTag) else None
+    except Exception:
+        return None
 
 
 def _read_damping(tag, st, key, override_key):
@@ -504,7 +421,29 @@ class ShotblocksTag(c4d.plugins.TagData):
     # Lifecycle
     # ------------------------------------------------------------------
 
-    def Init(self, node):
+    def __init__(self):
+        # Per-instance runtime state lives here, not in a global dict.
+        # C4D allocates a fresh ShotblocksTag for each node (and each
+        # duplicate), so this is automatically per-node and clone-safe.
+        # Built lazily on first _state() so it survives Init being called
+        # multiple times by C4D.
+        super(ShotblocksTag, self).__init__()
+        self._rt = None
+
+    def _state(self):
+        """The per-instance runtime-state dict (lazily created)."""
+        if self._rt is None:
+            self._rt = _new_state()
+        return self._rt
+
+    # C4D 2026 calls Init(node, isCloneInit). On a clone, isCloneInit is
+    # True and the BaseContainer is copied separately by C4D AFTER Init —
+    # so defaults are set only for a fresh (non-clone) node, per the SDK
+    # convention. Per-instance runtime state needs no special handling: the
+    # clone is a new ShotblocksTag instance with its own fresh self._rt.
+    def Init(self, node, isCloneInit=False):
+        if isCloneInit:
+            return True
         node[SHOTBLOCKS_ENABLED]            = True
         # Damping master switch defaults OFF — a freshly applied tag is
         # fully interactive (no spring fighting viewport navigation). The
@@ -561,10 +500,9 @@ class ShotblocksTag(c4d.plugins.TagData):
         return True
 
     def Free(self, node):
-        try:
-            _RUNTIME.pop(_state_key(node), None)
-        except Exception:
-            pass
+        # Per-instance state lives on self and is garbage-collected with
+        # this instance when C4D frees the node — nothing to clean up.
+        self._rt = None
 
     # ------------------------------------------------------------------
     # Tag-applied / parameter-changed hooks
@@ -610,7 +548,7 @@ class ShotblocksTag(c4d.plugins.TagData):
         # Execute (no-op if already present).
         _ensure_frame_offset_userdata(tag)
 
-        st = _state_for(tag)
+        st = self._state()
 
         fps = doc.GetFps() or 24
         time = doc.GetTime()
@@ -1730,10 +1668,7 @@ def _apply_quick_zoom(tag, st, cam, doc, time, fps):
     # additional storage).
     seed = int(tag[SHOTBLOCKS_NOISE_SEED] or 0)
     if seed == 0:
-        key = _state_key(tag)
-        seed = key[1] if isinstance(key, tuple) and len(key) >= 2 else 1
-        if seed == 0:
-            seed = 1
+        seed = st.get("seed") or 1
 
     t_now = time.Get() if hasattr(time, "Get") else (
         time.GetFrame(fps) / float(fps))
@@ -1809,16 +1744,12 @@ def _sample_noise_world(tag, st, cur_frame, fps, cam, look_at_target, doc):
     if strength <= 0.0:
         return _ZERO3, _ZERO3, _ZERO3, _ZERO3
 
-    # Seed: an explicit non-zero seed wins; otherwise fall back to
-    # the tag's stable BC marker so every tag's "default seed"
-    # differs without the user touching anything.
+    # Seed: an explicit non-zero seed wins; otherwise fall back to the
+    # per-instance default seed so every tag's noise differs without the
+    # user touching anything.
     seed = int(tag[SHOTBLOCKS_NOISE_SEED] or 0)
     if seed == 0:
-        key = _state_key(tag)
-        # key is ("bc", marker) or ("pyid", id(tag))
-        seed = key[1] if isinstance(key, tuple) and len(key) >= 2 else 1
-        if seed == 0:
-            seed = 1
+        seed = st.get("seed") or 1
 
     walking = bool(tag[SHOTBLOCKS_NOISE_WALKING])
     step_rate = float(tag[SHOTBLOCKS_NOISE_STEP_RATE] or 1.8)
