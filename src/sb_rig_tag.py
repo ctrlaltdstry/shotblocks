@@ -601,10 +601,33 @@ class ShotblocksTag(c4d.plugins.TagData):
             if not owns_pos and not owns_rot:
                 _apply_quick_zoom(tag, st, cam, doc, time, fps)
                 return c4d.EXECUTIONRESULT_OK
+            # Chase needs a clean reset at the shot's first active frame and
+            # on a backward jump, even with damping OFF — otherwise the
+            # follow engine's smoothed velocity / held 'behind' direction
+            # carries over stale from wherever the playhead was, and the
+            # cold-start framing swings in differently every playback
+            # ("sometimes left, sometimes right, sometimes flips out").
+            # The damping-ON path resets via reset_pending; the instant path
+            # has no spring boundary machinery, so derive the same signal
+            # from the chase engine's own per-frame bookkeeping: first frame
+            # (no prior) or a backward step. Repeated Executes within one
+            # frame don't re-reset (last_frame == cur_frame after the first).
+            #
+            # Gated on chase being ACTIVE: is_reset also suppresses
+            # Bank-Into-Turns yaw, and a tag without a follow target never
+            # sets the chase last_frame (so the signal would otherwise latch
+            # True every frame and permanently disable BiT in the instant
+            # path). When chase is off there's no chase state to reset, so
+            # leave is_reset False and let BiT run normally.
+            chase_active = (bool(tag[SHOTBLOCKS_FOLLOW_ENABLED])
+                            and tag[SHOTBLOCKS_FOLLOW_TARGET] is not None)
+            chase_last = st["follow"].get("last_frame")
+            chase_reset = chase_active and (chase_last is None
+                                            or cur_frame < chase_last)
             tp, tr, heading, npost_pos, npost_rot = _compute_target_pose(
                 tag, st, cam, doc, time, fps, dt, cur_frame,
                 look_at_target, up_target,
-                is_reset=False, bank_into_turns=bank_into_turns)
+                is_reset=chase_reset, bank_into_turns=bank_into_turns)
             st["prev_heading"] = heading
             final_pos = (tp[0] + npost_pos[0], tp[1] + npost_pos[1],
                          tp[2] + npost_pos[2])
