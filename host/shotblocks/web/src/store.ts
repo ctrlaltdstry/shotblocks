@@ -384,6 +384,11 @@ export interface State {
     targetRulerMarker?: { frame: number | null } | null;
   } | null;
 
+  /** Clip whose title is being inline-renamed (video clips only —
+   *  committing renames the source camera in the C4D Object Manager).
+   *  null when no rename is active. */
+  renamingClipId: number | null;
+
   // Actions
   setTick: (frame: number, fps: number, playing: boolean) => void;
   setDocInfo: (fps: number, docMin: number, docMax: number, playRangeIn?: number, playRangeOut?: number) => void;
@@ -659,6 +664,8 @@ export interface State {
     targetLevelKf?: { clipId: number; index: number } | null;
     targetRulerMarker?: { frame: number | null } | null;
   } | null) => void;
+  /** Enter / leave inline rename for a clip's title (null = leave). */
+  setRenamingClipId: (clipId: number | null) => void;
 
   /** Remove a track and all of its clips, then RENUMBER the remaining
    *  tracks dense from id=1. Any track is deletable — there are no
@@ -697,6 +704,8 @@ export interface State {
    *  `cameraNames`. C++ sends the full snapshot of every objectId
    *  in its _cameraLinks; missing ids drop out of both maps. */
   setCameraStatuses: (statuses: { id: number; alive: boolean; name: string; keyTimes?: number[] }[]) => void;
+  /** Optimistically set one camera's live name (clip-title rename). */
+  setCameraName: (objectId: number, name: string) => void;
 
   /** Rebind an orphan clip's source camera. Called when the user
    *  drags a fresh camera from the OM onto an orphan clip — the

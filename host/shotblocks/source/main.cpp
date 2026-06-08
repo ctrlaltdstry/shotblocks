@@ -1754,6 +1754,7 @@ private:
 		if (body.find("\"kind\":\"get-camera-types\"") != std::string::npos) return HandleGetCameraTypes();
 		if (body.find("\"kind\":\"create-camera\"") != std::string::npos) return HandleCreateCamera(body);
 		if (body.find("\"kind\":\"select-in-om\"") != std::string::npos) return HandleSelectInOm(body);
+		if (body.find("\"kind\":\"rename-camera\"") != std::string::npos) return HandleRenameCamera(body);
 		if (body.find("\"kind\":\"sync-dope-keys\"") != std::string::npos) return HandleSyncDopeKeys(body);
 		if (body.find("\"kind\":\"set-stage-cameras\"") != std::string::npos) return HandleSetStageCameras(body);
 		if (body.find("\"kind\":\"audio-add\"") != std::string::npos)
@@ -3128,6 +3129,31 @@ private:
 		ApplyDopeKeySelection(doc, objectId);
 		EventAdd();
 		return "{\"ok\":true,\"kind\":\"select-in-om-ack\",\"selected\":true}";
+	}
+
+	// Rename a clip's source camera in the Object Manager — the editable
+	// clip title. Resolves the camera via _cameraLinks, SetName under a
+	// real undo step, then re-pushes `cameras` so the new live name echoes
+	// back to every clip + the Inspector. JS already updated the name
+	// optimistically; the echo just confirms the authoritative value.
+	//   Body: {"kind":"rename-camera","objectId":N,"name":"..."}
+	std::string HandleRenameCamera(const std::string& body)
+	{
+		Int32 objectId = ParseIntField(body, "objectId");
+		std::string nameUtf8 = ParseStringField(body, "name");
+		if (objectId <= 0 || nameUtf8.empty())
+			return "{\"ok\":true,\"kind\":\"rename-camera-ack\",\"renamed\":false}";
+		BaseDocument* doc = GetActiveDocument();
+		if (!doc) return "{\"ok\":false,\"error\":\"no doc\"}";
+		BaseObject* cam = ResolveCameraForObjectId(doc, objectId);
+		if (!cam) return "{\"ok\":true,\"kind\":\"rename-camera-ack\",\"renamed\":false}";
+		doc->StartUndo();
+		doc->AddUndo(UNDOTYPE::CHANGE, cam);
+		cam->SetName(maxon::String(nameUtf8.c_str()));
+		doc->EndUndo();
+		EventAdd();
+		PostCameras();   // echo the authoritative name back to JS
+		return "{\"ok\":true,\"kind\":\"rename-camera-ack\",\"renamed\":true}";
 	}
 
 	// Plan 4.1 commit 2 — rebuild the hidden Stage helper's animation

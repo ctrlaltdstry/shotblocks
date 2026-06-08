@@ -109,6 +109,12 @@ export interface UiSlice {
     targetRulerMarker?: { frame: number | null } | null;
   } | null;
 
+  /** Clip whose title is being inline-renamed (double-click the title or
+   *  context-menu "Rename"). null when no rename is active. Only video
+   *  clips rename — committing renames the clip's source camera in the
+   *  C4D Object Manager (the title shows the live OM name). */
+  renamingClipId: number | null;
+
   setActiveTool: (tool: ToolId) => void;
   setAudioScrub: (on: boolean) => void;
   setSettingsOpen: (open: boolean) => void;
@@ -146,6 +152,7 @@ export interface UiSlice {
     targetLevelKf?: { clipId: number; index: number } | null;
     targetRulerMarker?: { frame: number | null } | null;
   } | null) => void;
+  setRenamingClipId: (clipId: number | null) => void;
 }
 
 export const createUiSlice: StateCreator<State, [], [], UiSlice> = (set) => ({
@@ -181,6 +188,7 @@ export const createUiSlice: StateCreator<State, [], [], UiSlice> = (set) => ({
   razorHoverClipBand: null,
 
   contextMenu: null,
+  renamingClipId: null,
 
   setActiveTool: (tool) => set({ activeTool: tool }),
   setAudioScrub: (on) => set({ audioScrub: on }),
@@ -254,4 +262,5 @@ export const createUiSlice: StateCreator<State, [], [], UiSlice> = (set) => ({
     return { razorHoverX: x, razorHoverClipBand: clipBand };
   }),
   setContextMenu: (menu) => set({ contextMenu: menu }),
+  setRenamingClipId: (clipId) => set({ renamingClipId: clipId }),
 });

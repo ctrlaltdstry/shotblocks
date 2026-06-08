@@ -1749,6 +1749,36 @@ body.is-hand-panning * {
   text-overflow: ellipsis;
   overflow: hidden;
 }
+/* Inline rename field — strips native input chrome and lights the edit
+   edge with the brand highlight (matches the track-header rename input).
+   Sized to its text via the `size` attribute + inline-block, so the field
+   hugs the name and grows as you type rather than spanning the clip.
+   Hover cursor is deliberately NOT changed to text — the title only
+   signals editability once you've double-clicked into edit mode. */
+/* While editing, the band keeps its full-width footprint (so the row
+   doesn't reflow) but lets the input float at its natural text size. */
+.shot-block__label--editing {
+  overflow: visible;
+}
+.shot-block__label-input {
+  display: inline-block;
+  width: auto;
+  min-width: 1ch;
+  max-width: 100%;
+  margin: 0;
+  padding: 1px 4px;
+  color: var(--color-grey-white);
+  font-family: Inter, sans-serif;
+  font-size: 12px;
+  font-weight: 400;
+  line-height: 14px;
+  background: var(--color-grey-7);
+  border: 1px solid var(--color-timeline-primary-highlight);
+  border-radius: 3px;
+  outline: none;
+  box-sizing: content-box;
+  -webkit-appearance: none; appearance: none;
+}
 .shot-block__icon-wrap {
   /* Same recipe as .shot-block__label — when the clip narrows, the
      wrapper's width is capped at its flex-cell space and overflow:

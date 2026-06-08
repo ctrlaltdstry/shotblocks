@@ -141,6 +141,11 @@ export type HostOutbound =
   // keys in the Timeline/dope sheet; objectId=0 clears the highlight
   // (empty selection / gap / non-camera clip). Does not touch OM/AM.
   | { kind: 'sync-dope-keys'; objectId: number }
+  // Rename a clip's source camera in the C4D Object Manager (the
+  // editable clip title). C++ resolves objectId via _cameraLinks,
+  // SetName under undo, then re-pushes `cameras` so the live name echoes
+  // back to every clip + the Inspector.
+  | { kind: 'rename-camera'; objectId: number; name: string }
   // Plan 4.1 commit 2 — push the per-boundary camera event list to
   // C++, which rebuilds the hidden Stage helper's animation track.
   // Events are sorted by frame, deduplicated (no consecutive entries

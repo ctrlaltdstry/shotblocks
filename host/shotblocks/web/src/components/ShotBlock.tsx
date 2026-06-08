@@ -1,6 +1,7 @@
-import { useRef, type CSSProperties } from 'react';
+import { useEffect, useRef, useState, type CSSProperties } from 'react';
 import { useStore, SNAP_PIXEL_RADIUS, LABEL_MIN_PX, BRACKET_MIN_PX, type Clip } from '../store';
 import { useClipDrag } from '../useClipDrag';
+import { send } from '../lib/host';
 import { WaveformCanvas } from './WaveformCanvas';
 import { LevelCurve } from './LevelCurve';
 import { BeatDots } from './BeatDots';
@@ -66,6 +67,71 @@ export function ShotBlock({
   const displayName = liveName ?? clip.sourceName;
   const ref = useRef<HTMLDivElement | null>(null);
   const onClipPointerDown = useClipDrag(clip, trackId, side, ref);
+
+  // Inline title rename → renames the source CAMERA in the OM. Video,
+  // non-orphan clips only (audio has no camera; an orphan's camera is
+  // gone). Entered by double-clicking the title OR context-menu "Rename"
+  // (which sets renamingClipId in the store). `editing` holds the
+  // in-progress text while the title is an <input>; commit sends
+  // rename-camera to C++ and optimistically updates the live name.
+  const canRename = side === 'video' && !isOrphan && clip.objectId > 0;
+  const renamingClipId = useStore((s) => s.renamingClipId);
+  const [editing, setEditing] = useState<string | null>(null);
+  const inputRef = useRef<HTMLInputElement | null>(null);
+  const isEditing = editing !== null;
+  // Context-menu "Rename" sets renamingClipId; enter edit mode when it
+  // points at us (and we can rename). Clear the store flag once consumed.
+  useEffect(() => {
+    if (renamingClipId === clip.id && canRename && editing === null) {
+      setEditing(displayName);
+      useStore.getState().setRenamingClipId(null);
+    }
+  }, [renamingClipId, clip.id, canRename, editing, displayName]);
+  // Focus + select-all when editing starts (null -> non-null).
+  useEffect(() => {
+    if (isEditing && inputRef.current) {
+      inputRef.current.focus();
+      inputRef.current.select();
+    }
+  }, [isEditing]);
+  function commitWith(text: string | null) {
+    if (text === null) return;
+    const name = text.trim();
+    // Empty name → revert (C4D camera names can't be blank).
+    if (name && name !== displayName) {
+      useStore.getState().setCameraName(clip.objectId, name);
+      void send({ kind: 'rename-camera', objectId: clip.objectId, name });
+    }
+    setEditing(null);
+  }
+  // Commit on ANY pointer-press outside the input — elsewhere in the clip,
+  // another clip, the gray timeline, anywhere. Many of those targets
+  // stopPropagation before a blur would fire, so a capture-phase global
+  // listener is the reliable hook. A ref holds the live text so the
+  // listener never reads a stale closure.
+  const editingRef = useRef<string | null>(null);
+  editingRef.current = editing;
+  useEffect(() => {
+    if (!isEditing) return;
+    function onDown(ev: PointerEvent) {
+      if (inputRef.current && ev.target instanceof Node && inputRef.current.contains(ev.target)) return;
+      commitWith(editingRef.current);
+    }
+    // Capture phase so we see the press before clip-drag / selection
+    // handlers can swallow it.
+    window.addEventListener('pointerdown', onDown, true);
+    return () => window.removeEventListener('pointerdown', onDown, true);
+    // commitWith closes over stable refs (store + clip.objectId + display
+    // name via editingRef); re-bind only when edit mode toggles.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [isEditing]);
+  function beginRename() {
+    if (canRename) setEditing(displayName);
+  }
+  function onRenameKey(ev: React.KeyboardEvent<HTMLInputElement>) {
+    if (ev.key === 'Enter') { ev.preventDefault(); commitWith(editing); }
+    else if (ev.key === 'Escape') { ev.preventDefault(); setEditing(null); }
+  }
 
   // Razor cut-line preview: when the razor tool is active and the
   // cursor is over this clip, publish the pointer's viewport X to the
@@ -190,8 +256,34 @@ export function ShotBlock({
         {/* The label BAND always renders so the clip's visual style stays
             consistent as it narrows; only the TEXT is dropped below the
             fit threshold (empty band carries no min-content width, so it
-            doesn't force the clip wider). */}
-        <div className="shot-block__label">{labelFits ? displayName : ''}</div>
+            doesn't force the clip wider). Double-clicking the title (video
+            clips) renames the source camera in the OM — an <input> while
+            editing; the pointer/dblclick handlers stopPropagation so they
+            don't start a clip drag or selection. */}
+        {isEditing ? (
+          // Wrapper keeps the band's full-width footprint so the row's
+          // layout doesn't shift; the input inside sizes to its text.
+          <div className="shot-block__label shot-block__label--editing">
+            <input
+              ref={inputRef}
+              className="shot-block__label-input"
+              value={editing ?? ''}
+              size={Math.max(1, (editing ?? '').length)}
+              onChange={(e) => setEditing(e.target.value)}
+              onKeyDown={onRenameKey}
+              onBlur={() => commitWith(editingRef.current)}
+              onPointerDown={(e) => e.stopPropagation()}
+              onDoubleClick={(e) => e.stopPropagation()}
+            />
+          </div>
+        ) : (
+          <div
+            className="shot-block__label"
+            onDoubleClick={canRename ? (e) => { e.stopPropagation(); beginRename(); } : undefined}
+          >
+            {labelFits ? displayName : ''}
+          </div>
+        )}
         {side === 'video' && (
           <div className="shot-block__icon-wrap">
             <span className={iconClass} />

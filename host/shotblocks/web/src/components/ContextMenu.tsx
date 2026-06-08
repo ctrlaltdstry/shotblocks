@@ -184,7 +184,21 @@ export function ContextMenu() {
       },
     ];
   } else {
+    // Rename targets the right-clicked clip's source camera (OM rename).
+    // Only meaningful for a video clip whose camera is alive — audio has
+    // no camera, an orphan's camera is gone. Enters the same inline editor
+    // the title double-click uses, via renamingClipId.
+    const rcId = menu.targetClipId!;
+    const rcClip = [...state.videoTracks].flatMap((t) => t.clips).find((c) => c.id === rcId);
+    const canRenameClip = !!rcClip && rcClip.objectId > 0 && !state.orphanObjectIds.has(rcClip.objectId);
     items = [
+        {
+          kind: 'item',
+          label: 'Rename',
+          disabled: !canRenameClip,
+          onPick: () => run(() => { state.setRenamingClipId(rcId); }),
+        },
+        { kind: 'separator' },
         {
           kind: 'item',
           label: 'Cut',

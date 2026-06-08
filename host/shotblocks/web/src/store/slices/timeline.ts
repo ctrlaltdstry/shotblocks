@@ -46,6 +46,12 @@ export interface TimelineSlice {
    *  drop out of all three maps. */
   setCameraStatuses: (statuses: { id: number; alive: boolean; name: string; keyTimes?: number[] }[]) => void;
 
+  /** Optimistically set one camera's live name (the clip-title rename
+   *  path). C++ renames the actual BaseObject and echoes the real name
+   *  back via the next `cameras` push; this just makes the title update
+   *  instantly without waiting for the round-trip. */
+  setCameraName: (objectId: number, name: string) => void;
+
   /** Audio media that couldn't be resolved — bytes missing from the
    *  C++ helper or the stored bytes failed to decode. An audio clip
    *  whose mediaId is in this set is an orphan (clip stays on the
@@ -150,6 +156,13 @@ export const createTimelineSlice: StateCreator<State, [], [], TimelineSlice> = (
     if (orphan) next.add(mediaId); else next.delete(mediaId);
     return { orphanMediaIds: next };
   }),
+  setCameraName: (objectId, name) => set((s) => {
+    if (s.cameraNames.get(objectId) === name) return s;
+    const next = new Map(s.cameraNames);
+    next.set(objectId, name);
+    return { cameraNames: next };
+  }),
+
   setCameraStatuses: (statuses) => set((s) => {
     const nextOrphans = new Set<number>();
     const nextNames = new Map<number, string>();
