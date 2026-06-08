@@ -50,7 +50,8 @@ export function SettingsPanel() {
           <span className="settings-panel__title">Settings</span>
           <div
             className="settings-panel__close"
-            title="Close"
+            data-tooltip="Close"
+            data-tooltip-pos="below"
             onClick={() => setOpen(false)}
           >
             &times;

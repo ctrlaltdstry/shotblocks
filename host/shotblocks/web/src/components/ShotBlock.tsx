@@ -201,7 +201,8 @@ export function ShotBlock({
           <button
             className={'audio-waveform-toggle'
               + ((clip.waveformVisible ?? true) ? ' is-on' : ' is-off')}
-            title={labelFits ? ((clip.waveformVisible ?? true) ? 'Hide waveform' : 'Show waveform') : undefined}
+            data-tooltip={labelFits ? ((clip.waveformVisible ?? true) ? 'Hide waveform' : 'Show waveform') : ''}
+            data-tooltip-pos="above"
             onPointerDown={(e) => { e.stopPropagation(); }}
             onClick={(e) => {
               e.stopPropagation();

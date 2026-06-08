@@ -408,8 +408,9 @@ export function InspectorButton({
    *    deactivated/idle state of a button that should still be
    *    visible (e.g. Sync Render Settings while in sync). */
   variant?: 'default' | 'primary' | 'ghost';
-  /** Native browser tooltip — set when the button is disabled to
-   *  explain why (e.g. "No shots to render"). */
+  /** Tooltip text — set when the button is disabled to explain why
+   *  (e.g. "No shots to render"). Rendered via the custom portaled
+   *  tooltip (data-tooltip), not the native title. */
   title?: string;
   /** Triggers a one-shot CSS pulse animation for visual receipt of
    *  a successful click. Caller is responsible for toggling false
@@ -427,7 +428,8 @@ export function InspectorButton({
       }
       onClick={disabled ? undefined : onClick}
       disabled={disabled}
-      title={title}
+      data-tooltip={title || undefined}
+      data-tooltip-pos="above"
     >
       {children}
     </button>

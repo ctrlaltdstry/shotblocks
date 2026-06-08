@@ -114,7 +114,8 @@ export function TrackHeader({ track, side }: { track: Track; side: 'video' | 'au
           type="button"
           className={'track-header__lock track-header__btn'
             + (track.locked ? ' is-on' : '')}
-          title={track.locked ? 'Unlock track' : 'Lock track'}
+          data-tooltip={track.locked ? 'Unlock track' : 'Lock track'}
+          data-tooltip-pos="below"
           aria-pressed={track.locked}
           onClick={toggleLock}
           onMouseDown={(e) => e.preventDefault()}
@@ -130,7 +131,8 @@ export function TrackHeader({ track, side }: { track: Track; side: 'video' | 'au
             type="button"
             className={'track-header__eye track-header__btn'
               + (track.visible ? '' : ' is-off')}
-            title={track.visible ? 'Hide track' : 'Show track'}
+            data-tooltip={track.visible ? 'Hide track' : 'Show track'}
+            data-tooltip-pos="below"
             aria-pressed={!track.visible}
             onClick={toggleVisible}
             onMouseDown={(e) => e.preventDefault()}
@@ -153,7 +155,8 @@ export function TrackHeader({ track, side }: { track: Track; side: 'video' | 'au
               type="button"
               className={'track-header__ms-m track-header__btn'
                 + (track.muted ? ' is-on' : '')}
-              title={track.muted ? 'Unmute track' : 'Mute track'}
+              data-tooltip={track.muted ? 'Unmute track' : 'Mute track'}
+              data-tooltip-pos="below"
               aria-pressed={track.muted}
               onClick={toggleMute}
               onMouseDown={(e) => e.preventDefault()}
@@ -164,7 +167,8 @@ export function TrackHeader({ track, side }: { track: Track; side: 'video' | 'au
               type="button"
               className={'track-header__ms-s track-header__btn'
                 + (track.solo ? ' is-on' : '')}
-              title={track.solo ? 'Unsolo track' : 'Solo track'}
+              data-tooltip={track.solo ? 'Unsolo track' : 'Solo track'}
+              data-tooltip-pos="below"
               aria-pressed={track.solo}
               onClick={toggleSolo}
               onMouseDown={(e) => e.preventDefault()}
@@ -188,7 +192,8 @@ export function TrackHeader({ track, side }: { track: Track; side: 'video' | 'au
           ) : (
             <div
               className="track-header__label"
-              title="Rename track"
+              data-tooltip="Rename track"
+              data-tooltip-pos="below"
               onDoubleClick={beginRename}
               onClick={beginRename}
             >

@@ -183,7 +183,8 @@ export function RangeBar({ rulerRef }: { rulerRef: React.RefObject<HTMLDivElemen
           className="range-bar__grip"
           style={gripStyle}
           onPointerDown={onGripPointerDown}
-          title="Drag to move the play range"
+          data-tooltip="Drag to move the play range"
+          data-tooltip-pos="below"
         >
           <span /><span /><span />
         </div>
@@ -193,7 +194,8 @@ export function RangeBar({ rulerRef }: { rulerRef: React.RefObject<HTMLDivElemen
         className="range-bar__handle range-bar__handle--in"
         style={inHandleStyle}
         onPointerDown={onPointerDown('in')}
-        title="Drag to set play-range in"
+        data-tooltip="Drag to set play-range in"
+        data-tooltip-pos="below"
       >
         <img src={rangeHandleUrl} alt="" />
       </div>
@@ -202,7 +204,8 @@ export function RangeBar({ rulerRef }: { rulerRef: React.RefObject<HTMLDivElemen
         className="range-bar__handle range-bar__handle--out"
         style={outHandleStyle}
         onPointerDown={onPointerDown('out')}
-        title="Drag to set play-range out"
+        data-tooltip="Drag to set play-range out"
+        data-tooltip-pos="below"
       >
         <img src={rangeHandleUrl} alt="" />
       </div>

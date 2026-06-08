@@ -77,7 +77,8 @@ export function DropGhost({
     <div
       className="drop-ghost"
       style={{ left: left + 'px', top: top + 'px', width: width + 'px', height: height + 'px' }}
-      title={dragPreview.sourceName}
+      data-tooltip={dragPreview.sourceName}
+      data-tooltip-pos="below"
     />
   );
 }
