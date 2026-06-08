@@ -332,14 +332,15 @@ export function Lane({ track, side }: { track: Track; side: 'video' | 'audio' })
     const dxPx = ev.clientX - t.startClientX;
     const dxFrames = Math.round(dxPx / Math.max(0.0001, t.pxPerFrame));
     // Raw cursor-driven edge target frame, before snap. Clamped to
-    // [0, docFrames] so the cursor going past the Inspector panel
-    // (or off-screen left of frame 0) doesn't keep stretching the
-    // trim past the document. Mirrors the body-drag upper-clamp.
-    const docFrames = useStore.getState().docFrames;
+    // [docMin, docMax] so the cursor going past the Inspector panel
+    // (or off-screen left of the doc start) doesn't keep stretching the
+    // trim past the document. Frames are absolute (docMin can be
+    // negative — v2 mirrors C4D's ruler). Mirrors the body-drag clamp.
+    const { docMin, docMax } = useStore.getState();
     const rawWantUnclamped = t.edge === 'left'
       ? t.origInFrame + dxFrames
       : t.origOutFrame + dxFrames;
-    const rawWant = Math.min(docFrames, Math.max(0, rawWantUnclamped));
+    const rawWant = Math.min(docMax, Math.max(docMin, rawWantUnclamped));
 
     // Snap to edit points across the WHOLE timeline — every clip's
     // in/out on both sides (video + audio), all tracks — excluding the
@@ -440,12 +441,12 @@ export function Lane({ track, side }: { track: Track; side: 'video' | 'audio' })
     if (!r || !r.active) return;
     const dxPx = ev.clientX - r.startClientX;
     const dxFrames = Math.round(dxPx / Math.max(0.0001, r.pxPerFrame));
-    // Clamp the seam frame to [0, docFrames] so the cursor going past
+    // Clamp the seam frame to [docMin, docMax] so the cursor going past
     // the Inspector (or off-screen left) doesn't keep stretching the
-    // roll past the document. Mirrors the body-drag and trim-drag
-    // upper clamps.
-    const docFrames = useStore.getState().docFrames;
-    const rawSeam = Math.min(docFrames, Math.max(0, r.origSeamFrame + dxFrames));
+    // roll past the document. Frames are absolute (docMin can be
+    // negative — v2 mirrors C4D's ruler). Mirrors body-drag/trim clamps.
+    const { docMin, docMax } = useStore.getState();
+    const rawSeam = Math.min(docMax, Math.max(docMin, r.origSeamFrame + dxFrames));
 
     // Snap the seam to edit points across the WHOLE timeline — every
     // clip's in/out on BOTH sides (video + audio), plus the playhead.

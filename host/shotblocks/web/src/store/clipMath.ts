@@ -64,6 +64,9 @@ export function findFreeSlot(
   desiredInFrame: number,
   duration: number,
   snapFrames: number = 8,
+  // Lowest legal inFrame — the document floor. Absolute frames mean this
+  // is docMin (can be negative; v2 mirrors C4D's ruler), not 0.
+  floorFrame: number = 0,
 ): { inFrame: number; outFrame: number } {
   const dur = Math.max(1, duration);
   const desiredOutFrame = desiredInFrame + dur;
@@ -104,7 +107,8 @@ export function findFreeSlot(
 
   // If snap target fits, use it.
   if (bestSnap && fitsInAnyGap(bestSnap.inFrame)) {
-    return { inFrame: Math.max(0, bestSnap.inFrame), outFrame: Math.max(0, bestSnap.inFrame) + dur };
+    const inF = Math.max(floorFrame, bestSnap.inFrame);
+    return { inFrame: inF, outFrame: inF + dur };
   }
 
   // Otherwise, original "nearest free gap" placement. Closest start
@@ -128,7 +132,7 @@ export function findFreeSlot(
     const last = sorted[sorted.length - 1];
     bestStart = last.outFrame + MIN_GAP_FRAMES;
   }
-  if (bestStart < 0) bestStart = 0;
+  if (bestStart < floorFrame) bestStart = floorFrame;
   return { inFrame: bestStart, outFrame: bestStart + dur };
 }
 

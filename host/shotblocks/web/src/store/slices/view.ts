@@ -39,12 +39,12 @@ export const createViewSlice: StateCreator<State, [], [], ViewSlice> = (set) => 
   })),
 
   zoomAll: () => set((s) => {
-    // Show the entire timeline. docFrames is the doc length; widen the
-    // scroll extent (max) to match so the full span fits in view, then
-    // set the visible window to the whole thing. Mirrors the full-reset
-    // shape used elsewhere ({min:0, max:docFrames, vMin:0, vMax:docFrames}).
-    const full = Math.max(1, s.docFrames);
-    return { h: { min: 0, max: full, vMin: 0, vMax: full } };
+    // Show the entire timeline. The doc spans absolute frames
+    // [docMin, docMax] (docMin can be negative — v2 mirrors C4D's ruler);
+    // set both the scroll extent and the visible window to that whole span.
+    const lo = s.docMin;
+    const hi = Math.max(lo + 1, s.docMax);
+    return { h: { min: lo, max: hi, vMin: lo, vMax: hi } };
   }),
 
   setVVideoVisible: (vMin, vMax) => set((s) => ({

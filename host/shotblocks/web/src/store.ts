@@ -78,14 +78,20 @@ export {
 export interface State {
   // From C++
   fps: number;
+  // Absolute document frame bounds — v2's ruler mirrors C4D's own, so
+  // docMin can be negative (MinTime). All timeline frame coords are
+  // absolute frames in [docMin, docMax]. docFrames is the span, kept for
+  // length-based callers. See memory project_v2_absolute_frame_coords.
+  docMin: number;
+  docMax: number;
   docFrames: number;
   currentFrame: number;
   playing: boolean;
   // C4D's loop range — what plays under spacebar when loop is enabled
   // or what bounds the play head when the loop button is on. Both
-  // frames are in doc-relative coords starting at 0. C++ ships these
-  // in doc-info and on EVMSG_CHANGE; JS sends edits back via the
-  // 'set-play-range' command.
+  // frames are absolute document frames (docMin can be negative). C++
+  // ships these in doc-info and on EVMSG_CHANGE; JS sends edits back via
+  // the 'set-play-range' command.
   playRangeIn: number;
   playRangeOut: number;
   // Whether C4D's loop mode is on. v2 owns this independently because
@@ -380,7 +386,7 @@ export interface State {
 
   // Actions
   setTick: (frame: number, fps: number, playing: boolean) => void;
-  setDocInfo: (fps: number, docFrames: number, playRangeIn?: number, playRangeOut?: number) => void;
+  setDocInfo: (fps: number, docMin: number, docMax: number, playRangeIn?: number, playRangeOut?: number) => void;
   /** Set the play range (in/out frames). Caller is responsible for
    *  also pushing this to C++ via send({kind:'set-play-range', ...}). */
   setPlayRange: (inFrame: number, outFrame: number) => void;

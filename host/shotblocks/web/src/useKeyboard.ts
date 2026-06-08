@@ -70,7 +70,7 @@ export function useKeyboard(): void {
         ev.preventDefault();
         ev.stopPropagation();
         const st = useStore.getState();
-        const frame = Math.max(0, st.scrubFrame ?? st.currentFrame);
+        const frame = Math.max(st.docMin, st.scrubFrame ?? st.currentFrame);
         const edge: 'in' | 'out' = ev.key === '[' ? 'in' : 'out';
         if (ev.altKey) {
           trimSelectionToPlayhead(sel, edge, frame);
@@ -122,7 +122,7 @@ export function useKeyboard(): void {
         ev.preventDefault();
         const s = useStore.getState();
         const frame = s.scrubFrame ?? s.currentFrame;
-        const newIn  = Math.max(0, Math.min(frame, s.playRangeOut - 1));
+        const newIn  = Math.max(s.docMin, Math.min(frame, s.playRangeOut - 1));
         s.setPlayRange(newIn, s.playRangeOut);
         void send({ kind: 'set-play-range', inFrame: newIn, outFrame: s.playRangeOut });
         return;
@@ -131,7 +131,7 @@ export function useKeyboard(): void {
         ev.preventDefault();
         const s = useStore.getState();
         const frame = s.scrubFrame ?? s.currentFrame;
-        const newOut = Math.max(s.playRangeIn + 1, Math.min(frame, s.docFrames));
+        const newOut = Math.max(s.playRangeIn + 1, Math.min(frame, s.docMax));
         s.setPlayRange(s.playRangeIn, newOut);
         void send({ kind: 'set-play-range', inFrame: s.playRangeIn, outFrame: newOut });
         return;
@@ -146,12 +146,12 @@ export function useKeyboard(): void {
         rangeToSelectionOrAll(useStore.getState());
         return;
       }
-      // `/` → reset the play range to the full timeline (0 → docFrames).
+      // `/` → reset the play range to the full timeline (docMin → docMax).
       if (!mod && !ev.altKey && ev.key === '/') {
         ev.preventDefault();
         const s = useStore.getState();
-        s.setPlayRange(0, s.docFrames);
-        void send({ kind: 'set-play-range', inFrame: 0, outFrame: s.docFrames });
+        s.setPlayRange(s.docMin, s.docMax);
+        void send({ kind: 'set-play-range', inFrame: s.docMin, outFrame: s.docMax });
         return;
       }
       // `Shift+/` (which the keyboard reports as `?`) → set play-range
@@ -318,8 +318,8 @@ export function rangeToSelectionOrAll(s: ReturnType<typeof useStore.getState>) {
     }
   }
   if (!Number.isFinite(minIn) || !Number.isFinite(maxOut)) return;
-  const newIn  = Math.max(0, minIn | 0);
-  const newOut = Math.max(newIn + 1, Math.min(maxOut | 0, s.docFrames));
+  const newIn  = Math.max(s.docMin, minIn | 0);
+  const newOut = Math.max(newIn + 1, Math.min(maxOut | 0, s.docMax));
   s.setPlayRange(newIn, newOut);
   void send({ kind: 'set-play-range', inFrame: newIn, outFrame: newOut });
 }
@@ -381,13 +381,15 @@ function moveSelectionToPlayhead(ids: Set<number>, edge: 'in' | 'out', frame: nu
     if (!found) continue;
     const dur = found.clip.outFrame - found.clip.inFrame;
     const newIn = edge === 'in' ? frame : frame - dur;
-    if (newIn < 0) continue; // can't place the clip before frame 0
+    // moveClip clamps to the doc floor (docMin); negative target frames
+    // are legal (v2 mirrors C4D's ruler), so no pre-guard here.
     moveClip(id, found.trackId, found.trackId, newIn);
   }
 }
 
 /** Shift every selected clip by `delta` frames. Clamps so no clip
- *  goes below frame 0; preserves relative offsets for groups. Clips
+ *  goes below the doc floor (docMin — absolute frames, can be negative;
+ *  v2 mirrors C4D's ruler); preserves relative offsets for groups. Clips
  *  on a locked track don't move (and don't constrain the clamp). */
 function nudgeSelection(ids: Set<number>, delta: number) {
   const s = useStore.getState();
@@ -403,7 +405,7 @@ function nudgeSelection(ids: Set<number>, delta: number) {
   }
   if (!Number.isFinite(minIn)) return;
   let dx = delta;
-  if (minIn + dx < 0) dx = -minIn;
+  if (minIn + dx < s.docMin) dx = s.docMin - minIn;
   if (dx === 0) return;
   const shift = (t: typeof s.videoTracks[number]) =>
     t.locked ? t : {

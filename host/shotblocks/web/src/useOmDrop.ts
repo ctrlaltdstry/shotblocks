@@ -138,9 +138,10 @@ function resolveDrop(viewportX: number, viewportY: number, items: OmItem[]): Res
   const cursorFrame = state.h.vMin + xInLane / pxPerFrame;
   // Center the ghost (and the eventual dropped clip) under the cursor
   // — feels like the mouse is "grabbing" the clip rather than tugging
-  // it from one end. Clamp the LEFT edge to >= 0 so the ghost doesn't
-  // extend off the timeline's left edge when the cursor is near frame 0.
-  const startFrame = Math.max(0, Math.round(cursorFrame - duration / 2));
+  // it from one end. Clamp the LEFT edge to >= docMin so the ghost
+  // doesn't extend off the timeline's left edge (absolute frames; docMin
+  // can be negative — v2 mirrors C4D's ruler).
+  const startFrame = Math.max(state.docMin, Math.round(cursorFrame - duration / 2));
 
   return {
     kind: 'create',

@@ -277,13 +277,14 @@ export const createTimelineSlice: StateCreator<State, [], [], TimelineSlice> = (
         working = [...working, { id: toNum, name: (side === 'video' ? 'Video ' : 'Audio ') + toNum, clips: [], ...TRACK_FLAG_DEFAULTS }];
       }
 
-      // Place on dest at the cursor-derived inFrame, clamped to >= 0.
-      // No collision-avoid: overlaps get resolved by replaceOverlap
+      // Place on dest at the cursor-derived inFrame, clamped to the doc
+      // floor (docMin — absolute frames, can be negative; v2 mirrors C4D's
+      // ruler). No collision-avoid: overlaps get resolved by replaceOverlap
       // below (Python's "replace" mode, sb_shot_model.py:_resolve_position).
       // snapFrames is unused here on commit — live preview already
       // applied snap via magneticSnap and passes the snapped value in.
       void snapFrames;
-      const placedIn = Math.max(0, newInFrame);
+      const placedIn = Math.max(s.docMin, newInFrame);
       const placedOut = placedIn + duration;
       const movedClip: Clip = { ...moving, inFrame: placedIn, outFrame: placedOut };
 
@@ -344,18 +345,21 @@ export const createTimelineSlice: StateCreator<State, [], [], TimelineSlice> = (
       //   - left edge can't move earlier than `mediaOffset` frames
       //     before the current head (that's media frame 0).
       //   - right edge can't move past the media's tail.
-      let minIn = 0;
+      // Floor on the doc start (docMin — absolute frames, can be negative;
+      // v2 mirrors C4D's ruler). Audio additionally can't reveal media that
+      // doesn't exist, so its head can't trim left of media frame 0; take
+      // whichever floor is higher.
+      let minIn = s.docMin;
       let maxOut = Infinity;
       if (side === 'audio') {
         const mediaOffset = clip.mediaOffsetFrames ?? 0;
         const clipDur = clip.outFrame - clip.inFrame;
         const mediaDur = clip.mediaDurationFrames ?? clipDur;
-        minIn = clip.inFrame - mediaOffset;
+        minIn = Math.max(s.docMin, clip.inFrame - mediaOffset);
         maxOut = clip.inFrame - mediaOffset + mediaDur;
       }
       if (edge === 'left') {
-        newIn = Math.max(minIn,
-          Math.max(0, Math.min(wantFrame, clip.outFrame - MIN_CLIP_FRAMES)));
+        newIn = Math.max(minIn, Math.min(wantFrame, clip.outFrame - MIN_CLIP_FRAMES));
       } else {
         newOut = Math.min(maxOut,
           Math.max(clip.inFrame + MIN_CLIP_FRAMES, wantFrame));
@@ -494,11 +498,12 @@ export const createTimelineSlice: StateCreator<State, [], [], TimelineSlice> = (
       for (const loc of otherLocs) {
         if (otherLockedIds.has(loc.trackNum)) return s;
       }
-      // Clamp so no selected clip — on either side — goes below
-      // frame 0.
+      // Clamp so no selected clip — on either side — goes below the doc
+      // floor (docMin; absolute frames, can be negative — v2 mirrors C4D's
+      // ruler).
       const allLocs = [...anchorLocs, ...otherLocs];
       const minIn = Math.min(...allLocs.map((l) => l.inFrame));
-      if (minIn + dxFrames < 0) dxFrames = -minIn;
+      if (minIn + dxFrames < s.docMin) dxFrames = s.docMin - minIn;
       if (dxFrames === 0 && dtTrack === 0) {
         ok = true;
         return s;
@@ -945,6 +950,8 @@ export const createTimelineSlice: StateCreator<State, [], [], TimelineSlice> = (
         track.clips,
         clip.inFrame,
         clip.outFrame - clip.inFrame,
+        8,
+        s.docMin,
       );
       const newClip = { id, ...clip, inFrame: placed.inFrame, outFrame: placed.outFrame };
       const newTracks = list.map((t, i) => i === idx

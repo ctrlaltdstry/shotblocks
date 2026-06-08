@@ -16,6 +16,15 @@ const SCRUB_GRACE_MS = 120;
  *  `no-c4d-cycle-api`). */
 export interface PlaybackSlice {
   fps: number;
+  /** Absolute document frame bounds — v2's ruler mirrors C4D's own, so
+   *  docMin can be negative (MinTime). All timeline frame coords (clips,
+   *  playhead, range) are absolute document frames in [docMin, docMax].
+   *  See memory project_v2_absolute_frame_coords. */
+  docMin: number;
+  docMax: number;
+  /** Document span = docMax - docMin. Kept in sync by setDocInfo for the
+   *  length-based callers (Add Camera gap math, zoom-all). Frame *positions*
+   *  use docMin/docMax, not this. */
   docFrames: number;
   currentFrame: number;
   playing: boolean;
@@ -29,7 +38,7 @@ export interface PlaybackSlice {
   c4dAudioFollows: boolean;
 
   setTick: (frame: number, fps: number, playing: boolean) => void;
-  setDocInfo: (fps: number, docFrames: number, playRangeIn?: number, playRangeOut?: number) => void;
+  setDocInfo: (fps: number, docMin: number, docMax: number, playRangeIn?: number, playRangeOut?: number) => void;
   setPlayRange: (inFrame: number, outFrame: number) => void;
   setLoopEnabled: (on: boolean) => void;
   setScrubFrame: (frame: number | null) => void;
@@ -38,6 +47,8 @@ export interface PlaybackSlice {
 
 export const createPlaybackSlice: StateCreator<State, [], [], PlaybackSlice> = (set) => ({
   fps: 30,
+  docMin: 0,
+  docMax: 150,
   docFrames: 150,
   currentFrame: 0,
   playing: false,
@@ -61,7 +72,7 @@ export const createPlaybackSlice: StateCreator<State, [], [], PlaybackSlice> = (
     // clear instantly and jump the playhead back. During an active
     // scrub drag each move re-sets scrubFrame, so a transient clear
     // here is harmless. JS frameAt and C++ both clamp to the same
-    // [0, docFrames] range, so the echo always hits the exact frame.
+    // [docMin, docMax] range, so the echo always hits the exact frame.
     //
     // BUT during PLAYBACK the transport keeps advancing through (and
     // past) the seeked frame, so the echo never reports `=== scrubFrame`
@@ -85,28 +96,37 @@ export const createPlaybackSlice: StateCreator<State, [], [], PlaybackSlice> = (
 
   setScrubFrame: (frame) => set({ scrubFrame: frame, scrubFrameAtMs: nowMs() }),
 
-  // Cross-slice write: also fixes the h-window's max when docFrames
+  // Cross-slice write: also fixes the h-window bounds when the doc range
   // changes. Conceptually this is "C++ shipped new doc info; update
-  // everything that depends on doc length" — h.max is one of those.
-  setDocInfo: (fps, docFrames, playRangeIn, playRangeOut) => set((s) => {
+  // everything that depends on the doc range" — the h-window is one of
+  // those. The window spans absolute frames [docMin, docMax] (docMin can
+  // be negative — v2 mirrors C4D's ruler).
+  setDocInfo: (fps, docMin, docMax, playRangeIn, playRangeOut) => set((s) => {
     const wasFullView = s.h.vMin === s.h.min && s.h.vMax === s.h.max;
     const next: Partial<State> = {
       fps: fps > 0 ? fps : s.fps,
-      docFrames,
+      docMin,
+      docMax,
+      docFrames: docMax - docMin,
     };
     if (wasFullView) {
-      next.h = { min: 0, max: docFrames, vMin: 0, vMax: docFrames };
+      next.h = { min: docMin, max: docMax, vMin: docMin, vMax: docMax };
     } else {
-      next.h = { ...s.h, max: docFrames };
+      next.h = { ...s.h, min: docMin, max: docMax };
     }
     if (typeof playRangeIn === 'number')  next.playRangeIn  = playRangeIn;
     if (typeof playRangeOut === 'number') next.playRangeOut = playRangeOut;
     return next;
   }),
 
-  setPlayRange: (inFrame, outFrame) => set({
-    playRangeIn:  Math.max(0, Math.floor(inFrame)),
-    playRangeOut: Math.max(Math.floor(inFrame) + 1, Math.floor(outFrame)),
+  // Range bounds are absolute frames; floor on docMin (not 0) so an
+  // in-point can sit in the negative region of the doc.
+  setPlayRange: (inFrame, outFrame) => set((s) => {
+    const lo = Math.floor(Math.max(s.docMin, inFrame));
+    return {
+      playRangeIn:  lo,
+      playRangeOut: Math.max(lo + 1, Math.floor(outFrame)),
+    };
   }),
 
   setLoopEnabled: (on) => set({ loopEnabled: on }),

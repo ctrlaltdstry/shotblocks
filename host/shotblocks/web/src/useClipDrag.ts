@@ -215,23 +215,20 @@ export function useClipDrag(
 
       const duration = d.startOutFrame - d.startInFrame;
       const frameDelta = Math.round(dx / Math.max(0.0001, d.pxPerFrame));
-      // Clamp the dragged position to [0, docFrames - duration] so the
-      // clip can't slide past either end of the document. The lower
-      // clamp prevents inFrame < 0; the upper clamp prevents the clip
-      // from translating visually under the Inspector panel when the
-      // cursor keeps moving right past the canvas edge. Without the
-      // upper clamp, frameDelta grows without bound and the clip's
-      // transform pushes it under the Inspector. (No auto-scroll on
-      // canvas-edge in v1 — out of scope.)
-      const docFrames = useStore.getState().docFrames;
-      // Upper clamp: the clip's LEFT edge must stay on the timeline.
-      // If the clip itself is longer than the doc, its right edge will
-      // hang off the right side — that's fine, the user can still drag
-      // the clip left/right. The previous clamp (docFrames - duration)
-      // produced maxIn = 0 for over-long clips, pinning every drag to
-      // frame 0 (audio files imported into a short timeline hit this).
-      const maxIn = Math.max(0, docFrames - 1);
-      const rawInFrame = Math.min(maxIn, Math.max(0, d.startInFrame + frameDelta));
+      // Clamp the dragged position to [docMin, docMax - 1] so the clip
+      // can't slide past either end of the document. Frames are absolute
+      // (docMin can be negative — v2 mirrors C4D's ruler), so the lower
+      // clamp is docMin, not 0 — a clip can be parked in the negative
+      // region. The upper clamp keeps the clip's LEFT edge on the
+      // timeline (prevents the clip translating under the Inspector when
+      // the cursor runs past the right edge; no canvas-edge auto-scroll).
+      const { docMin, docMax } = useStore.getState();
+      // If the clip itself is longer than the doc, its right edge hangs
+      // off the right side — fine, the user can still drag it. The old
+      // clamp (docMax - duration) pinned over-long clips to docMin
+      // (audio imported into a short timeline hit this).
+      const maxIn = Math.max(docMin, docMax - 1);
+      const rawInFrame = Math.min(maxIn, Math.max(docMin, d.startInFrame + frameDelta));
 
       const target = resolveLane(ev.clientX, ev.clientY, side);
       if (!target) {
@@ -288,7 +285,7 @@ export function useClipDrag(
       const snapActive = state.snapEnabled || ev.shiftKey;
       const snapFrames = snapActive ? Math.max(1, SNAP_PIXEL_RADIUS / d.pxPerFrame) : 0;
       const snap = magneticSnap(rawInFrame, duration, editPoints, snapFrames);
-      const snappedIn = Math.max(0, snap.inFrame);
+      const snappedIn = Math.max(state.docMin, snap.inFrame);
       state.setSnapIndicatorFrames(snap.targets);
       d.previewTrackId = target.trackId;
       d.previewInFrame = snappedIn;

@@ -12,7 +12,7 @@ export function useHost(): void {
           useStore.getState().setTick(msg.frame, msg.fps, msg.playing);
           break;
         case 'doc-info':
-          useStore.getState().setDocInfo(msg.fps, msg.docFrames, msg.playRangeIn, msg.playRangeOut);
+          useStore.getState().setDocInfo(msg.fps, msg.docMin, msg.docMax, msg.playRangeIn, msg.playRangeOut);
           break;
         case 'loop-state':
           // C4D's native loop button changed — mirror into the store

@@ -1700,15 +1700,16 @@ private:
 				_v2Playing = true;
 				Int32 fps = doc->GetFps();
 				if (fps <= 0) fps = 30;
-				BaseTime minT = doc->GetMinTime();
-				Int32 minFrame = minT.GetFrame(fps);
-				Int32 curFrame = doc->GetTime().GetFrame(fps) - minFrame;
+				// Frames are absolute document frames (v2 mirrors C4D's
+				// own ruler, MinTime included — see memory
+				// project_v2_absolute_frame_coords). _v2Range* are absolute.
+				Int32 curFrame = doc->GetTime().GetFrame(fps);
 				// If the playhead is outside the play range, snap to
 				// rangeIn before starting.
 				if (curFrame < _v2RangeIn || curFrame >= _v2RangeOut)
 				{
 					curFrame = _v2RangeIn;
-					SetDocumentTime(doc, BaseTime(minFrame + curFrame, fps));
+					SetDocumentTime(doc, BaseTime(curFrame, fps));
 				}
 				ApplyV2RangeToDocLoop(doc);
 				RunAnimation(doc, true, false);  // play forward
@@ -1721,9 +1722,17 @@ private:
 			// Cache the v2 play range and push it to C4D's loop range so
 			// native play (which we delegate to) wraps/stops there. If
 			// playback is live, update the loop range immediately.
+			// Absolute document frames (v2 mirrors C4D's ruler). Clamp the
+			// in-point to the doc floor (MinTime), not 0.
 			Int32 inFrame  = ParseIntField(body, "inFrame");
 			Int32 outFrame = ParseIntField(body, "outFrame");
-			if (inFrame  < 0) inFrame  = 0;
+			{
+				BaseDocument* rdoc = GetActiveDocument();
+				Int32 rfps = rdoc ? rdoc->GetFps() : 30;
+				if (rfps <= 0) rfps = 30;
+				Int32 rmin = rdoc ? rdoc->GetMinTime().GetFrame(rfps) : 0;
+				if (inFrame < rmin) inFrame = rmin;
+			}
 			if (outFrame <= inFrame) outFrame = inFrame + 1;
 			_v2RangeIn  = inFrame;
 			_v2RangeOut = outFrame;
@@ -1918,7 +1927,7 @@ private:
 	// Point C4D's loop range at the v2 play range so native play
 	// (RunAnimation) wraps/stops there. C4D's loop *mode* button isn't
 	// SDK-settable, but the loop min/max times are. Range is stored as
-	// frames relative to doc min; convert to absolute BaseTime.
+	// absolute document frames (v2 mirrors C4D's ruler).
 	void ApplyV2RangeToDocLoop(BaseDocument* doc)
 	{
 		if (!doc)
@@ -1928,8 +1937,9 @@ private:
 			fps = 30;
 		Int32 minFrame = doc->GetMinTime().GetFrame(fps);
 		Int32 maxFrame = doc->GetMaxTime().GetFrame(fps);
-		Int32 inAbs  = minFrame + _v2RangeIn;
-		Int32 outAbs = minFrame + _v2RangeOut - 1;   // inclusive last frame
+		// _v2Range* are absolute document frames already (v2 mirrors C4D).
+		Int32 inAbs  = _v2RangeIn;
+		Int32 outAbs = _v2RangeOut - 1;   // inclusive last frame
 		// Clamp to the document's own range so we never set a loop
 		// outside [min, max] (C4D ignores / misbehaves otherwise).
 		if (inAbs  < minFrame) inAbs  = minFrame;
@@ -1999,18 +2009,28 @@ private:
 		Int32 fps = doc->GetFps();
 		BaseTime minT = doc->GetMinTime();
 		BaseTime maxT = doc->GetMaxTime();
-		Int32 docFrames = (Int32)(maxT.GetFrame(fps) - minT.GetFrame(fps));
-		// playRange fields broadcast the v2-owned cache, not C4D's
-		// native loop bounds (which v2 deliberately doesn't touch so
-		// C4D's own play button stays independent). On first
-		// connection, default to [0, docFrames] so JS sees the full
-		// doc as "no play range defined."
-		if (_v2RangeOut > docFrames || _v2RangeOut == (1 << 30))
-			_v2RangeOut = docFrames;
+		// Absolute document frame bounds — v2's ruler mirrors C4D's own
+		// (MinTime can be negative). docFrames is the span, kept for the
+		// places that still want a length. (see memory
+		// project_v2_absolute_frame_coords)
+		Int32 docMin = minT.GetFrame(fps);
+		Int32 docMax = maxT.GetFrame(fps);
+		Int32 docFrames = docMax - docMin;
+		// playRange fields broadcast the v2-owned cache (now ABSOLUTE
+		// frames), not C4D's native loop bounds (which v2 deliberately
+		// doesn't touch so C4D's own play button stays independent). On
+		// first connection the cache holds its sentinels (in=0, out=1<<30
+		// — "not set yet"); default to the full [docMin, docMax] so JS sees
+		// the whole doc as "no play range defined."
+		if (_v2RangeOut == (1 << 30) || _v2RangeOut > docMax)
+			_v2RangeOut = docMax;
+		if (_v2RangeIn == -1000000000 || _v2RangeIn < docMin)
+			_v2RangeIn = docMin;
 		char buf[256];
 		_snprintf_s(buf, sizeof(buf), _TRUNCATE,
-			"{\"kind\":\"doc-info\",\"fps\":%d,\"docFrames\":%d,\"playRangeIn\":%d,\"playRangeOut\":%d}",
-			(int)fps, (int)docFrames, (int)_v2RangeIn, (int)_v2RangeOut);
+			"{\"kind\":\"doc-info\",\"fps\":%d,\"docMin\":%d,\"docMax\":%d,\"docFrames\":%d,\"playRangeIn\":%d,\"playRangeOut\":%d}",
+			(int)fps, (int)docMin, (int)docMax, (int)docFrames,
+			(int)_v2RangeIn, (int)_v2RangeOut);
 		_htmlView->PostWebMessage(maxon::String(buf));
 	}
 
@@ -2087,9 +2107,9 @@ private:
 		Int32 fps = doc->GetFps();
 		Int32 minFrame = doc->GetMinTime().GetFrame(fps);
 		Int32 maxFrame = doc->GetMaxTime().GetFrame(fps);
-		if (frame < 0)
-			frame = 0;
-		Int32 absFrame = minFrame + frame;
+		// `frame` is an absolute document frame (v2 mirrors C4D's ruler,
+		// MinTime included). Clamp to the doc's own range.
+		Int32 absFrame = frame;
 		if (absFrame < minFrame)
 			absFrame = minFrame;
 		if (absFrame > maxFrame)
@@ -3179,7 +3199,11 @@ private:
 		const Int32 fps = doc->GetFps();
 		const Int32 nowFrame = doc->GetTime().GetFrame(fps);
 		BaseObject* nowCam = nullptr;
-		Int32 nowCamBestFrame = -1;
+		// "Before any event" sentinel. Frames are absolute and can be
+		// negative (v2 mirrors C4D's ruler), so this must be lower than any
+		// real frame — -1 would skip a camera whose event sits in the doc's
+		// negative region. (project_v2_absolute_frame_coords)
+		Int32 nowCamBestFrame = -1000000000;
 		Int keyCount = 0;
 		for (const auto& ev : _stageEvents)
 		{
@@ -4214,7 +4238,11 @@ private:
 	// True while the user scrub-holds the v2 playhead during playback.
 	// scrub-begin stops native play; scrub-end resumes it.
 	Bool                 _v2ScrubPaused{false};
-	Int32                _v2RangeIn{0};
+	// Absolute document frames (v2 mirrors C4D's ruler). Sentinels mean
+	// "not set yet" → PostDocInfo defaults them to the full doc range
+	// [docMin, docMax]. MinTime can be negative, so the in-sentinel is a
+	// value no real frame takes (-1e9), not 0.
+	Int32                _v2RangeIn{-1000000000};
 	Int32                _v2RangeOut{1 << 30};
 	Bool                 _v2LoopEnabled{false};
 	// Last loop on/off (IsCommandChecked(12427)) the Timer pushed to JS.

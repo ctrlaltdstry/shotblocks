@@ -33,7 +33,9 @@ export const createMarkersSlice: StateCreator<State, [], [], MarkersSlice> = (se
   markersVisible: true,
 
   addMarker: (frame) => set((s) => {
-    const f = Math.max(0, frame | 0);
+    // Floor on the doc start (docMin; absolute frames, can be negative —
+    // v2 mirrors C4D's ruler).
+    const f = Math.max(s.docMin, frame | 0);
     if (s.markers.includes(f)) return s;
     const next = [...s.markers, f].sort((a, b) => a - b);
     return { markers: next };

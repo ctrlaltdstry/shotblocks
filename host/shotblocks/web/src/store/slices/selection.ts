@@ -138,8 +138,10 @@ export const createSelectionSlice: StateCreator<State, [], [], SelectionSlice> =
         clip: {
           ...e.clip,
           id,
-          inFrame: Math.max(0, e.clip.inFrame + delta),
-          outFrame: Math.max(1, e.clip.outFrame + delta),
+          // Floor on the doc start (docMin; absolute frames, can be
+          // negative — v2 mirrors C4D's ruler).
+          inFrame: Math.max(s.docMin, e.clip.inFrame + delta),
+          outFrame: Math.max(s.docMin + 1, e.clip.outFrame + delta),
         },
       });
     }

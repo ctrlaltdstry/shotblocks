@@ -23,7 +23,8 @@ export function RangeBar({ rulerRef }: { rulerRef: React.RefObject<HTMLDivElemen
   const h = useStore((s) => s.h);
   const playRangeIn  = useStore((s) => s.playRangeIn);
   const playRangeOut = useStore((s) => s.playRangeOut);
-  const docFrames    = useStore((s) => s.docFrames);
+  const docMin       = useStore((s) => s.docMin);
+  const docMax       = useStore((s) => s.docMax);
   const setPlayRange = useStore((s) => s.setPlayRange);
 
   const visibleSpan = Math.max(1, h.vMax - h.vMin);
@@ -34,8 +35,8 @@ export function RangeBar({ rulerRef }: { rulerRef: React.RefObject<HTMLDivElemen
     return w / visibleSpan;
   }
   function commit(inFrame: number, outFrame: number) {
-    inFrame  = Math.max(0, Math.min(docFrames, inFrame));
-    outFrame = Math.max(inFrame + 1, Math.min(docFrames, outFrame));
+    inFrame  = Math.max(docMin, Math.min(docMax, inFrame));
+    outFrame = Math.max(inFrame + 1, Math.min(docMax, outFrame));
     setPlayRange(inFrame, outFrame);
     void send({ kind: 'set-play-range', inFrame, outFrame });
   }
@@ -98,8 +99,8 @@ export function RangeBar({ rulerRef }: { rulerRef: React.RefObject<HTMLDivElemen
 
     function move(mv: PointerEvent) {
       const delta = Math.round((mv.clientX - startClientX) / px);
-      const maxIn = Math.max(0, docFrames - length);
-      const newIn = Math.max(0, Math.min(maxIn, startIn + delta));
+      const maxIn = Math.max(docMin, docMax - length);
+      const newIn = Math.max(docMin, Math.min(maxIn, startIn + delta));
       commit(newIn, newIn + length);
     }
     function up() {
@@ -160,7 +161,7 @@ export function RangeBar({ rulerRef }: { rulerRef: React.RefObject<HTMLDivElemen
   // play range defined" — the user gets just the two thin blue bars
   // at the doc edges to grab and pull inward. No blue tint over
   // the ruler. Matches the Figma design's no-play-range state.
-  const rangeIsFullDoc = playRangeIn <= 0 && playRangeOut >= docFrames;
+  const rangeIsFullDoc = playRangeIn <= docMin && playRangeOut >= docMax;
 
   return (
     <>

@@ -53,7 +53,7 @@ export function useAddCamera(): () => Promise<void> {
     //      clip on whichever side — left or right — has more open space.
     // addClip's findFreeSlot is still the final safety net (it nudges to
     // the nearest free spot if our computed frame somehow doesn't fit).
-    const ph = Math.max(0, s.scrubFrame ?? s.currentFrame);
+    const ph = Math.max(s.docMin, s.scrubFrame ?? s.currentFrame);
     const num = parseInt(targetTrackId.slice(1), 10);
     const track = s.videoTracks.find((t) => t.id === num);
     const clips = track ? [...track.clips].sort((a, b) => a.inFrame - b.inFrame) : [];
@@ -70,14 +70,16 @@ export function useAddCamera(): () => Promise<void> {
       const hit = clips.find((c) => ph < c.outFrame && ph + DUR > c.inFrame) ?? clips[0];
       const hitIdx = clips.indexOf(hit);
       // Open space to the LEFT of `hit`: from the previous clip's end
-      // (or doc start) up to hit.inFrame.
+      // (or doc start) up to hit.inFrame. Frames are absolute — the doc
+      // can start negative (v2 mirrors C4D's ruler), so "doc start" is
+      // docMin, not 0.
       const prev = clips[hitIdx - 1];
-      const leftStart = prev ? prev.outFrame : 0;
+      const leftStart = prev ? prev.outFrame : s.docMin;
       const leftSpace = hit.inFrame - leftStart;
       // Open space to the RIGHT of `hit`: from hit.outFrame up to the
-      // next clip's start (or doc end).
+      // next clip's start (or doc end = docMax).
       const next = clips[hitIdx + 1];
-      const rightEnd = next ? next.inFrame : s.docFrames;
+      const rightEnd = next ? next.inFrame : s.docMax;
       const rightSpace = rightEnd - hit.outFrame;
       // Place flush on the side with more room. Ties go right.
       if (leftSpace > rightSpace) {
@@ -87,18 +89,19 @@ export function useAddCamera(): () => Promise<void> {
       }
     }
 
-    inFrame = Math.max(0, inFrame);
+    inFrame = Math.max(s.docMin, inFrame);
 
     // Does a full-length camera fit ANYWHERE on this track? Scan the
-    // largest free gap: head [0, first.inFrame], between consecutive
-    // clips, and tail [last.outFrame, docFrames]. If the biggest gap is
-    // >= DUR, the camera fits as-is (today's placement is fine, no
-    // clamp needed). Only when it fits nowhere do we extend the doc.
-    let maxGap = s.docFrames;
+    // largest free gap (gap SIZES, not positions): head
+    // [docMin, first.inFrame], between consecutive clips, and tail
+    // [last.outFrame, docMax]. If the biggest gap is >= DUR, the camera
+    // fits as-is (today's placement is fine, no clamp needed). Only when
+    // it fits nowhere do we extend the doc.
+    let maxGap = s.docMax - s.docMin; // whole doc span when no clips
     if (clips.length > 0) {
-      maxGap = clips[0].inFrame; // head gap
+      maxGap = clips[0].inFrame - s.docMin; // head gap
       for (let i = 0; i < clips.length; i++) {
-        const gapEnd = i + 1 < clips.length ? clips[i + 1].inFrame : s.docFrames;
+        const gapEnd = i + 1 < clips.length ? clips[i + 1].inFrame : s.docMax;
         maxGap = Math.max(maxGap, gapEnd - clips[i].outFrame);
       }
     }
@@ -110,14 +113,16 @@ export function useAddCamera(): () => Promise<void> {
     } else {
       // Doesn't fit anywhere: place flush at the end of the last clip and
       // extend the sequence so the new camera gets its full duration.
-      inFrame = clips.length > 0 ? clips[clips.length - 1].outFrame : 0;
+      inFrame = clips.length > 0 ? clips[clips.length - 1].outFrame : s.docMin;
       outFrame = inFrame + DUR;
-      if (outFrame > s.docFrames) {
+      if (outFrame > s.docMax) {
         // Grow C4D's doc length, then await the ack so the store's
-        // docFrames is fresh before addClip runs. Host unreachable →
-        // fall through; addClip's findFreeSlot clamps as before.
+        // docMin/docMax are fresh before addClip runs. set-doc-frames takes
+        // a LENGTH (C++ does SetMaxTime(minFrame + frames)), so convert the
+        // absolute end to a span from docMin. Host unreachable → fall
+        // through; addClip's findFreeSlot clamps as before.
         try {
-          await send({ kind: 'set-doc-frames', frames: outFrame });
+          await send({ kind: 'set-doc-frames', frames: outFrame - s.docMin });
         } catch {
           // ignore — no host; clip will be clamped by addClip
         }

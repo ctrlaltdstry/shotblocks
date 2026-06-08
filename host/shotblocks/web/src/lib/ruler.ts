@@ -45,7 +45,9 @@ export function computeRulerLayout(
   // 1984) and the two would overlap. Cull by pixel proximity: the forced
   // endpoints win (they're the meaningful "edge" markers), so a grid label
   // within MIN_LABEL_PX of an endpoint is dropped.
-  const startFrame = Math.max(0, Math.ceil(vMin));
+  // No floor at 0 — the doc range can start negative (v2 mirrors C4D's
+  // ruler), so the left-edge label must be able to read e.g. -30.
+  const startFrame = Math.ceil(vMin);
   const endFrame = Math.floor(vMax);
   const gridFrames: number[] = [];
   const firstLabel = Math.ceil(vMin / step) * step;

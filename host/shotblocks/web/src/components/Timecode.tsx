@@ -6,13 +6,17 @@ function pad2(n: number): string { return (n < 10 ? '0' : '') + n; }
 
 function formatTimecode(frame: number, fps: number): string {
   if (!fps || fps <= 0) return '00:00:00:00';
-  const f = Math.max(0, frame | 0);
+  // Frames are absolute and can be negative (v2 mirrors C4D's ruler,
+  // MinTime included). Format the magnitude and prefix a minus so the
+  // readout reads e.g. -00:00:01:00 at frame -30 @30fps.
+  const sign = (frame | 0) < 0 ? '-' : '';
+  const f = Math.abs(frame | 0);
   const ff = f % fps;
   const ts = Math.floor(f / fps);
   const ss = ts % 60;
   const mm = Math.floor(ts / 60) % 60;
   const hh = Math.floor(ts / 3600);
-  return pad2(hh) + ':' + pad2(mm) + ':' + pad2(ss) + ':' + pad2(ff);
+  return sign + pad2(hh) + ':' + pad2(mm) + ':' + pad2(ss) + ':' + pad2(ff);
 }
 
 // Drag sensitivity: pixels of horizontal travel per one frame of scrub.
@@ -61,10 +65,10 @@ export function Timecode() {
       } else {
         drag.current.accumPx += e.movementX;
       }
-      const docFrames = useStore.getState().docFrames;
+      const { docMin, docMax } = useStore.getState();
       if (Math.abs(drag.current.accumPx) > 2) drag.current.moved = true;
       const delta = Math.round(drag.current.accumPx / PX_PER_FRAME);
-      const f = Math.max(0, Math.min(docFrames, drag.current.startFrame + delta));
+      const f = Math.max(docMin, Math.min(docMax, drag.current.startFrame + delta));
       useStore.getState().setScrubFrame(f);
       if (f !== drag.current.lastSent) {
         drag.current.lastSent = f;
@@ -134,7 +138,7 @@ export function Timecode() {
   }
 
   const text = showFrames
-    ? String(Math.max(0, frame | 0))
+    ? String(frame | 0)
     : formatTimecode(frame, fps);
   return (
     <div

@@ -13,9 +13,10 @@ export function RangeDim() {
   const h = useStore((s) => s.h);
   const playRangeIn  = useStore((s) => s.playRangeIn);
   const playRangeOut = useStore((s) => s.playRangeOut);
-  const docFrames    = useStore((s) => s.docFrames);
+  const docMin       = useStore((s) => s.docMin);
+  const docMax       = useStore((s) => s.docMax);
 
-  const rangeIsFullDoc = playRangeIn <= 0 && playRangeOut >= docFrames;
+  const rangeIsFullDoc = playRangeIn <= docMin && playRangeOut >= docMax;
   if (rangeIsFullDoc) return null;
 
   const visibleSpan = Math.max(1, h.vMax - h.vMin);

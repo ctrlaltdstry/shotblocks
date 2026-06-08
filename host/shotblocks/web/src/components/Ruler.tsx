@@ -16,7 +16,8 @@ export function Ruler() {
   const currentFrame = useStore((s) => s.currentFrame);
   const scrubFrame = useStore((s) => s.scrubFrame);
   const setScrubFrame = useStore((s) => s.setScrubFrame);
-  const docFrames = useStore((s) => s.docFrames);
+  const docMin = useStore((s) => s.docMin);
+  const docMax = useStore((s) => s.docMax);
   const markers = useStore((s) => s.markers);
   const markersVisible = useStore((s) => s.markersVisible);
 
@@ -48,7 +49,7 @@ export function Ruler() {
     if (!rect) return 0;
     const x = Math.max(0, Math.min(rect.width, clientX - rect.left));
     const f = Math.round(h.vMin + (x / rect.width) * visibleSpan);
-    return Math.max(0, Math.min(docFrames, f));
+    return Math.max(docMin, Math.min(docMax, f));
   }
   /** Magnetically pull a raw scrub frame to nearby clip edit points.
    *  Snap is active when the Snap toggle is on OR Shift is held
@@ -91,7 +92,7 @@ export function Ruler() {
   }
   function seek(clientX: number, ev: React.PointerEvent) {
     const raw = frameFromClientX(clientX);
-    const f = Math.max(0, Math.min(docFrames, snapScrub(raw, ev.shiftKey)));
+    const f = Math.max(docMin, Math.min(docMax, snapScrub(raw, ev.shiftKey)));
     // Always update the optimistic preview — even when we skip the
     // outbound send, the local playhead must follow the cursor.
     setScrubFrame(f);
