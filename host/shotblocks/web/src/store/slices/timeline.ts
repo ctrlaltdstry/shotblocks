@@ -94,6 +94,11 @@ export interface TimelineSlice {
   splitClip: (clipId: number, trackId: string, frame: number) => number | null;
 
   deleteTrack: (trackId: string) => boolean;
+  /** Append an empty video track above the current outermost one (id =
+   *  maxId + 1). The explicit alternative to the drag-up spawn gesture
+   *  (the + button above the top track header). Doesn't change the active
+   *  chip. Returns the new track's id. */
+  addVideoTrack: () => number;
   deleteEmptyTracks: (side: 'video' | 'audio') => number;
   setTrackFlag: (
     trackId: string,
@@ -758,6 +763,22 @@ export const createTimelineSlice: StateCreator<State, [], [], TimelineSlice> = (
       };
     });
     return ok;
+  },
+
+  addVideoTrack: () => {
+    let newId = 0;
+    set((s) => {
+      const maxId = s.videoTracks.reduce((m, t) => Math.max(m, t.id), 0);
+      newId = maxId + 1;
+      const next = [...s.videoTracks, {
+        id: newId,
+        name: 'Video ' + newId,
+        clips: [],
+        ...TRACK_FLAG_DEFAULTS,
+      }];
+      return { videoTracks: next };
+    });
+    return newId;
   },
 
   deleteEmptyTracks: (side) => {

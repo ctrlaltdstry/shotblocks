@@ -619,6 +619,58 @@ body.is-resizing-headers .body { transition: none; }
 }
 .lane-spacer[data-side="video"] { flex-basis: var(--video-track-h); }
 .lane-spacer[data-side="audio"] { flex-basis: var(--audio-track-h); }
+
+/* "+" add-track button — lives in the video spawn-buffer spacer so it
+   always rides centred just above the topmost track header. The spacer
+   is pointer-events:none (it's a spawn drop-zone); the button re-enables
+   events on itself. Figma 686:581 default / 686:582 hover: 17px rounded
+   square, faint grey-15 border at rest; on hover the box fills with the
+   brand purple and the plus turns white. Sits ~12px above the spacer's
+   bottom edge (== above the V1 header), horizontally centred. */
+.add-track-btn {
+  position: absolute;
+  /* Centred on the track CHIP (not the whole header). The chip sits at a
+     fixed offset from the headers-column left edge — lock | chip | eye |
+     label, left-anchored — so a fixed left holds the centre as the column
+     resizes. 77px = measured chip centre; minus half the 17px box. */
+  left: 77px;
+  bottom: 12px;
+  transform: translateX(-50%);
+  width: 17px;
+  height: 17px;
+  padding: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border: 1px solid var(--color-grey-24);   /* #3d3d3d (Figma 686:579) */
+  border-radius: 4px;
+  background: transparent;
+  pointer-events: auto;
+  cursor: pointer;
+}
+.add-track-btn:hover {
+  /* The brand purple #824cee — same as the Add Camera button and the
+     video clip fill. Figma's hover spec labels this "default-block" but
+     gives the literal #824cee, which is our --color-timeline-primary-
+     highlight; the lighter --color-timeline-default-block (#a47bf2) was
+     the wrong shade. */
+  background: var(--color-timeline-primary-highlight);
+  border-color: rgba(61, 61, 61, 0.36);
+}
+/* The plus glyph — the verbatim Figma SVG export (Group 75), 7x7. Two
+   states ship as separate assets (grey #262626 stroke at rest, white on
+   hover); they stack and CSS swaps which one is visible on hover. */
+.add-track-btn__plus {
+  position: absolute;
+  left: 50%;
+  top: 50%;
+  width: 7px;
+  height: 7px;
+  transform: translate(-50%, -50%);
+}
+.add-track-btn__plus--hover { display: none; }
+.add-track-btn:hover .add-track-btn__plus--default { display: none; }
+.add-track-btn:hover .add-track-btn__plus--hover { display: block; }
 /* The V/A divider — a non-interactive visual line. Its position is
    driven by `vaShare` (flex-grow on the stacks); the vertical MMB pan
    moves it. Not a grab handle any more — pointer-events:none so it

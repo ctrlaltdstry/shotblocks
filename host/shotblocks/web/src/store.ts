@@ -667,6 +667,11 @@ export interface State {
    *  user always has a drop target on each side. */
    deleteTrack: (trackId: string) => boolean;
 
+  /** Append an empty video track above the current outermost one.
+   *  The explicit alternative to the drag-up spawn gesture (the +
+   *  button above the top track header). Returns the new track's id. */
+  addVideoTrack: () => number;
+
   /** Cull every empty (clips.length === 0) non-base track on the
    *  given side. Base track (V1 / A1) is preserved even if empty.
    *  Returns the number of tracks removed. */
