@@ -43,6 +43,7 @@ import { DebugOverlay } from './DebugOverlay';
 import { useElementSize } from './useElementSize';
 import { useDragRecovery } from './hooks/useDragRecovery';
 import { useFlipLanes } from './hooks/useFlipLanes';
+import { useTooltip } from './hooks/useTooltip';
 import {
   useSuppressNativeContextMenu,
   usePageZoomSuppress,
@@ -92,6 +93,7 @@ function App() {
   useSelectionFollowsPlayhead();
   useDopeSheetKeySync();
   useAltKey();
+  useTooltip();
   const lanesAreaRef = useRef<HTMLDivElement | null>(null);
   useMarquee(lanesAreaRef);
   const headersStackRef = useRef<HTMLDivElement | null>(null);

@@ -411,18 +411,19 @@ body.is-resizing-headers .body { transition: none; }
 .rail__tool:hover { background: rgba(255, 255, 255, 0.07); }
 .rail__tool.is-active { background: var(--color-timeline-primary-highlight); }
 
-/* Custom tooltip — dark pill showing "<Name> (<Key>)" from the
-   data-tooltip attribute on any element. Replaces native title (slow
-   ~1s delay, OS styling). 350ms appear delay, instant hide. Direction
-   via data-tooltip-pos: "right" (default, for the left rail) or
-   "below" (for the top utility strip). The host element's ancestors
-   must not clip overflow (e.g. .rail uses overflow:visible). */
-[data-tooltip] {
-  position: relative;
-}
-[data-tooltip]::after {
-  content: attr(data-tooltip);
-  position: absolute;
+/* Custom tooltip — dark pill, PORTALED to <body> by the useTooltip hook
+   (hooks/useTooltip.ts). Driven by `data-tooltip` (+ optional
+   `data-tooltip-pos`: right [default] / below / below-left / left /
+   above) on any element. Body-level so it escapes every `overflow:hidden`
+   ancestor (track headers, stage, rail) that a CSS `::after` couldn't.
+   This is the project's DEFAULT tooltip — new features add `data-tooltip`
+   and get this for free; never use the native `title` attribute.
+   The hook owns position (inline left/top) and the 350ms appear delay
+   (via the .is-visible class); this rule owns the look only. */
+.sb-tooltip {
+  position: fixed;
+  left: 0;
+  top: 0;
   white-space: nowrap;
   background: var(--color-grey-16);
   color: var(--color-grey-white);
@@ -437,55 +438,10 @@ body.is-resizing-headers .body { transition: none; }
   pointer-events: none;
   opacity: 0;
   transition: opacity 0.1s ease 0s;
-  z-index: 100;
+  z-index: 1000;
 }
-/* Default + explicit "right": centered vertically, 12px to the right. */
-[data-tooltip]::after,
-[data-tooltip][data-tooltip-pos="right"]::after {
-  left: calc(100% + 12px);
-  top: 50%;
-  transform: translateY(-50%);
-}
-/* "below": centered horizontally, 10px under the element. */
-[data-tooltip][data-tooltip-pos="below"]::after {
-  left: 50%;
-  right: auto;
-  top: calc(100% + 10px);
-  bottom: auto;
-  transform: translateX(-50%);
-}
-/* "below-left": left edge aligned to the element, 10px under it. For
-   controls hugging the window's LEFT edge where a centered "below"
-   tooltip would clip off-screen (e.g. the topbar timecode). */
-[data-tooltip][data-tooltip-pos="below-left"]::after {
-  left: 0;
-  right: auto;
-  top: calc(100% + 10px);
-  bottom: auto;
-  transform: none;
-}
-/* "left": centered vertically, 12px to the left (for bottom-right
-   anchored controls where right/below would clip off-screen). */
-[data-tooltip][data-tooltip-pos="left"]::after {
-  right: calc(100% + 12px);
-  left: auto;
-  top: 50%;
-  bottom: auto;
-  transform: translateY(-50%);
-}
-/* "above": centered horizontally, 10px above the element (for bottom-
-   anchored controls where below/right would clip). */
-[data-tooltip][data-tooltip-pos="above"]::after {
-  left: 50%;
-  right: auto;
-  top: auto;
-  bottom: calc(100% + 10px);
-  transform: translateX(-50%);
-}
-[data-tooltip]:hover::after {
+.sb-tooltip.is-visible {
   opacity: 1;
-  /* 350ms appear delay; instant hide (delay only on the hover rule). */
-  transition: opacity 0.1s ease 0.35s;
 }
 
 /* The icon mask system from icons.css */
