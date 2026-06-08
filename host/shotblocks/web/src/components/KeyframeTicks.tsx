@@ -9,8 +9,8 @@ import { registerKeyframeSlipRedraw, getKeyframeSlipDelta } from '../lib/keyfram
 const DOT_DRAG_THRESHOLD_PX = 3;
 
 /** Read-only keyframe-dot strip for a video ShotBlock. Renders one
- *  semi-transparent dot per DOCUMENT frame where the clip's referenced
- *  camera (or any of its tags) has a keyframe — a dope-sheet-style
+ *  solid keyframe-purple pill per DOCUMENT frame where the clip's
+ *  referenced camera (or any of its tags) has a keyframe — a dope-sheet-style
  *  "where is there motion activity" glance, never interactive.
  *
  *  A CHILD of the clip (like BeatDots) so it rides the clip's CSS

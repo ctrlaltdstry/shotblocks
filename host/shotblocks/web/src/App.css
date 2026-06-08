@@ -1139,10 +1139,9 @@ body.is-hand-panning * {
 }
 
 /* Keyframe dots — a CHILD layer of a video .shot-block (so they ride the
-   clip's transform during a drag). One semi-transparent ORANGE vertical
-   pill per keyframe frame, centred in the clip body, positioned by
-   `left:%`. Orange-at-50% pops on the purple shot (sibling of the
-   audio-kf orange) rather than darkening into it. `.keyframe-dots` spans
+   clip's transform during a drag). One solid keyframe-purple (#4A1BA7)
+   vertical pill per keyframe frame, centred in the clip body, positioned
+   by `left:%`, threaded by a faint connector line. `.keyframe-dots` spans
    the full clip box with pointer-events:none so empty space never blocks
    a clip-body click; individual interactive pills re-enable events on
    themselves. */
@@ -1171,9 +1170,15 @@ body.is-hand-panning * {
   position: absolute;
   left: 0; right: 0;
   top: calc(50% + 4px);
-  height: 1px;
-  margin-top: -0.5px;
-  background: rgba(255, 255, 255, 0.22);
+  /* 2px tall so it (a) reads a touch stronger and (b) renders centred on
+     the pill: the pill's visual centre lands on a half-pixel (top:50%+4px
+     − 7px + 7px), and a 1px line at margin-top:-0.5px rounded to a single
+     pixel row that sat 0.5px above that centre — the visible off-by-half.
+     A 2px line at -1px straddles the half-pixel, so it's symmetric on the
+     pill. */
+  height: 2px;
+  margin-top: -1px;
+  background: rgba(255, 255, 255, 0.35);
 }
 /* Vertical rounded pill, vertically centred in the clip. Black at 30%
    darkens the clip's own colour (no new hue, no stroke) — same treatment
@@ -1195,9 +1200,9 @@ body.is-hand-panning * {
   margin-top: -7px;
   margin-left: -2px;
   border-radius: 2px;
-  /* Warm orange at 50% — pops on the purple shot instead of darkening
-     into it (see --color-keyframe-dot). */
-  background: color-mix(in srgb, var(--color-keyframe-dot) 50%, transparent);
+  /* Solid brand keyframe purple (#4A1BA7), no transparency — reads as a
+     deliberate mark on the clip rather than a wash of the body colour. */
+  background: var(--color-keyframe-dot);
 }
 /* Selectable pill. The visible pill stays 4px wide, but a transparent
    ::before pads the hit area wider so a thin pill is grabbable without a
