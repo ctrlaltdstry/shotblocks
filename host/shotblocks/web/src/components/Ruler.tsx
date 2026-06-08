@@ -172,6 +172,17 @@ export function Ruler() {
       onPointerCancel={onPointerEnd}
       onContextMenu={onContextMenu}
     >
+      {/* Negative-frame tint: a subtle purple wash over the ruler region
+          left of frame 0, so it's obvious at a glance when the doc starts
+          before 0 (v2 mirrors C4D's ruler, MinTime can be negative). Spans
+          from the left edge to the x of frame 0; only when any negative
+          frames are visible. Pointer-events:none so it never eats a scrub. */}
+      {h.vMin < 0 && (
+        <div
+          className="ruler__neg-zone"
+          style={{ left: 0, width: ((0 - h.vMin) * pxPerFrame) + 'px' }}
+        />
+      )}
       {/* Play-range dim used to render here too, but it darkens the
           ruler in a way that fights the chrome design. The dim still
           shows on the lanes area below (mounted in App.tsx). */}

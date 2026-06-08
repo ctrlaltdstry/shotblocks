@@ -180,6 +180,18 @@ body.is-resizing-headers .body { transition: none; }
   z-index: 2;
 }
 .ruler-row__inner { position: absolute; inset: 0; }
+/* Subtle purple wash over the ruler left of frame 0, marking the doc's
+   negative region (v2 mirrors C4D's ruler; MinTime can be negative).
+   Behind the numbers/ticks (earlier in DOM) and click-through. Uses the
+   brand primary-highlight purple at ~20% alpha so negatives read as a
+   distinct zone while staying on-brand. */
+.ruler__neg-zone {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  pointer-events: none;
+  background: rgba(130, 76, 238, 0.2); /* --color-timeline-primary-highlight @ 20% */
+}
 .ruler__numbers,
 .ruler__ticks {
   position: absolute; left: 0; right: 0;
