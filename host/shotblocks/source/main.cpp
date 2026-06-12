@@ -1362,7 +1362,7 @@ private:
 	{
 #ifdef _WIN32
 		if (_htmlView)
-			PostWeb(msg);
+			_htmlView->PostWebMessage(msg);
 #else
 		auto res = msg.GetCString();
 		if (res == maxon::FAILED)
