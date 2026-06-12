@@ -78,7 +78,7 @@ The Python plugin under `src/` is rig-only after the v2 timeline port. The C++ p
 
 ## Versioning & scope
 
-**Sole target: C4D 2026.2.0 on Windows.** No macOS, no older C4D versions. Don't write speculative cross-platform or cross-version code; there's no `c4d_compat.py` and won't be one until at least two targets exist. macOS is the natural next milestone after v0; older versions are not on the roadmap.
+**Targets: C4D 2026.2.0 on Windows and macOS (Apple Silicon), as of v1.2.0.** No older C4D versions — not on the roadmap. The platform split lives in the C++ plugin (`#ifdef _WIN32`), the web bridge transport, and the cursor layers; read the macOS entries in `.agent/context/pitfalls.md` before touching any of it. Release packaging is `tools/package_plugin.py` over the stamped two-OS binaries in `native/builds/`. Mac dev loop: `tools/build_native_mac.sh` + `scripts/deploy-mac.sh` (no force-kill script yet — quit C4D manually).
 
 ## Commits
 

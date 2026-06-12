@@ -106,9 +106,7 @@ When tempted to add a feature, ask: does this fit the timeline metaphor? Does it
 
 ## Versioning principle
 
-**Sole target until further notice: C4D 2026.2.0 on Windows.** No support for macOS, no support for older C4D versions. This is deliberate scope narrowing during early development; macOS support is the natural next milestone after v0 ships, and older C4D versions are not on the roadmap at all. See `context/c4d-api.md` for the full reasoning.
-
-When the target expands, the scoping changes here in the constitution. Until then, anything written in the codebase that branches on platform or C4D version without an active need is overengineering, and reviewers should push back.
+**Targets: C4D 2026.2.0 on Windows and macOS (Apple Silicon), as of v1.2.0 (2026-06-12).** No support for older C4D versions — they are not on the roadmap at all. Platform branches exist where the two OSes genuinely differ (the C++ plugin's `#ifdef _WIN32` splits, the web bridge transport, the cursor layers — see `context/pitfalls.md` macOS entries); a branch on platform or C4D version without an active need is still overengineering, and reviewers should push back. Cross-platform release packaging is `tools/package_plugin.py` over the stamped binaries in `native/builds/` (see MAC_CROSSPLATFORM_HANDOFF.md).
 
 ## Decision-making
 
