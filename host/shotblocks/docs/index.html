@@ -289,40 +289,32 @@
 
         <section class="doc-section" id="install" data-nav-title="Installation">
           <h2>Installation</h2>
-          <p>Shotblocks installs as a single plugin folder. You have two ways to install it.</p>
+          <p>Shotblocks installs as a single plugin folder — no installer to run. The download is one zip containing both platforms:</p>
+          <p><code>Shotblocks &lt;version&gt;/Windows/shotblocks/</code> and <code>Shotblocks &lt;version&gt;/MacOS/shotblocks/</code></p>
 
-          <h3>Option A — the installer (recommended)</h3>
+          <h3>Windows</h3>
           <ol>
-            <li>Run <code>shotblocks-v1.1.0-setup.exe</code>.</li>
-            <li>The installer detects your Cinema&nbsp;4D&nbsp;2026 plugins folder. Confirm it (or browse to it if you keep plugins somewhere custom), then click <strong>Install</strong>.</li>
-            <li><strong>Restart Cinema&nbsp;4D</strong> if it was running.</li>
-          </ol>
-          <p>The installer needs no administrator rights — it installs into your personal Cinema&nbsp;4D preferences folder. It also adds a Start-menu shortcut to this manual.</p>
-
-          <div class="warn">
-            <span class="warn__label">One-time Windows warning</span>
-            Because the installer isn't code-signed yet, Windows SmartScreen shows a blue <em>"Windows protected your PC"</em> box the first time you run it. This is expected for an unsigned installer and does not mean the file is unsafe. Click <strong>More info</strong>, then <strong>Run anyway</strong>. If you'd rather skip the warning entirely, use the zip (Option B) instead. A signed installer is planned for a later release.
-          </div>
-
-          <h3>Option B — the zip (manual install)</h3>
-          <ol>
-            <li>Unzip <code>shotblocks-v1.1.0.zip</code>. Inside is a single <code>shotblocks</code> folder (and a <code>README.txt</code>).</li>
-            <li>Copy that whole <code>shotblocks</code> folder into your Cinema&nbsp;4D&nbsp;2026 <code>plugins</code> directory. The usual location is:
+            <li>Unzip the download and open the <code>Windows</code> folder inside.</li>
+            <li>Copy the whole <code>shotblocks</code> folder into your Cinema&nbsp;4D&nbsp;2026 <code>plugins</code> directory. The usual location is:
               <br /><code>%APPDATA%\Maxon\Maxon Cinema 4D 2026_&lt;id&gt;\plugins\</code>
               <br />(the <code>&lt;id&gt;</code> suffix is unique to your install — paste <code>%APPDATA%\Maxon</code> into Explorer's address bar and open the <code>Maxon Cinema 4D 2026_…</code> folder, then <code>plugins\</code>).</li>
             <li><strong>Restart Cinema&nbsp;4D.</strong></li>
           </ol>
 
-          <h3>Verifying your download (optional)</h3>
-          <p>Each download ships with a <code>.sha256</code> checksum so you can confirm the file arrived intact. In PowerShell, run:</p>
-          <p><code>Get-FileHash shotblocks-v1.1.0.zip -Algorithm SHA256</code></p>
-          <p>and check the printed hash matches the one in the <code>.sha256</code> file.</p>
+          <h3>macOS</h3>
+          <ol>
+            <li>Unzip the download and open the <code>MacOS</code> folder inside.</li>
+            <li>Copy the whole <code>shotblocks</code> folder into your Cinema&nbsp;4D&nbsp;2026 <code>plugins</code> directory. The usual location is:
+              <br /><code>~/Library/Preferences/Maxon/Maxon Cinema 4D 2026_&lt;id&gt;/plugins/</code>
+              <br />(in Finder: <strong>Go&nbsp;&rarr;&nbsp;Go to Folder…</strong> and paste <code>~/Library/Preferences/Maxon</code>, then open the <code>Maxon Cinema 4D 2026_…</code> folder and <code>plugins</code>).</li>
+            <li><strong>Restart Cinema&nbsp;4D.</strong></li>
+          </ol>
 
           <h3>Confirming it loaded</h3>
           <p>Open <strong>Extensions&nbsp;&rarr;&nbsp;Console</strong> in Cinema&nbsp;4D. You should see a load line confirming the Shotblocks camera rig tag registered, and the timeline plugin's own load line. If the plugin doesn't appear, see <a href="#troubleshooting">Troubleshooting</a>.</p>
 
           <h3>Uninstalling</h3>
-          <p>If you used the installer, run <strong>Uninstall Shotblocks</strong> from the Start menu (or Windows&nbsp;Settings&nbsp;&rarr;&nbsp;Apps). If you installed manually, just delete the <code>shotblocks</code> folder from your <code>plugins</code> directory. Either way your work is safe — Shotblocks stores its timeline data <em>inside each <code>.c4d</code> document</em>, not in the plugin folder, so removing the plugin loses nothing.</p>
+          <p>Delete the <code>shotblocks</code> folder from your <code>plugins</code> directory. Your work is safe — Shotblocks stores its timeline data <em>inside each <code>.c4d</code> document</em>, not in the plugin folder, so removing the plugin loses nothing.</p>
         </section>
 
         <section class="doc-section" id="first-run" data-nav-title="First-time workflow">
@@ -823,7 +815,7 @@
           </ul>
           <div class="note">
             <span class="note__label">Scope</span>
-            Shotblocks targets Cinema&nbsp;4D&nbsp;2026 on Windows only. The installer isn't code-signed yet, so expect the one-time Windows warning covered under <a href="#install">Installation</a>.
+            v1.0.0 targeted Cinema&nbsp;4D&nbsp;2026 on Windows only.
           </div>
         </section>
 

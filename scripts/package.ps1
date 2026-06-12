@@ -1,14 +1,16 @@
-# Packages Shotblocks into a clean, standalone distributable for the
-# release. Unlike scripts/deploy.ps1 (which mirrors straight into the live
-# C4D prefs folder for the dev loop), this produces a shippable tree:
+# Builds the Windows half of a Shotblocks release. The .exe installer is
+# RETIRED (2026-06-12) - distribution is the two-OS zip produced by
+# tools/package_plugin.py, same model as Cubit:
 #
-#   dist/shotblocks/                 <- the clean plugin folder a user drops
-#                                       into their C4D plugins/ directory
-#   dist/shotblocks-v<ver>.zip       <- zipped tree + README for manual install
-#   dist/shotblocks-v<ver>.zip.sha256
+#   dist/Shotblocks <version>/{MacOS,Windows}/shotblocks/
+#   dist/Shotblocks <version>.zip
 #
-# The .exe installer is built separately by the Inno Setup script
-# (scripts/shotblocks.iss) which consumes dist/shotblocks/.
+# This script's remaining job on the Windows machine: release-build the
+# C++ plugin + web bundle and stage dist/shotblocks/, which then feeds
+# native/builds/win64/shotblocks/ (copy + `python tools/native_stamp.py
+# write native/builds/win64/shotblocks` + commit) so EITHER machine can
+# run the packager. TODO(windows): fold the native/builds refresh +
+# stamp into this script and drop the old single-OS zip/sha256 steps.
 #
 # Usage:
 #   powershell -ExecutionPolicy Bypass -File scripts\package.ps1
