@@ -1,15 +1,20 @@
 // Bridge between the React UI and the C++ plugin.
 //
-// Inbound (C++ → JS): C++ calls htmlView->PostWebMessage(jsonString).
-// We listen on window.chrome.webview's 'message' event and dispatch
-// parsed messages to registered subscribers.
+// Windows (WebView2, page loaded from file://):
+//   Inbound (C++ → JS): C++ calls htmlView->PostWebMessage(jsonString);
+//   we listen on window.chrome.webview's 'message' event. Outbound
+//   (JS → C++): POST to the loopback server's /cmd (port announced via
+//   the inbound 'hello'). See the memory `v2-js-to-cpp-via-loopback-http`
+//   for why fetch is the only working outbound channel — Maxon's
+//   SetWebMessageCallback and SetResourceRequestInterceptCallback are
+//   both broken in C4D 2026 on Windows.
 //
-// Outbound (JS → C++): the C++ plugin runs an HTTP server on
-// 127.0.0.1:<port> (port announced via the inbound 'hello' message).
-// We POST JSON to /cmd and parse the JSON response. See the memory
-// `v2-js-to-cpp-via-loopback-http` for why this is the only working
-// channel — Maxon's SetWebMessageCallback and
-// SetResourceRequestInterceptCallback are both broken in C4D 2026.
+// macOS (WKWebView, page SERVED BY the plugin's own loopback server —
+// the Mac HtmlViewer doesn't load file:// pages):
+//   The mirror image: there is NO native→JS channel at all (C4D's
+//   ge_mac_htmlviewer_area.mm only wires JS→C++), so C++ queues
+//   outbound messages and we poll GET /events on our own origin —
+//   which doubles as the /cmd endpoint, no hello handshake needed.
 
 export interface OmItem {
   type: number;
@@ -255,6 +260,27 @@ export function onMessage(fn: Listener): () => void {
   return () => listeners.delete(fn);
 }
 
+function dispatchInbound(raw: string): void {
+  let msg: HostInbound;
+  try { msg = JSON.parse(raw) as HostInbound; }
+  catch { console.warn('[host] non-JSON inbound:', raw); return; }
+
+  if (msg.kind === 'hello') {
+    if (!hostPort) {
+      hostPort = msg.port;
+      flushPending();
+      // Round-trip ping so C++ knows we're listening; C++ replies with
+      // doc-info + tick to bootstrap our state.
+      send({ kind: 'ping', t: Date.now() }).catch(() => {});
+    }
+  }
+  for (const l of listeners) l(msg);
+}
+
+// Cadence for the macOS /events poll. 50ms keeps playback ticks (fps
+// cadence from C++) feeling live without measurable loopback load.
+const EVENTS_POLL_MS = 50;
+
 /** Initialize the bridge. Idempotent — safe to call multiple times. */
 export function init(): void {
   if (inited) return;
@@ -262,25 +288,33 @@ export function init(): void {
   const webview = (window as unknown as {
     chrome?: { webview?: { addEventListener?: (event: string, handler: (ev: MessageEvent<string>) => void) => void } };
   }).chrome?.webview;
-  if (!webview?.addEventListener) {
-    console.warn('[host] window.chrome.webview not available — bridge inert');
+  if (webview?.addEventListener) {
+    webview.addEventListener('message', (ev: MessageEvent<string>) => {
+      dispatchInbound(typeof ev.data === 'string' ? ev.data : String(ev.data));
+    });
     return;
   }
-  webview.addEventListener('message', (ev: MessageEvent<string>) => {
-    const raw = typeof ev.data === 'string' ? ev.data : String(ev.data);
-    let msg: HostInbound;
-    try { msg = JSON.parse(raw) as HostInbound; }
-    catch { console.warn('[host] non-JSON inbound:', raw); return; }
 
-    if (msg.kind === 'hello') {
-      hostPort = msg.port;
-      flushPending();
-      // Round-trip ping so C++ knows we're listening; C++ replies with
-      // doc-info + tick to bootstrap our state.
-      send({ kind: 'ping', t: Date.now() }).catch(() => {});
-    }
-    for (const l of listeners) l(msg);
-  });
+  // macOS: served by the plugin's loopback server — the page origin IS
+  // the host. Poll /events for queued C++→JS messages (newline-
+  // delimited JSON; C++ drains its outbox per request).
+  if (location.protocol === 'http:' &&
+      (location.hostname === '127.0.0.1' || location.hostname === 'localhost')) {
+    hostPort = Number(location.port);
+    flushPending();
+    send({ kind: 'ping', t: Date.now() }).catch(() => {});
+    const poll = (): void => {
+      fetch(`${location.origin}/events`)
+        .then(r => r.text())
+        .then(t => { t.split('\n').filter(Boolean).forEach(dispatchInbound); })
+        .catch(() => {})
+        .then(() => { setTimeout(poll, EVENTS_POLL_MS); });
+    };
+    poll();
+    return;
+  }
+
+  console.warn('[host] no bridge transport available — bridge inert');
 }
 
 export function hasHost(): boolean { return hostPort !== 0; }

@@ -25,6 +25,8 @@
 //             the response body. The port is pushed to JS via
 //             PostWebMessage on first navigate.
 
+#ifdef _WIN32
+
 // Winsock must precede Windows.h so the legacy winsock.h shipped with
 // <Windows.h> doesn't get pulled in and collide with winsock2.
 #ifndef WIN32_LEAN_AND_MEAN
@@ -38,6 +40,32 @@
 // with Maxon API names; the SDK ships an undef header for exactly this
 // case. It must sit between the Windows and Maxon includes.
 #include "maxon/utilities/undef_win_macros.h"
+
+#else // macOS
+
+#include <arpa/inet.h>
+#include <netinet/in.h>
+#include <sys/socket.h>
+#include <unistd.h>
+#include <dlfcn.h>      // dladdr — resolve this plugin binary's own path
+
+// warp_cursor_mac.cpp — CoreGraphics cursor warp, kept out of this TU
+// because Apple's MacTypes.h typedefs collide with cinema:: names.
+void SbWarpCursorMac(double x, double y);
+
+// Map the handful of winsock spellings the HTTP server uses onto BSD
+// sockets so the server body stays single-source.
+using SOCKET = int;
+constexpr SOCKET INVALID_SOCKET = -1;
+constexpr int SOCKET_ERROR = -1;
+#define closesocket(s) ::close(s)
+// MSVC secure-CRT shim. Every call site uses the
+// (_buf, size, _TRUNCATE, fmt, ...) form, which truncating snprintf
+// matches exactly.
+#define _TRUNCATE 0
+#define _snprintf_s(buf, bufsz, trunc, ...) snprintf((buf), (bufsz), __VA_ARGS__)
+
+#endif // _WIN32
 
 #include "c4d.h"
 #include "c4d_gui.h"
@@ -67,11 +95,13 @@
 #include <thread>
 #include <unordered_map>
 
+#ifdef _WIN32
 #include <commctrl.h>  // SetWindowSubclass — for the dialog WM_SETCURSOR hook
 #include <shellapi.h>  // ShellExecuteW — open the bundled user manual in the OS browser
 
 #pragma comment(lib, "Ws2_32.lib")
 #pragma comment(lib, "Comctl32.lib")
+#endif
 
 using namespace cinema;
 
@@ -504,35 +534,103 @@ struct HttpRequest
 
 
 // -----------------------------------------------------------------------------
+// Plugin folder resolution — UTF-8, forward slashes, trailing slash.
+// Resolved from this binary's own address so it works from whatever
+// plugins directory the user installed into. web/, docs/ and res/ ship
+// next to the binary on both platforms.
+// -----------------------------------------------------------------------------
+static std::string PluginDirUtf8()
+{
+#ifdef _WIN32
+	HMODULE hMod = nullptr;
+	GetModuleHandleExW(
+		GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS |
+		GET_MODULE_HANDLE_EX_FLAG_UNCHANGED_REFCOUNT,
+		(LPCWSTR)&PluginDirUtf8, &hMod);
+	wchar_t wpath[MAX_PATH] = {0};
+	GetModuleFileNameW(hMod, wpath, MAX_PATH);
+	char u8[MAX_PATH * 3] = {0};
+	WideCharToMultiByte(CP_UTF8, 0, wpath, -1, u8, sizeof(u8), nullptr, nullptr);
+	std::string dir(u8);
+	for (auto& c : dir)
+		if (c == '\\')
+			c = '/';
+#else
+	Dl_info info{};
+	if (dladdr(reinterpret_cast<void*>(&PluginDirUtf8), &info) == 0 || !info.dli_fname)
+		return std::string();
+	std::string dir(info.dli_fname);
+#endif
+	const auto slash = dir.rfind('/');
+	if (slash != std::string::npos)
+		dir.erase(slash + 1);
+	return dir;
+}
+
+// file:// URL from an absolute filesystem path (forward slashes).
+// Windows paths ("C:/...") need the extra leading slash; POSIX paths
+// already start with one. Spaces must be escaped — the Mac plugins
+// folder lives under "Maxon Cinema 4D 2026_..." which contains them.
+static std::string FileUrlFromPath(const std::string& path)
+{
+	std::string url = "file://";
+	if (!path.empty() && path[0] != '/')
+		url += '/';
+	for (char c : path)
+	{
+		if (c == ' ')
+			url += "%20";
+		else
+			url += c;
+	}
+	return url;
+}
+
+// -----------------------------------------------------------------------------
 // Minimal HTTP/1.0 server pinned to 127.0.0.1. One thread, blocking accept,
 // one request per connection. Plenty for command-rate RPC.
 // -----------------------------------------------------------------------------
+#ifdef _WIN32
+using SockLen = int;
+static void SocketsCleanup() { WSACleanup(); }
+#else
+using SockLen = socklen_t;
+static void SocketsCleanup() {}
+#endif
+
 class LocalHttpServer
 {
 public:
 	using Handler = std::function<std::string(const std::string& body)>;
+	// GET handler: fills body + content type for a path, false = 404.
+	// Runs on the accept thread — the Mac transport serves the web
+	// bundle and the /events outbox through it (see PostWeb).
+	using GetHandler = std::function<bool(const std::string& path, std::string& body, std::string& contentType)>;
 
 	LocalHttpServer() = default;
 	~LocalHttpServer() { Stop(); }
 
 	// Bind to 127.0.0.1:0, start the accept thread. Returns the bound
 	// port (>0) on success, 0 on failure.
-	UInt16 Start(Handler handler)
+	UInt16 Start(Handler handler, GetHandler getHandler = nullptr)
 	{
 		_handler = std::move(handler);
+		_getHandler = std::move(getHandler);
 
+#ifdef _WIN32
 		WSADATA wsa{};
 		if (WSAStartup(MAKEWORD(2, 2), &wsa) != 0)
 			return 0;
+#endif
 
 		_listen = socket(AF_INET, SOCK_STREAM, 0);
 		if (_listen == INVALID_SOCKET)
 		{
-			WSACleanup();
+			SocketsCleanup();
 			return 0;
 		}
 
-		BOOL reuse = TRUE;
+		int reuse = 1;
 		setsockopt(_listen, SOL_SOCKET, SO_REUSEADDR, (const char*)&reuse, sizeof(reuse));
 
 		sockaddr_in addr{};
@@ -544,17 +642,17 @@ public:
 		{
 			closesocket(_listen);
 			_listen = INVALID_SOCKET;
-			WSACleanup();
+			SocketsCleanup();
 			return 0;
 		}
 
 		sockaddr_in bound{};
-		int boundLen = sizeof(bound);
+		SockLen boundLen = sizeof(bound);
 		if (getsockname(_listen, (sockaddr*)&bound, &boundLen) == SOCKET_ERROR)
 		{
 			closesocket(_listen);
 			_listen = INVALID_SOCKET;
-			WSACleanup();
+			SocketsCleanup();
 			return 0;
 		}
 		_port = ntohs(bound.sin_port);
@@ -563,7 +661,7 @@ public:
 		{
 			closesocket(_listen);
 			_listen = INVALID_SOCKET;
-			WSACleanup();
+			SocketsCleanup();
 			return 0;
 		}
 
@@ -584,7 +682,7 @@ public:
 		}
 		if (_thread.joinable())
 			_thread.join();
-		WSACleanup();
+		SocketsCleanup();
 		_port = 0;
 	}
 
@@ -596,7 +694,7 @@ private:
 		while (!_stop.load())
 		{
 			sockaddr_in client{};
-			int clientLen = sizeof(client);
+			SockLen clientLen = sizeof(client);
 			SOCKET conn = accept(_listen, (sockaddr*)&client, &clientLen);
 			if (conn == INVALID_SOCKET)
 			{
@@ -628,7 +726,7 @@ private:
 		long contentLength = 0;
 		while (buf.size() < cap)
 		{
-			int n = recv(s, tmp, (int)sizeof(tmp), 0);
+			int n = (int)recv(s, tmp, (int)sizeof(tmp), 0);
 			if (n <= 0)
 				break;
 			buf.append(tmp, n);
@@ -664,7 +762,7 @@ private:
 		size_t left = data.size();
 		while (left > 0)
 		{
-			int n = send(s, p, (int)left, 0);
+			int n = (int)send(s, p, (int)left, 0);
 			if (n <= 0)
 				break;
 			p += n;
@@ -678,13 +776,15 @@ private:
 		if (raw.empty())
 			return;
 
-		// Parse method off the request line. We only care about OPTIONS
-		// (CORS preflight) vs anything else (treated as the command POST).
+		// Parse method off the request line: OPTIONS (CORS preflight),
+		// GET (static web bundle + /events outbox), anything else is
+		// the command POST.
 		const bool isOptions = raw.compare(0, 7, "OPTIONS") == 0;
+		const bool isGet = raw.compare(0, 4, "GET ") == 0;
 
 		const std::string corsHeaders =
 			"Access-Control-Allow-Origin: *\r\n"
-			"Access-Control-Allow-Methods: POST, OPTIONS\r\n"
+			"Access-Control-Allow-Methods: GET, POST, OPTIONS\r\n"
 			"Access-Control-Allow-Headers: Content-Type\r\n";
 
 		if (isOptions)
@@ -694,6 +794,26 @@ private:
 				corsHeaders +
 				"Content-Length: 0\r\n\r\n";
 			Write(conn, resp);
+			return;
+		}
+
+		if (isGet)
+		{
+			std::string path = raw.substr(4, raw.find(' ', 4) - 4);
+			std::string body, type;
+			const bool ok = _getHandler && _getHandler(path, body, type);
+			char head[256];
+			_snprintf_s(head, sizeof(head), _TRUNCATE,
+				"HTTP/1.0 %s\r\n"
+				"%s"
+				"Content-Type: %s\r\n"
+				"Cache-Control: no-store\r\n"
+				"Content-Length: %zu\r\n\r\n",
+				ok ? "200 OK" : "404 Not Found",
+				corsHeaders.c_str(),
+				ok ? type.c_str() : "text/plain",
+				ok ? body.size() : (size_t)0);
+			Write(conn, ok ? std::string(head) + body : std::string(head));
 			return;
 		}
 
@@ -721,6 +841,7 @@ private:
 	}
 
 	Handler             _handler;
+	GetHandler          _getHandler;
 	SOCKET              _listen{INVALID_SOCKET};
 	UInt16              _port{0};
 	std::thread         _thread;
@@ -874,7 +995,7 @@ public:
 			{
 				_lastLoopChecked = nowOn;
 				if (_htmlView)
-					_htmlView->PostWebMessage(maxon::String(
+					PostWeb(maxon::String(
 						nowOn ? "{\"kind\":\"loop-state\",\"enabled\":true}"
 						      : "{\"kind\":\"loop-state\",\"enabled\":false}"));
 			}
@@ -917,8 +1038,8 @@ public:
 			// ghost it had.
 			if (_hoverActive && _htmlView)
 			{
-				_htmlView->PostWebMessage("{\"kind\":\"om-cancel\"}"_s);
-				_htmlView->PostWebMessage("{\"kind\":\"file-cancel\"}"_s);
+				PostWeb("{\"kind\":\"om-cancel\"}"_s);
+				PostWeb("{\"kind\":\"file-cancel\"}"_s);
 			}
 			_hoverActive = false;
 			return 0;
@@ -967,7 +1088,7 @@ public:
 				// scenes will route elsewhere, but for now they're not
 				// our business.)
 				if (_hoverActive && _htmlView)
-					_htmlView->PostWebMessage("{\"kind\":\"file-cancel\"}"_s);
+					PostWeb("{\"kind\":\"file-cancel\"}"_s);
 				_hoverActive = false;
 				return 0;
 			}
@@ -997,7 +1118,7 @@ public:
 				+ maxon::String(escPath.c_str())
 				+ "\"}"_s;
 			if (_htmlView)
-				_htmlView->PostWebMessage(payload);
+				PostWeb(payload);
 
 			if (finished)
 			{
@@ -1084,7 +1205,7 @@ public:
 			kind, (int)sx, (int)sy);
 		maxon::String payload = maxon::String(head) + items + "}"_s;
 		if (_htmlView)
-			_htmlView->PostWebMessage(payload);
+			PostWeb(payload);
 
 		if (finished)
 		{
@@ -1151,7 +1272,7 @@ public:
 			_lastSeenDoc = doc;
 			_lastSeenVersion = 0;
 			if (_htmlView && _navigated)
-				_htmlView->PostWebMessage("{\"kind\":\"state-changed\"}"_s);
+				PostWeb("{\"kind\":\"state-changed\"}"_s);
 			return;
 		}
 
@@ -1165,7 +1286,7 @@ public:
 			{
 				_lastSeenVersion = 0;
 				if (_htmlView && _navigated)
-					_htmlView->PostWebMessage("{\"kind\":\"state-changed\"}"_s);
+					PostWeb("{\"kind\":\"state-changed\"}"_s);
 			}
 			return;
 		}
@@ -1175,7 +1296,7 @@ public:
 		if (curVersion == _lastSeenVersion) return;
 		_lastSeenVersion = curVersion;
 		if (_htmlView && _navigated)
-			_htmlView->PostWebMessage("{\"kind\":\"state-changed\"}"_s);
+			PostWeb("{\"kind\":\"state-changed\"}"_s);
 	}
 
 private:
@@ -1195,30 +1316,116 @@ private:
 		// this dialog instance. Server is per-dialog, not per-document.
 		StartServerIfNeeded();
 
-		// Build a file:// URL pointing at web/index.html sitting next
-		// to the plugin DLL.
-		HMODULE hMod = nullptr;
-		GetModuleHandleExW(
-			GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS |
-			GET_MODULE_HANDLE_EX_FLAG_UNCHANGED_REFCOUNT,
-			(LPCWSTR)&ShotblocksDialog::DispatchHttpStatic,
-			&hMod);
-		wchar_t dll[MAX_PATH] = {0};
-		GetModuleFileNameW(hMod, dll, MAX_PATH);
-		wchar_t* lastSlash = wcsrchr(dll, L'\\');
-		if (lastSlash)
-			*(lastSlash + 1) = 0;
-		wchar_t urlBuf[MAX_PATH + 64];
-		swprintf_s(urlBuf, MAX_PATH + 64, L"file:///%sweb/index.html", dll);
-		for (wchar_t* p = urlBuf + 8; *p; ++p)
-			if (*p == L'\\')
-				*p = L'/';
-		char utf8[MAX_PATH + 64] = {0};
-		WideCharToMultiByte(CP_UTF8, 0, urlBuf, -1, utf8, sizeof(utf8), nullptr, nullptr);
-		maxon::String url(utf8);
+		// Windows: file:// URL pointing at web/index.html next to the
+		// plugin binary. macOS: the C4D HtmlViewer (WKWebView) does not
+		// load file:// pages, so serve the bundle from our own loopback
+		// server — the origin then doubles as the command endpoint and
+		// JS needs no hello/port handshake. A web/url-override.txt
+		// redirects the viewer (e.g. at a local dev server) without a
+		// rebuild — dev affordance, not shipped.
+#ifdef _WIN32
+		maxon::String url(FileUrlFromPath(PluginDirUtf8() + "web/index.html").c_str());
+#else
+		char urlBuf[64];
+		_snprintf_s(urlBuf, sizeof(urlBuf), _TRUNCATE,
+			"http://127.0.0.1:%u/", (unsigned)_httpPort);
+		maxon::String url(urlBuf);
+#endif
+		const std::string ovPath = PluginDirUtf8() + "web/url-override.txt";
+		if (FILE* f = fopen(ovPath.c_str(), "rb"))
+		{
+			char buf[512] = {0};
+			const size_t n = fread(buf, 1, sizeof(buf) - 1, f);
+			fclose(f);
+			std::string ov(buf, n);
+			while (!ov.empty() && (ov.back() == '\n' || ov.back() == '\r' || ov.back() == ' '))
+				ov.pop_back();
+			if (!ov.empty())
+				url = maxon::String(ov.c_str());
+		}
 		_htmlView->SetUrl(url, URL_ENCODING_UTF16);
 		_navigated = true;
 		GePrint("[Shotblocks/v2] navigated to "_s + url);
+	}
+
+	// Single C++ -> JS send. Windows delivers via PostWebMessage
+	// (chrome.webview 'message' in the page). The Mac HtmlViewer has NO
+	// native->JS channel at all (ge_mac_htmlviewer_area.mm only wires
+	// JS->C++ via the injected webkitMessenger) — queue the payload for
+	// the JS GET /events poll instead.
+	void PostWeb(const maxon::String& msg)
+	{
+#ifdef _WIN32
+		if (_htmlView)
+			PostWeb(msg);
+#else
+		auto res = msg.GetCString();
+		if (res == maxon::FAILED)
+			return;
+		const maxon::BaseArray<maxon::Char>& raw = res.GetValue();
+		size_t len = (size_t)raw.GetCount();
+		// Drop a trailing NUL if the encoder included one.
+		if (len && raw[(maxon::Int)len - 1] == 0)
+			--len;
+		std::lock_guard<std::mutex> lk(_outboxMu);
+		_outbox.emplace_back(raw.GetFirst(), len);
+		// Bound the queue in case JS never polls (dialog hidden, page
+		// failed) — drop oldest, newest state wins.
+		while (_outbox.size() > 4096)
+			_outbox.pop_front();
+#endif
+	}
+
+	// GET routing for the loopback server. Runs on the HTTP worker
+	// thread — no C4D API calls allowed in here. Serves the built web
+	// bundle (the Mac viewer can't load file:// pages) and /events (the
+	// queued C++ -> JS messages, newline-delimited JSON).
+	bool HandleHttpGet(const std::string& path, std::string& body, std::string& type)
+	{
+		if (path == "/events")
+		{
+			std::lock_guard<std::mutex> lk(_outboxMu);
+			body.clear();
+			for (const std::string& m : _outbox)
+			{
+				body += m;
+				body += '\n';
+			}
+			_outbox.clear();
+			type = "application/x-ndjson";
+			return true;
+		}
+		std::string rel = (path.empty() || path == "/") ? "/index.html" : path;
+		const auto q = rel.find('?');
+		if (q != std::string::npos)
+			rel.erase(q);
+		if (rel.find("..") != std::string::npos)
+			return false;
+		const std::string fsPath = PluginDirUtf8() + "web" + rel;
+		FILE* f = fopen(fsPath.c_str(), "rb");
+		if (!f)
+			return false;
+		char tmp[8192];
+		size_t n;
+		body.clear();
+		while ((n = fread(tmp, 1, sizeof(tmp), f)) > 0)
+			body.append(tmp, n);
+		fclose(f);
+		const auto dot = rel.rfind('.');
+		const std::string ext = dot == std::string::npos ? "" : rel.substr(dot);
+		if (ext == ".html")
+			type = "text/html; charset=utf-8";
+		else if (ext == ".js")
+			type = "text/javascript";
+		else if (ext == ".css")
+			type = "text/css";
+		else if (ext == ".png")
+			type = "image/png";
+		else if (ext == ".svg")
+			type = "image/svg+xml";
+		else
+			type = "application/octet-stream";
+		return true;
 	}
 
 	void StartServerIfNeeded()
@@ -1243,6 +1450,9 @@ private:
 			if (fut.wait_for(std::chrono::seconds(2)) == std::future_status::ready)
 				return fut.get();
 			return std::string("{\"ok\":false,\"error\":\"timeout\"}");
+		},
+		[this](const std::string& path, std::string& body, std::string& type) {
+			return HandleHttpGet(path, body, type);
 		});
 		if (_httpPort != 0)
 		{
@@ -1268,7 +1478,7 @@ private:
 		char buf[128];
 		_snprintf_s(buf, sizeof(buf), _TRUNCATE,
 			"{\"kind\":\"hello\",\"port\":%u}", (unsigned)_httpPort);
-		_htmlView->PostWebMessage(maxon::String(buf));
+		PostWeb(maxon::String(buf));
 	}
 
 	// ------- Main-thread queue drain -------
@@ -1997,7 +2207,7 @@ private:
 			"{\"kind\":\"tick\",\"frame\":%d,\"fps\":%d,\"playing\":%s,\"pluginPlaying\":%s}",
 			(int)frame, (int)fps, playing ? "true" : "false",
 			pluginPlaying ? "true" : "false");
-		_htmlView->PostWebMessage(maxon::String(buf));
+		PostWeb(maxon::String(buf));
 	}
 
 	void PostDocInfo()
@@ -2032,7 +2242,7 @@ private:
 			"{\"kind\":\"doc-info\",\"fps\":%d,\"docMin\":%d,\"docMax\":%d,\"docFrames\":%d,\"playRangeIn\":%d,\"playRangeOut\":%d}",
 			(int)fps, (int)docMin, (int)docMax, (int)docFrames,
 			(int)_v2RangeIn, (int)_v2RangeOut);
-		_htmlView->PostWebMessage(maxon::String(buf));
+		PostWeb(maxon::String(buf));
 	}
 
 	// Handle JS's `add-to-queue` command. Body shape:
@@ -2073,6 +2283,7 @@ private:
 		char b[64];
 		_snprintf_s(b, sizeof(b), _TRUNCATE, "[Shotblocks/v2] set-cursor-mode -> %d", m);
 		GePrint(maxon::String(b));
+#ifdef _WIN32
 		// Apply immediately (WM_SETCURSOR only fires on movement),
 		// and drive a fast Win32 timer that keeps re-asserting the
 		// cursor so WebView2's own resets never show. Kill the
@@ -2092,6 +2303,7 @@ private:
 				::KillTimer(_cursorSubclassed, kCursorTimerId);
 			}
 		}
+#endif
 	}
 
 	// Handler for `seek` — scrub from JS. Body: {"kind":"seek","frame":N}
@@ -2236,7 +2448,11 @@ private:
 	{
 		Int32 x = ParseIntField(body, "x");
 		Int32 y = ParseIntField(body, "y");
+#ifdef _WIN32
 		SetCursorPos((int)x, (int)y);
+#else
+		SbWarpCursorMac((double)x, (double)y);
+#endif
 		return "{\"ok\":true,\"kind\":\"warp-cursor-ack\"}";
 	}
 
@@ -2251,22 +2467,15 @@ private:
 	// Maxon's 600-line source-processor cap.
 	std::string HandleOpenManual()
 	{
-		HMODULE hMod = nullptr;
-		GetModuleHandleExW(
-			GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS |
-			GET_MODULE_HANDLE_EX_FLAG_UNCHANGED_REFCOUNT,
-			(LPCWSTR)&ShotblocksDialog::DispatchHttpStatic,
-			&hMod);
-		wchar_t dll[MAX_PATH] = {0};
-		GetModuleFileNameW(hMod, dll, MAX_PATH);
-		wchar_t* lastSlash = wcsrchr(dll, L'\\');
-		if (lastSlash)
-			*(lastSlash + 1) = 0;
-		wchar_t path[MAX_PATH + 64];
-		swprintf_s(path, MAX_PATH + 64, L"%sdocs\\index.html", dll);
-
+		const std::string manual = PluginDirUtf8() + "docs/index.html";
+#ifdef _WIN32
 		// Pass the plain filesystem path (not a file:// URL) so the shell
 		// resolves the default browser via the .html association.
+		wchar_t path[MAX_PATH + 64] = {0};
+		MultiByteToWideChar(CP_UTF8, 0, manual.c_str(), -1, path, MAX_PATH + 64);
+		for (wchar_t* p = path; *p; ++p)
+			if (*p == L'/')
+				*p = L'\\';
 		HINSTANCE rc = ShellExecuteW(nullptr, L"open", path, nullptr, nullptr, SW_SHOWNORMAL);
 		// ShellExecuteW returns a value > 32 on success.
 		if ((INT_PTR)rc <= 32)
@@ -2276,6 +2485,14 @@ private:
 				+ maxon::String(path));
 			return "{\"ok\":false,\"kind\":\"open-manual-ack\",\"error\":\"shellexecute failed\"}";
 		}
+#else
+		if (!GeOpenHTML(maxon::String(FileUrlFromPath(manual).c_str())))
+		{
+			GePrint("[Shotblocks/v2] open-manual failed (GeOpenHTML) for "_s
+				+ maxon::String(manual.c_str()));
+			return "{\"ok\":false,\"kind\":\"open-manual-ack\",\"error\":\"geopenhtml failed\"}";
+		}
+#endif
 		return "{\"ok\":true,\"kind\":\"open-manual-ack\"}";
 	}
 
@@ -3837,7 +4054,7 @@ private:
 		_snprintf_s(buf, sizeof(buf), _TRUNCATE,
 			"{\"kind\":\"render-settings-drift\",\"stale\":%s}",
 			stale ? "true" : "false");
-		_htmlView->PostWebMessage(maxon::String(buf));
+		PostWeb(maxon::String(buf));
 	}
 
 	// Resolve every objectId in _cameraLinks and push {id, alive, name}
@@ -3987,7 +4204,7 @@ private:
 		}
 		items += "]"_s;
 		maxon::String payload = "{\"kind\":\"cameras\",\"items\":"_s + items + "}"_s;
-		_htmlView->PostWebMessage(payload);
+		PostWeb(payload);
 	}
 
 	// Static thunk referenced only so GetModuleHandleExW has a stable
@@ -4024,6 +4241,7 @@ private:
 		CURSOR_RETIME     = 11,
 	};
 
+#ifdef _WIN32
 	// Load one multi-resolution .cur from <plugin>/web/cursors/.
 	// LoadCursorFromFileW picks the DPI-appropriate image out of the
 	// 32/48/64 set; LoadImage+LR_DEFAULTSIZE would force 32px.
@@ -4170,6 +4388,12 @@ private:
 			GePrint("[Shotblocks/v2] cursor subclass installed on C4D dialog"_s);
 		}
 	}
+#else
+	// macOS: no WebView2 cursor-reset fight to win. Tool cursors are
+	// the web layer's job (CSS cursors inside the viewer); nothing to
+	// install natively.
+	void EnsureCursorSubclass() {}
+#endif
 
 private:
 	HtmlViewerCustomGui* _htmlView;
@@ -4190,9 +4414,16 @@ private:
 	std::mutex                   _queueMu;
 	std::deque<HttpRequest>      _queue;
 
+	// C++ -> JS outbox for the Mac /events poll transport (see PostWeb).
+	// Unused on Windows (delivery goes through PostWebMessage instead).
+	std::mutex                   _outboxMu;
+	std::deque<std::string>      _outbox;
+
 	std::string          _activeTool{"select"};
 
 	// Cursor ownership — see the cursor block above.
+	std::atomic<int>     _cursorMode{0};   // CursorMode id; 0 = no override
+#ifdef _WIN32
 	bool                 _cursorsLoaded{false};
 	HCURSOR              _slipCursor{nullptr};
 	HCURSOR              _razorCursor{nullptr};
@@ -4204,8 +4435,8 @@ private:
 	HCURSOR              _handGrabCursor{nullptr};
 	HCURSOR              _zoomCursor{nullptr};
 	HCURSOR              _retimeCursor{nullptr};
-	std::atomic<int>     _cursorMode{0};   // CursorMode id; 0 = no override
 	HWND                 _cursorSubclassed{nullptr};
+#endif
 
 	// OM-drop camera registry. Each dragged BaseObject is assigned a
 	// session-unique objectId; that id is sent to JS in the om-drop
@@ -4449,24 +4680,12 @@ private:
 // failure (command still registers, just without an icon).
 static BaseBitmap* LoadMenuIcon()
 {
-	HMODULE hMod = nullptr;
-	GetModuleHandleExW(
-		GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS |
-		GET_MODULE_HANDLE_EX_FLAG_UNCHANGED_REFCOUNT,
-		(LPCWSTR)&LoadMenuIcon, &hMod);
-	wchar_t path[MAX_PATH] = {0};
-	GetModuleFileNameW(hMod, path, MAX_PATH);
-	wchar_t* lastSlash = wcsrchr(path, L'\\');
-	if (lastSlash)
-		*(lastSlash + 1) = 0;
-	wcscat_s(path, MAX_PATH, L"res\\icons\\sb_menu.png");
+	const std::string path = PluginDirUtf8() + "res/icons/sb_menu.png";
 	BaseBitmap* bmp = BaseBitmap::Alloc();
 	if (!bmp)
 		return nullptr;
-	char u8[MAX_PATH * 2] = {0};
-	WideCharToMultiByte(CP_UTF8, 0, path, -1, u8, sizeof(u8), nullptr, nullptr);
 	Filename fn;
-	fn.SetString(maxon::String(u8));
+	fn.SetString(maxon::String(path.c_str()));
 	if (bmp->Init(fn) != IMAGERESULT::OK)
 	{
 		BaseBitmap::Free(bmp);

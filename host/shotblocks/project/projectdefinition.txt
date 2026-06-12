@@ -1,4 +1,4 @@
-Platform=Win64
+Platform=Win64;OSX
 Type=DLL
 
 APIS=\

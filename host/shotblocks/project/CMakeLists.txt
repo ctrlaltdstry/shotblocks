@@ -21,7 +21,7 @@ set(maxon_targetPrivateCompileDefinitions
   MAXON_CMAKE_BUILD
   MAXON_MODULE_ID="com.shotblocks"
 )
-set(maxon_targetPlatforms Win64)
+set(maxon_targetPlatforms Win64 OSX)
 set(maxon_targetSourceDirectories
   source
 )
@@ -56,13 +56,16 @@ set(maxon_prebuildEvents.WINDOWS.DEBUG [=[]=])
 set(maxon_prebuildEvents.WINDOWS.RELEASE [=[]=])
 set(maxon_subsystem.WINDOWS WINDOWS)
 
-# --- MACOS / LINUX --- (intentionally empty — Win64 only)
+# --- MACOS / LINUX ---
 set(maxon_excludeFromBuild.MACOS )
 set(maxon_exclude.MACOS )
 set(maxon_additionalDefinitions.MACOS )
 set(maxon_linkLibraries.MACOS.DEBUG )
 set(maxon_linkLibraries.MACOS.RELEASE )
 set(maxon_additionalIncludeDirectories.MACOS )
+# CoreGraphics (CGWarpMouseCursorPosition) comes from the build script's
+# global -framework linker flags — maxon_linkFrameworks emits -l<name>
+# under the Ninja generator, which the linker can't resolve.
 set(maxon_linkFrameworks.MACOS )
 set(maxon_additionalSourceFiles.MACOS )
 set(maxon_prebuildEvents.MACOS.DEBUG [=[]=])
