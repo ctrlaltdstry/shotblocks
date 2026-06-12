@@ -49,3 +49,23 @@ scenes/ES_*.mp3
 
 # Local scratch (geometry sanity checks, probes, etc.) — any src/_*.py
 src/_*.py
+# Underscore-prefixed scratch elsewhere: probe scripts, doc-processing
+# spikes, preview renders.
+scripts/_*
+host/shotblocks/docs/_*
+host/shotblocks/web/public/cursors/_preview_*
+_hamburger_src.js
+
+# Local working-art folders. The DEPLOYED icons live in src/res/icons/
+# and host/.../web/src/icons/ (committed); these are the editable sources.
+Cursors/
+Icons/
+wizard art/
+
+# Junk throwaway test scenes (random names). The canonical fixture is
+# scenes/dev-test.c4d (ignored above); real fixtures get committed by name.
+scenes/*.c4d
+
+# Old per-bug debugging handoffs (superseded). Note: HANDOFF.md (no
+# suffix) is the live handoff and is NOT matched by this dash pattern.
+HANDOFF-*.md
