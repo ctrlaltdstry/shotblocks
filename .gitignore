@@ -58,8 +58,11 @@ _hamburger_src.js
 
 # Local working-art folders. The DEPLOYED icons live in src/res/icons/
 # and host/.../web/src/icons/ (committed); these are the editable sources.
-Cursors/
-Icons/
+# Anchored to the repo root: the unanchored pattern also (case-
+# insensitively) swallowed host/.../web/public/cursors/, whose PNGs are
+# runtime assets for the Mac native cursor layer.
+/Cursors/
+/Icons/
 wizard art/
 
 # Junk throwaway test scenes (random names). The canonical fixture is
