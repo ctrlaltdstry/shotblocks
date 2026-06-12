@@ -452,7 +452,12 @@ body.is-resizing-headers .body { transition: none; }
   background-color: var(--color-grey-50);
   -webkit-mask-repeat: no-repeat; mask-repeat: no-repeat;
   -webkit-mask-position: center; mask-position: center;
-  -webkit-mask-size: contain; mask-size: contain;
+  /* 100% 100% (stretch), NOT contain: contain letterboxes whenever the
+     mask image's ratio differs sub-pixel from the element box, and the
+     macOS C4D HtmlViewer fills the letterbox slivers with garbage
+     (stray lines beside the icon). The baked PNGs match each element's
+     ratio within ~2%, so the stretch is invisible. See pitfalls.md. */
+  -webkit-mask-size: 100% 100%; mask-size: 100% 100%;
   transform: rotate(var(--icon-rot, 0deg));
 }
 .rail__tool:hover .icon { background-color: var(--color-grey-white); }
