@@ -122,6 +122,11 @@ def build_platform(os_key, os_folder, package_root, warnings):
     # side) — the Mac half ships without vendor/.
     def ignore_src(dirpath, names):
         drop = set()
+        # Local scratch never ships — mirror the gitignore `src/_*.py`
+        # rule. These are gitignored (absent from a clean clone) but
+        # present on a dev machine's working tree, and copytree reads the
+        # disk, not git, so they'd otherwise leak into the package.
+        drop.update(n for n in names if n.startswith("_") and n.endswith(".py"))
         rel = os.path.relpath(dirpath, os.path.join(REPO_ROOT, "src"))
         if rel == "vendor":
             drop.add("build")
