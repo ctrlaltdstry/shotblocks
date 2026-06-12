@@ -53,6 +53,11 @@
 // because Apple's MacTypes.h typedefs collide with cinema:: names.
 void SbWarpCursorMac(double x, double y);
 
+// sb_cursor_mac.mm — native tool-cursor force (NSCursor + 16ms
+// re-assert timer), the Mac counterpart of the Win32 cursor subclass.
+// name = cursor file stem under web/cursors/ ("" releases the force).
+void SbSetCursorModeMac(const char* name, const char* cursorsDirUtf8, void* dialogHandle);
+
 // Map the handful of winsock spellings the HTTP server uses onto BSD
 // sockets so the server body stays single-source.
 using SOCKET = int;
@@ -2303,6 +2308,28 @@ private:
 				::KillTimer(_cursorSubclassed, kCursorTimerId);
 			}
 		}
+#else
+		// macOS: same strategy, AppKit flavor — sb_cursor_mac.mm keeps
+		// re-asserting the NSCursor on a 16ms timer while a mode is on
+		// (C4D resets the cursor exactly like its Windows dialog did).
+		static const char* kCursorNames[] = {
+			"",          // CURSOR_DEFAULT
+			"slip",      // CURSOR_SLIP
+			"razor",     // CURSOR_RAZOR
+			"",          // CURSOR_SELECT (OS default by design)
+			"av-split",  // CURSOR_AV_SPLIT
+			"roll",      // CURSOR_ROLL
+			"play-range",// CURSOR_PLAY_RANGE
+			"pen",       // CURSOR_PEN
+			"hand",      // CURSOR_HAND
+			"hand-grab", // CURSOR_HAND_GRAB
+			"zoom",      // CURSOR_ZOOM
+			"retime",    // CURSOR_RETIME
+		};
+		const char* name = (m >= 0 && m < (int)(sizeof(kCursorNames) / sizeof(kCursorNames[0])))
+			? kCursorNames[m] : "";
+		const std::string cursorsDir = PluginDirUtf8() + "web/cursors/";
+		SbSetCursorModeMac(name, cursorsDir.c_str(), GetWindowHandle());
 #endif
 	}
 

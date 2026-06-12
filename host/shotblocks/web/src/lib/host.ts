@@ -300,6 +300,10 @@ export function init(): void {
   // delimited JSON; C++ drains its outbox per request).
   if (location.protocol === 'http:' &&
       (location.hostname === '127.0.0.1' || location.hostname === 'localhost')) {
+    // Lets CSS pick per-platform cursors (the Mac native layer shows
+    // system cursors for some modes; the CSS layer must agree or the
+    // two writers flicker).
+    document.body.classList.add('host-mac');
     hostPort = Number(location.port);
     flushPending();
     send({ kind: 'ping', t: Date.now() }).catch(() => {});

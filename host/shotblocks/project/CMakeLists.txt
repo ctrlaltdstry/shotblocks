@@ -4,6 +4,12 @@
 
 set(CMAKE_CURRENT_SOURCE_DIR ${CMAKE_CURRENT_LIST_DIR})
 
+# sb_cursor_mac.mm — the SDK tooling marks .mm sources OBJCXX but the
+# root project never enables the language.
+if(APPLE)
+  enable_language(OBJCXX)
+endif()
+
 include(${MAXON_TOOLING_DIR}/sdk_targets.cmake)
 include(${MAXON_TOOLING_DIR}/sdk_compiler_helper.cmake)
 
