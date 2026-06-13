@@ -3,25 +3,35 @@
 Goal: sign + notarize Shotblocks' macOS binary so users install by plain
 drag-and-drop with NO "Apple could not verify ... malware" warning.
 
-The Developer ID Application certificate and the notarization credential are
-**account-level, not per-app** — the same ones sign Cubit and Shotblocks. If
-you've already finished the setup for one, you only need steps 4–5 here (store
-a notary profile name + run the signed package). Team ID: **87DC46P9EQ**.
+**SETUP COMPLETE (2026-06-13).** A signed release is now one command:
+`python3 tools/package_plugin.py --sign --zip`. The sections below are kept
+as the record of what was done and how to redo it (e.g. on a new machine or
+when the cert expires — see "Renewal").
 
-This is a ONE-TIME setup. After it's done, a signed release is one command:
-`python3 tools/package_plugin.py --sign --zip`.
+Two pieces, with different scopes:
+- The **Developer ID Application certificate** is *account-level* (Apple allows
+  only a handful per account; you reuse ONE). The same cert signs Cubit and
+  Shotblocks — that's correct and unavoidable, not a coupling.
+- The **notary credential** is a per-profile keychain entry. Shotblocks has its
+  own dedicated profile **`shotblocks-notary`** (Apple ID `legomike@mac.com`,
+  team `87DC46P9EQ`), separate from Cubit's `cubit-notary`. The sign script
+  defaults to `shotblocks-notary` (override with `SB_NOTARY_PROFILE`).
 
-## State / checklist
+Team ID: **87DC46P9EQ**.
+
+## State / checklist — all done
 
 - [x] Enrolled in Apple Developer Program (Team ID 87DC46P9EQ)
 - [x] CSR generated: `~/Dev/cubit_signing/CubitDeveloperID.certSigningRequest`
-      (private key `cubit_devid.key`, chmod 600, never committed — reused here
-      since the cert is account-level)
-- [ ] **YOU:** upload CSR → download "Developer ID Application" cert (step 1)
-- [ ] Claude: import the cert into the keychain (step 2)
-- [ ] **YOU:** create an app-specific password (step 3)
-- [ ] Claude: store the notary credential as profile `shotblocks-notary` (step 4)
-- [ ] Claude: sign + notarize + re-publish the release (step 5)
+      (private key `cubit_devid.key`, chmod 600, never committed — the cert is
+      account-level so the one CSR/key serves every plugin)
+- [x] Created + downloaded the "Developer ID Application" cert (step 1)
+- [x] Imported the cert into the login keychain (step 2) — identity
+      `Developer ID Application: MICHAEL SLATER (87DC46P9EQ)`, valid to
+      2027-02-01
+- [x] Created a dedicated app-specific password (step 3)
+- [x] Stored the notary credential as profile `shotblocks-notary` (step 4)
+- [x] Signed + notarized + published the v1.2.0 release (step 5)
 
 ## Step 1 — create the certificate (needs your Apple login)
 
@@ -58,7 +68,7 @@ security find-identity -v -p codesigning   # should list Developer ID Applicatio
 
 ```bash
 xcrun notarytool store-credentials shotblocks-notary \
-  --apple-id <your-apple-id-email> --team-id 87DC46P9EQ \
+  --apple-id legomike@mac.com --team-id 87DC46P9EQ \
   --password <app-specific-password>
 ```
 
@@ -69,7 +79,17 @@ python3 tools/package_plugin.py --sign --zip
 ```
 
 Then replace the asset on the GitHub release with the signed zip, install it
-on a clean Mac, and confirm C4D loads the plugin with NO Gatekeeper warning.
+on a clean Mac, and confirm C4D loads the plugin with NO Gatekeeper warning
+(`spctl -a -t install <xlib>` should report `source=Notarized Developer ID`).
+
+## Renewal / new machine
+
+- The cert expires **2027-02-01**. To renew: create a new Developer ID
+  Application cert (steps 1–2) from the same CSR, then re-run a signed package.
+- On a fresh machine you need the private key (`~/Dev/cubit_signing/
+  cubit_devid.key`) imported alongside the cert, and the `shotblocks-notary`
+  profile re-stored (step 4). The app-specific password is reusable, or mint a
+  new one at appleid.apple.com.
 
 ## Notes
 
@@ -77,5 +97,6 @@ on a clean Mac, and confirm C4D loads the plugin with NO Gatekeeper warning.
   approval is via Gatekeeper's online check on first load. Silent on any Mac
   with internet. (A fully offline-proof variant would wrap the release in a
   signed, stapled `.dmg`/`.pkg` — a possible later enhancement.)
-- Until the cert exists, the unsigned zip still works; users strip quarantine
-  once with `xattr -dr com.apple.quarantine <path-to>/plugins/shotblocks`.
+- If the cert is ever unavailable, the unsigned zip still works; users strip
+  quarantine once with
+  `xattr -dr com.apple.quarantine <path-to>/plugins/shotblocks`.
