@@ -776,6 +776,11 @@
           <h3>Undo (<kbd>Ctrl</kbd>+<kbd>Z</kbd>) doesn't seem to work in the timeline</h3>
           <p>It does — Shotblocks forwards undo and redo to Cinema&nbsp;4D's main undo stack. If a click didn't register, make sure the Shotblocks panel has focus (click in it once) and try again.</p>
 
+          <h3>macOS: "Apple could not verify shotblocks.xlib is free of malware"</h3>
+          <p>macOS quarantines files downloaded from the internet. If your build of Shotblocks isn't yet code-signed, open <strong>Terminal</strong> and run this once against your installed plugin folder (adjust the path to your install):</p>
+          <p><code>xattr -dr com.apple.quarantine ~/Library/Preferences/Maxon/Maxon\ Cinema\ 4D\ 2026_*/plugins/shotblocks</code></p>
+          <p>Then restart Cinema&nbsp;4D. This clears the quarantine flag from the whole plugin folder. (Signed-and-notarized releases skip this step entirely.)</p>
+
           <h3>The plugin didn't load</h3>
           <p>Open <strong>Extensions&nbsp;&rarr;&nbsp;Console</strong> and look for the Shotblocks load lines. If they're missing, confirm the <code>shotblocks</code> folder is in your Cinema&nbsp;4D&nbsp;2026 plugins directory (see <a href="#install">Installation</a>) and that you restarted C4D after installing.</p>
 

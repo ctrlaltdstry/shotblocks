@@ -192,6 +192,9 @@ def main():
     ap.add_argument("--platform", choices=("all", "mac", "win"), default="all")
     ap.add_argument("--zip", action="store_true",
                     help="also write dist/Shotblocks <version>.zip")
+    ap.add_argument("--sign", action="store_true",
+                    help="sign + notarize the macOS binary (needs a Developer ID "
+                         "cert + notary profile; see SIGNING_SETUP.md)")
     args = ap.parse_args()
 
     version = args.version or latest_git_tag()
@@ -216,6 +219,21 @@ def main():
         os_key, os_folder = targets[key]
         print(f"Packaging {os_folder}/shotblocks ...")
         build_platform(os_key, os_folder, package_root, warnings)
+
+    # Sign + notarize the macOS payload BEFORE zipping, so the shipped zip
+    # carries the signed binary. No-op for win-only builds.
+    if args.sign and "mac" in selected:
+        mac_plugin = os.path.join(package_root, "MacOS", "shotblocks")
+        signer = os.path.join(REPO_ROOT, "tools", "sign_notarize_mac.sh")
+        print("Signing + notarizing macOS binary ...")
+        try:
+            subprocess.run([signer, mac_plugin], check=True)
+        except subprocess.CalledProcessError:
+            warnings.append(
+                "MacOS: signing/notarization failed (see output above). The "
+                "package was still written UNSIGNED -- ship it and have users "
+                "strip quarantine, or fix signing and re-run with --sign."
+            )
 
     if args.zip:
         zip_base = os.path.join(dist, name)
