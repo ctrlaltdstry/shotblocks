@@ -1084,6 +1084,16 @@ public:
 				ToggleV2Play();
 				return true;   // consume — don't let C4D also act on Space
 			}
+			if ((key == KEY_DELETE || key == KEY_BACKSPACE) && down && !_textFieldFocused)
+			{
+				// Route Delete to the timeline (remove selected clips / keys)
+				// instead of letting C4D delete the camera from the Object
+				// Manager. JS runs the same logic as its keydown handler.
+				// Gated on _textFieldFocused so editing a clip/track name
+				// (a WebView <input>) still backspaces normally.
+				PostWeb("{\"kind\":\"delete-selection\"}"_s);
+				return true;   // consume — keep C4D from deleting the OM object
+			}
 		}
 #endif
 
@@ -1966,6 +1976,22 @@ private:
 			if (!GetActiveDocument()) return "{\"ok\":false,\"error\":\"no doc\"}";
 			ToggleV2Play();
 			return "{\"ok\":true,\"kind\":\"toggle-play-ack\"}";
+		}
+		if (body.find("\"kind\":\"set-text-focus\"") != std::string::npos)
+		{
+			// macOS: a WebView text field gained/lost focus. While focused,
+			// the BFM_INPUT handler must NOT steal Delete/Backspace so name
+			// editing backspaces normally.
+			_textFieldFocused = (body.find("\"on\":true") != std::string::npos);
+			return "{\"ok\":true,\"kind\":\"set-text-focus-ack\"}";
+		}
+		if (body.find("\"kind\":\"focus-request\"") != std::string::npos)
+		{
+			// User clicked into our panel — reclaim keyboard focus so C4D
+			// routes keys (Delete, Space) to this dialog instead of whatever
+			// editor was last active (e.g. the Object Manager).
+			Activate(ID_HOST_HTMLVIEW);
+			return "{\"ok\":true,\"kind\":\"focus-request-ack\"}";
 		}
 		if (body.find("\"kind\":\"set-play-range\"") != std::string::npos)
 		{
@@ -4499,6 +4525,7 @@ private:
 	bool                 _jsHandshakeDone;
 	bool                 _hoverActive;
 	bool                 _magnifyMonitorInstalled{false};  // macOS pinch monitor (lazy install in Timer)
+	bool                 _textFieldFocused{false};         // macOS: a WebView text field is focused — don't steal Delete/Backspace
 	Float                _lastTimeChangedTickMs;
 	// Last keyframe fingerprint pushed to JS. The Timer re-pushes cameras
 	// when this moves, catching keyframe edits made while the dialog was

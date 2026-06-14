@@ -1,6 +1,6 @@
 import { useEffect } from 'react';
 import { useStore, parseKeyCol } from './store';
-import { send } from './lib/host';
+import { send, onMessage } from './lib/host';
 import { flushKeyframeDeletes } from './usePersistence';
 
 /** Keyboard shortcuts for the timeline:
@@ -239,45 +239,16 @@ export function useKeyboard(): void {
         return;
       }
 
-      // Delete / Backspace → delete selection. Priority: a selected
-      // keyframe COLUMN (dot) first, then a pen-tool level-keyframe
-      // selection, then clips. Each is a distinct selection model; the
-      // most specific wins so Delete doesn't also nuke the clip.
+      // Delete / Backspace → delete the timeline selection. The priority
+      // logic lives in performDelete() so the macOS C++ key route
+      // (delete-selection message) shares it. On Windows this keydown
+      // fires directly; on macOS C4D sends the key to the dialog, so the
+      // C++ side forwards it here instead (see main.cpp / useEffect below).
       if (ev.key === 'Delete' || ev.key === 'Backspace') {
-        const st = useStore.getState();
-        const cols = st.selectedKeyColumns;
-        if (cols.size > 0) {
+        if (performDelete()) {
           ev.preventDefault();
           ev.stopPropagation();
-          // refCount per camera across ALL video clips — a shared camera
-          // is skipped by C++ (deleting would corrupt the other clip's
-          // animation), same guard as move/retime. One delete entry per
-          // selected column; C++ loops.
-          const refByObj = new Map<number, number>();
-          for (const t of st.videoTracks)
-            for (const c of t.clips)
-              if (c.objectId > 0) refByObj.set(c.objectId, (refByObj.get(c.objectId) ?? 0) + 1);
-          const deletes = [...cols].map((key) => {
-            const { objectId, frame } = parseKeyCol(key);
-            return { objectId, frame, refCount: refByObj.get(objectId) ?? 1 };
-          });
-          flushKeyframeDeletes(deletes);
-          st.setSelectedKeyColumns(new Set<string>());
-          return;
         }
-        const lk = st.levelKfSelection;
-        if (lk && lk.indices.length) {
-          ev.preventDefault();
-          ev.stopPropagation();
-          st.removeLevelKeyframes(lk.clipId, lk.indices);
-          st.setLevelKfSelection(null);
-          return;
-        }
-        const sel = st.selectedClipIds;
-        if (sel.size === 0) return;
-        ev.preventDefault();
-        ev.stopPropagation();
-        deleteSelection(sel);
         return;
       }
 
@@ -293,8 +264,88 @@ export function useKeyboard(): void {
       }
     }
     window.addEventListener('keydown', onKeyDown);
-    return () => window.removeEventListener('keydown', onKeyDown);
+
+    // macOS delete routing: C4D delivers Delete/Backspace to the dialog,
+    // not the WebView, so C++ forwards a delete-selection message here and
+    // we run the same delete logic. (No-op on Windows, which uses keydown.)
+    const unsub = onMessage((m) => {
+      if (m.kind === 'delete-selection') performDelete();
+    });
+
+    // Tell C++ when a text field is focused so its key router leaves
+    // Delete/Backspace alone (name editing). Deduped; cheap.
+    let textFocused = false;
+    const isTextEl = (el: EventTarget | null) => {
+      const t = el as HTMLElement | null;
+      return !!t && (t.tagName === 'INPUT' || t.tagName === 'TEXTAREA' || t.isContentEditable);
+    };
+    const pushTextFocus = (on: boolean) => {
+      if (on === textFocused) return;
+      textFocused = on;
+      void send({ kind: 'set-text-focus', on });
+    };
+    const onFocusIn = (e: FocusEvent) => pushTextFocus(isTextEl(e.target));
+    const onFocusOut = () => pushTextFocus(false);
+    document.addEventListener('focusin', onFocusIn);
+    document.addEventListener('focusout', onFocusOut);
+
+    // Reclaim keyboard focus on any click in our panel. After the user
+    // touches another C4D editor (e.g. the Object Manager), C4D keeps
+    // routing keys there; clicking back here tells C++ to Activate() our
+    // dialog so Delete/Space come to us. Throttled (clicks aren't rare).
+    let lastFocusReq = 0;
+    const onPointerDownFocus = () => {
+      const now = globalThis.performance?.now?.() ?? 0;
+      if (now - lastFocusReq < 200) return;
+      lastFocusReq = now;
+      void send({ kind: 'focus-request' }).catch(() => {});
+    };
+    window.addEventListener('pointerdown', onPointerDownFocus, true);
+
+    return () => {
+      window.removeEventListener('keydown', onKeyDown);
+      document.removeEventListener('focusin', onFocusIn);
+      document.removeEventListener('focusout', onFocusOut);
+      window.removeEventListener('pointerdown', onPointerDownFocus, true);
+      unsub();
+    };
   }, []);
+}
+
+/** Delete the most-specific current timeline selection: keyframe COLUMNS
+ *  (dots) first, then a pen-tool level-keyframe selection, then clips —
+ *  each a distinct selection model, most specific wins. Shared by the
+ *  keydown handler and the macOS C++ delete route (delete-selection).
+ *  Returns whether anything was deleted (so keydown knows to preventDefault). */
+function performDelete(): boolean {
+  const st = useStore.getState();
+  const cols = st.selectedKeyColumns;
+  if (cols.size > 0) {
+    // refCount per camera across ALL video clips — a shared camera is
+    // skipped by C++ (deleting would corrupt the other clip's animation),
+    // same guard as move/retime. One delete entry per selected column.
+    const refByObj = new Map<number, number>();
+    for (const t of st.videoTracks)
+      for (const c of t.clips)
+        if (c.objectId > 0) refByObj.set(c.objectId, (refByObj.get(c.objectId) ?? 0) + 1);
+    const deletes = [...cols].map((key) => {
+      const { objectId, frame } = parseKeyCol(key);
+      return { objectId, frame, refCount: refByObj.get(objectId) ?? 1 };
+    });
+    flushKeyframeDeletes(deletes);
+    st.setSelectedKeyColumns(new Set<string>());
+    return true;
+  }
+  const lk = st.levelKfSelection;
+  if (lk && lk.indices.length) {
+    st.removeLevelKeyframes(lk.clipId, lk.indices);
+    st.setLevelKfSelection(null);
+    return true;
+  }
+  const sel = st.selectedClipIds;
+  if (sel.size === 0) return false;
+  deleteSelection(sel);
+  return true;
 }
 
 /** Compute the bounding [in, out] frame range over the current
@@ -329,8 +380,11 @@ export function rangeToSelectionOrAll(s: ReturnType<typeof useStore.getState>) {
  *  the rest of the selection still deletes). */
 function deleteSelection(ids: Set<number>) {
   const s = useStore.getState();
+  // A locked track keeps all its clips; on an unlocked track, a clip is
+  // removed only if it's selected AND not itself locked (locked = fully
+  // locked: no delete).
   const filterTrack = (t: typeof s.videoTracks[number]) =>
-    t.locked ? t : { ...t, clips: t.clips.filter((c) => !ids.has(c.id)) };
+    t.locked ? t : { ...t, clips: t.clips.filter((c) => !ids.has(c.id) || c.locked || c.state === 'locked') };
   const v = s.videoTracks.map(filterTrack);
   const a = s.audioTracks.map(filterTrack);
   useStore.setState({

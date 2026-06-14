@@ -93,9 +93,11 @@ export const createSelectionSlice: StateCreator<State, [], [], SelectionSlice> =
     // Inline delete (same shape as useKeyboard.deleteSelection so we
     // don't depend on it). Empty non-base tracks get culled.
     set((s) => {
-      const filterTrack = (t: Track) => ({
+      // Locked clips are never removed (fully locked) — cut leaves them in
+      // place even if selected. A locked track keeps everything.
+      const filterTrack = (t: Track) => t.locked ? t : ({
         ...t,
-        clips: t.clips.filter((c) => !clipIds.has(c.id)),
+        clips: t.clips.filter((c) => !clipIds.has(c.id) || c.locked || c.state === 'locked'),
       });
       return {
         videoTracks: s.videoTracks.map(filterTrack),

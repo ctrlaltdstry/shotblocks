@@ -230,10 +230,12 @@ export function ContextMenu() {
             // Inline delete — same path as useKeyboard's deleteSelection.
             const sNow = useStore.getState();
             const ids = sNow.selectedClipIds;
-            const filterTrack = <T extends { id: number; clips: { id: number }[] }>(t: T) => ({
-              ...t,
-              clips: t.clips.filter((c) => !ids.has(c.id)),
-            });
+            // Locked clips (and clips on a locked track) are never removed.
+            const filterTrack = <T extends { id: number; locked?: boolean; clips: { id: number; locked?: boolean; state?: string }[] }>(t: T): T =>
+              t.locked ? t : {
+                ...t,
+                clips: t.clips.filter((c) => !ids.has(c.id) || !!c.locked || c.state === 'locked'),
+              };
             useStore.setState({
               videoTracks: sNow.videoTracks.map(filterTrack),
               audioTracks: sNow.audioTracks.map(filterTrack),

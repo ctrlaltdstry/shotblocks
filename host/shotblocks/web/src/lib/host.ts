@@ -72,7 +72,11 @@ export type HostInbound =
   // side taps AppKit's magnify NSEvent and forwards the per-event delta
   // here (fixed-point x10000; positive = pinch open = zoom in). JS applies
   // the anchored horizontal zoom. See sb_magnify_mac.mm + useWheelScroll.
-  | { kind: 'tp-magnify'; d: number };
+  | { kind: 'tp-magnify'; d: number }
+  // macOS: C4D delivers Delete/Backspace to the dialog, not the WebView,
+  // so C++ routes it here (gated on no text field being focused) to delete
+  // the timeline selection instead of letting C4D delete the OM camera.
+  | { kind: 'delete-selection' };
 
 export type HostOutbound =
   | { kind: 'ping'; t: number }
@@ -151,6 +155,14 @@ export type HostOutbound =
   // keys in the Timeline/dope sheet; objectId=0 clears the highlight
   // (empty selection / gap / non-camera clip). Does not touch OM/AM.
   | { kind: 'sync-dope-keys'; objectId: number }
+  // macOS only: tell C++ whether a text field (clip/track name, settings)
+  // is focused, so its BFM_INPUT handler knows NOT to steal Delete/
+  // Backspace (which would break name editing). See useKeyboard.ts.
+  | { kind: 'set-text-focus'; on: boolean }
+  // Reclaim keyboard focus for our dialog when the user clicks into the
+  // panel — otherwise C4D keeps routing keys (Delete) to whatever editor
+  // was last active (e.g. the Object Manager). C++ calls Activate().
+  | { kind: 'focus-request' }
   // Rename a clip's source camera in the C4D Object Manager (the
   // editable clip title). C++ resolves objectId via _cameraLinks,
   // SetName under undo, then re-pushes `cameras` so the live name echoes
