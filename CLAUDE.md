@@ -78,7 +78,7 @@ The Python plugin under `src/` is rig-only after the v2 timeline port. The C++ p
 
 ## Versioning & scope
 
-**Targets: C4D 2026.2.0 on Windows and macOS (Apple Silicon), as of v1.2.0.** No older C4D versions — not on the roadmap. The platform split lives in the C++ plugin (`#ifdef _WIN32`), the web bridge transport, and the cursor layers; read the macOS entries in `.agent/context/pitfalls.md` before touching any of it. Release packaging is `tools/package_plugin.py` over the stamped two-OS binaries in `native/builds/`. Mac dev loop: `tools/build_native_mac.sh` + `scripts/deploy-mac.sh` (no force-kill script yet — quit C4D manually).
+**Targets: C4D 2026.2.0 on Windows and macOS (Apple Silicon), as of v1.2.0.** No older C4D versions — not on the roadmap. The platform split lives in the C++ plugin (`#ifdef _WIN32`), the web bridge transport, and the cursor layers; read the macOS entries in `.agent/context/pitfalls.md` before touching any of it. Release packaging is `tools/package_plugin.py` over the stamped two-OS binaries in `native/builds/`. Mac dev loop: `scripts/dev-loop-mac.sh` — the Mac counterpart of `dev-loop.ps1`: force-kills C4D, rebuilds the web bundle + native module, deploys, and relaunches the test scene. Pass `--no-native` to skip the native rebuild (web/Python-only changes; also avoids the per-build churn in `native/builds/`). The underlying steps are still `tools/build_native_mac.sh` (build + install the `.xlib`) and `scripts/deploy-mac.sh` (deploy Python tag + web + docs + `.xlib`), runnable on their own.
 
 ## Commits
 
