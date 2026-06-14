@@ -1,0 +1,6 @@
+<svg preserveAspectRatio="none" width="100%" height="100%" overflow="visible" style="display: block;" viewBox="0 0 16 16" fill="none" xmlns="http://www.w3.org/2000/svg">
+<g id="Inspector collapse button ">
+<path id="Rectangle 161" d="M9.41177 0L13.0588 0C14.1634 0 15.0588 0.895431 15.0588 2L15.0588 14C15.0588 15.1046 14.1634 16 13.0588 16H9.41177L9.41177 0Z" fill="var(--fill-0, #3D3D3D)"/>
+<path id="Rectangle 162" d="M14 15.5L2 15.5C1.17157 15.5 0.500002 14.8284 0.500002 14L0.500003 2C0.500004 1.17157 1.17158 0.499999 2 0.499999L14 0.5C14.8284 0.5 15.5 1.17157 15.5 2L15.5 14C15.5 14.8284 14.8284 15.5 14 15.5Z" stroke="var(--stroke-0, #3D3D3D)"/>
+</g>
+</svg>

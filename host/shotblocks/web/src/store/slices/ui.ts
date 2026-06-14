@@ -19,6 +19,9 @@ export interface UiSlice {
   activeTool: ToolId;
   audioScrub: boolean;
   settingsOpen: boolean;
+  /** Inspector panel visibility. Defaults CLOSED — the timeline opens with
+   *  maximum width; the top-right toggle opens the panel. Ephemeral. */
+  inspectorOpen: boolean;
   snapEnabled: boolean;
   snapIndicatorFrames: number[];
   detectingBeats: boolean;
@@ -118,6 +121,7 @@ export interface UiSlice {
   setActiveTool: (tool: ToolId) => void;
   setAudioScrub: (on: boolean) => void;
   setSettingsOpen: (open: boolean) => void;
+  setInspectorOpen: (open: boolean) => void;
   setAvailableCameraTypes: (types: CameraTypeOption[]) => void;
   setDefaultCameraType: (id: number) => void;
   /** Set the active V or A chip — auto-routes based on the trackId
@@ -159,6 +163,7 @@ export const createUiSlice: StateCreator<State, [], [], UiSlice> = (set) => ({
   activeTool: 'select',
   audioScrub: true,
   settingsOpen: false,
+  inspectorOpen: false,
   snapEnabled: false,
   snapIndicatorFrames: [],
   detectingBeats: false,
@@ -193,6 +198,7 @@ export const createUiSlice: StateCreator<State, [], [], UiSlice> = (set) => ({
   setActiveTool: (tool) => set({ activeTool: tool }),
   setAudioScrub: (on) => set({ audioScrub: on }),
   setSettingsOpen: (open) => set({ settingsOpen: open }),
+  setInspectorOpen: (open) => set({ inspectorOpen: open }),
   setAvailableCameraTypes: (types) => set({ availableCameraTypes: types }),
   setDefaultCameraType: (id) => set({ defaultCameraType: id, cameraTypeExplicit: true }),
   setActiveChip: (trackId) => set((s) => {

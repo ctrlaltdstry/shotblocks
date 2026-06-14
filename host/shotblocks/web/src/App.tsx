@@ -38,6 +38,8 @@ import { Timecode } from './components/Timecode';
 import { HScroll, VScroll } from './components/StageScrollbars';
 import { HeadersColumn } from './components/HeadersColumn';
 import { LanesStack } from './components/LanesStack';
+import inspectorToggleClosedUrl from './icons/inspector-toggle-closed.svg';
+import inspectorToggleOpenUrl from './icons/inspector-toggle-open.svg';
 import { useMarquee } from './useMarquee';
 import { DebugOverlay } from './DebugOverlay';
 import { useElementSize } from './useElementSize';
@@ -128,6 +130,7 @@ function App() {
 
   const activeTool = useStore((s) => s.activeTool);
   const headersWidth = useStore((s) => s.headersWidth);
+  const inspectorOpen = useStore((s) => s.inspectorOpen);
   // Empty-doc state — same trigger the camera dropzone uses. Drives
   // a body-level class that hides the track headers, the V/A divider,
   // and lane chrome so the empty state reads as a true empty canvas
@@ -151,9 +154,20 @@ function App() {
   const audioOverflows = sideOverflows(vAudio, audioTrackCount, audioStackSize.height, 'audio');
 
   return (
-    <div className="app">
+    <div className={'app' + (inspectorOpen ? '' : ' is-inspector-closed')}>
       <div className="topbar">
         <Timecode />
+        {/* Inspector collapse/expand toggle — top-right corner. Sits at the
+            same spot whether the panel is open or closed (per Figma); the
+            icon shade indicates state (grey-16 closed → grey-24 open). */}
+        <button
+          className={'inspector-collapse-btn' + (inspectorOpen ? ' is-open' : '')}
+          onClick={() => useStore.getState().setInspectorOpen(!inspectorOpen)}
+          title={inspectorOpen ? 'Hide inspector' : 'Show inspector'}
+          aria-label={inspectorOpen ? 'Hide inspector' : 'Show inspector'}
+        >
+          <img src={inspectorOpen ? inspectorToggleOpenUrl : inspectorToggleClosedUrl} alt="" />
+        </button>
       </div>
 
       <div

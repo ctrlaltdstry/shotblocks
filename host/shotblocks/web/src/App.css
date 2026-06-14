@@ -10,11 +10,22 @@
      Figma 400:1933 at (1037, 0) with size 250x544. */
   position: relative;
   /* Reserve space at the right edge for the absolute-positioned
-     Inspector so .topbar and .body content don't slide under it.
-     The value matches the --inspector-w set on .body. */
-  padding-right: 300px;
+     Inspector so .topbar and .body content don't slide under it. Driven
+     by --inspector-w so the top-right toggle can collapse the panel: when
+     closed the var goes to 0, the body/stage reclaim the full width, the
+     drop zone re-centers, and Add camera slides to the edge. */
+  --inspector-w: 300px;
+  padding-right: var(--inspector-w);
   box-sizing: border-box;
+  /* Animate the reflow: the timeline content slides over as the reserved
+     inspector width changes (paired with the .inspector slide below). */
+  transition: padding-right 200ms cubic-bezier(0.22, 1, 0.36, 1);
 }
+/* Inspector collapsed (the default) — reclaim the reserved width and hide
+   the panel. The toggle lives in the topbar; see .inspector-collapse-btn. */
+.app.is-inspector-closed { --inspector-w: 0px; }
+/* Slide the panel off the right edge (not display:none) so it animates. */
+.app.is-inspector-closed .inspector { transform: translateX(100%); pointer-events: none; }
 
 /* ---- top bar ---- */
 .topbar {
@@ -46,6 +57,38 @@ body.is-timecode-scrubbing,
 body.is-timecode-scrubbing * {
   cursor: none !important;
 }
+
+/* Inspector collapse/expand toggle — top-right of the topbar. Pushed to
+   the right edge (margin-left:auto) and vertically centered by the
+   topbar's align-items:center, matching the Figma placement. One fixed
+   button serves both states; the icon SHADE is the state indicator:
+   grey-16 closed, grey-24 open (the lighter shade), grey-50 on hover for a
+   clear click affordance (same lighten-on-hover idea as the utility
+   buttons). The glyph is the exact Figma SVG, recolored via mask-image. */
+.inspector-collapse-btn {
+  /* Absolute against .app (not in the topbar's flex flow) so it stays at
+     the very top-right corner in BOTH states — over the inspector's top-
+     right when open, and the bare corner when closed. .app's right padding
+     reserves the inspector width but doesn't move this (padding-box right
+     edge == viewport right). z-index beats the inspector (z-index:10). */
+  position: absolute;
+  top: 5px;     /* (topbar 26px − icon 16px) / 2 → vertically centered */
+  right: 10px;  /* matches the Figma 10px inset from the panel's right edge */
+  z-index: 20;
+  width: 16px; height: 16px;
+  display: flex; align-items: center; justify-content: center;
+  padding: 0; border: 0; background: none;
+  cursor: pointer;
+}
+/* Render the exact Figma SVG as an image (outline + fill, no mask) so it
+   matches the design pixel-for-pixel. Closed/open use the two source SVGs
+   (#292929 / #3D3D3D) straight from Figma — the shade IS the state. */
+.inspector-collapse-btn img {
+  display: block;
+  width: 16px; height: 16px;
+}
+/* Subtle hover affordance — lighten the exact glyph, no geometry change. */
+.inspector-collapse-btn:hover img { filter: brightness(1.6); }
 
 /* ---- body grid ---- */
 .body {
@@ -1487,7 +1530,9 @@ body.is-hand-panning * {
    regardless of timeline state. Plan 4 commit 2. */
 .add-camera-button {
   position: absolute;
-  right: 317px;
+  /* 17px clearance to the Inspector's left edge; when the inspector is
+     collapsed (--inspector-w: 0) this slides to 17px from the canvas edge. */
+  right: calc(var(--inspector-w, 300px) + 17px);
   bottom: 16px;
   width: 82px;
   height: 32px;
@@ -1503,7 +1548,8 @@ body.is-hand-panning * {
   white-space: nowrap;
   cursor: pointer;
   z-index: 50;
-  transition: filter 120ms ease;
+  transition: filter 120ms ease,
+              right 200ms cubic-bezier(0.22, 1, 0.36, 1);
 }
 .add-camera-button:hover {
   filter: brightness(1.1);
@@ -2183,6 +2229,9 @@ body.is-hand-panning * {
   position: absolute;
   top: 0; right: 0; bottom: 0;
   width: 300px;
+  /* Reserve the top strip for the floating inspector-toggle button so the
+     section content starts BELOW it instead of under it. */
+  padding-top: var(--topbar-h);
   background: var(--color-grey-10);
   border-left: 1px solid var(--color-grey-16);
   display: flex;
@@ -2191,6 +2240,8 @@ body.is-hand-panning * {
   min-width: 0;
   font-family: Inter, sans-serif;
   z-index: 10;
+  /* Slide in/out from the right edge, in step with .app's padding-right. */
+  transition: transform 200ms cubic-bezier(0.22, 1, 0.36, 1);
 }
 
 /* Inspector body — vertical stack of section cards. Matches Figma

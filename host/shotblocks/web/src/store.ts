@@ -143,6 +143,8 @@ export interface State {
   // icon. A centered modal hosts global preferences (currently just
   // the C4D-audio-follows toggle). Will grow as more settings land.
   settingsOpen: boolean;
+  /** Inspector panel visibility — defaults CLOSED (timeline full width). */
+  inspectorOpen: boolean;
 
   // When ON (default), v2 audio plays/scrubs in response to the C4D
   // NATIVE timeline (its play button AND scrubbing its playhead).
@@ -411,6 +413,7 @@ export interface State {
   setActiveChip: (trackId: string) => void;
   setAudioScrub: (on: boolean) => void;
   setSettingsOpen: (open: boolean) => void;
+  setInspectorOpen: (open: boolean) => void;
   setSnapEnabled: (on: boolean) => void;
   setSnapIndicatorFrames: (frames: number[]) => void;
   setScrubFrame: (frame: number | null) => void;
