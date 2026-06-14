@@ -4,7 +4,7 @@ import { mintId } from '../../store';
 import type { Clip, Track } from '../types';
 import { TRACK_FLAG_DEFAULTS } from '../types';
 import { MIN_CLIP_FRAMES } from '../constants';
-import { findFreeSlot, rippleAround, replaceOverlap, parseKeyCol } from '../clipMath';
+import { findFreeSlot, rippleAround, replaceOverlap, parseKeyCol, placeAvoidingLocked, lockedResizeBound } from '../clipMath';
 
 /** The timeline data slice — videoTracks / audioTracks, plus every
  *  action that mutates them. The bulk of the store lives here:
@@ -302,7 +302,15 @@ export const createTimelineSlice: StateCreator<State, [], [], TimelineSlice> = (
       // snapFrames is unused here on commit — live preview already
       // applied snap via magneticSnap and passes the snapped value in.
       void snapFrames;
-      const placedIn = Math.max(s.docMin, newInFrame);
+      // Locked clips on the destination are immovable walls — clamp the
+      // drop so the clip can't land across one (which would otherwise let
+      // replaceOverlap trim/delete it). placeAvoidingLocked butts the
+      // clip against the nearer locked edge; null means no gap is wide
+      // enough, so the move is refused.
+      const destClips = working.find((t) => t.id === toNum)?.clips ?? [];
+      const placedIn = placeAvoidingLocked(
+        destClips, clipId, Math.max(s.docMin, newInFrame), duration, s.docMin);
+      if (placedIn === null) return s;
       const placedOut = placedIn + duration;
       const movedClip: Clip = { ...moving, inFrame: placedIn, outFrame: placedOut };
 
@@ -381,6 +389,15 @@ export const createTimelineSlice: StateCreator<State, [], [], TimelineSlice> = (
       } else {
         newOut = Math.min(maxOut,
           Math.max(clip.inFrame + MIN_CLIP_FRAMES, wantFrame));
+      }
+      // Locked clips on this track are walls — the dragged edge can grow
+      // up to a locked neighbour's edge but not across it (which would
+      // make replaceOverlap trim/delete the lock). Only growth is
+      // constrained; shrinking never crosses a wall.
+      if (edge === 'left') {
+        newIn = Math.max(newIn, lockedResizeBound(tracks[trackIdx].clips, clipId, clip, 'left'));
+      } else {
+        newOut = Math.min(newOut, lockedResizeBound(tracks[trackIdx].clips, clipId, clip, 'right'));
       }
       if (newIn === clip.inFrame && newOut === clip.outFrame) {
         result = { inFrame: newIn, outFrame: newOut };
@@ -561,6 +578,27 @@ export const createTimelineSlice: StateCreator<State, [], [], TimelineSlice> = (
           side: 'other',
         });
       }
+      // Locked clips are immovable walls: refuse the WHOLE group move if
+      // any arrival would overlap a locked, non-selected clip on its
+      // destination track (which would otherwise let replaceOverlap
+      // trim/delete the lock). All-or-nothing, like the locked-track
+      // guards above — a group can't be half-moved.
+      const lockedOverlap = (sideTracks: Track[], sideKind: 'anchor' | 'other'): boolean => {
+        for (const moved of movedById.values()) {
+          if (moved.side !== sideKind) continue;
+          const destTrack = sideTracks.find((t) => t.id === moved.newTrackNum);
+          if (!destTrack) continue;
+          for (const c of destTrack.clips) {
+            if (clipIds.has(c.id)) continue;            // selected clips ride along
+            if (!(c.locked || c.state === 'locked')) continue;
+            if (c.inFrame < moved.outFrame && c.outFrame > moved.inFrame) return true;
+          }
+        }
+        return false;
+      };
+      if (lockedOverlap(workingAnchor, 'anchor')) return s;
+      if (otherLocs.length > 0 && lockedOverlap(otherTracks, 'other')) return s;
+
       // Rebuild a single side's tracks:
       //  1. Remove every selected clip that originated here.
       //  2. Add selected clips whose destination is here.
@@ -621,6 +659,9 @@ export const createTimelineSlice: StateCreator<State, [], [], TimelineSlice> = (
       const left  = tracks[trackIdx].clips.find((c) => c.id === leftClipId);
       const right = tracks[trackIdx].clips.find((c) => c.id === rightClipId);
       if (!left || !right) return s;
+      // A locked clip on either side of the seam can't be rolled.
+      if (left.locked || left.state === 'locked'
+          || right.locked || right.state === 'locked') return s;
       // Clamp the seam between the two clips' OUTER edges, keeping
       // MIN_CLIP_FRAMES on each side. The seam can move anywhere in
       // [left.inFrame + MIN_CLIP_FRAMES, right.outFrame - MIN_CLIP_FRAMES].

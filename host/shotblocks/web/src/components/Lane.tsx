@@ -143,6 +143,11 @@ export function Lane({ track, side }: { track: Track; side: 'video' | 'audio' })
     const sorted = [...track.clips].sort((a, b) => a.inFrame - b.inFrame);
     const edges = new Set<string>();
     let mode: CursorMode = 'default';
+    // A locked CLIP (independent of the locked-track guard above) offers
+    // no trim / roll affordance — its edges are immovable. Skip its edge
+    // zones entirely so the cursor never promises an edit it won't do.
+    const lockedOf = (c: { locked?: boolean; state?: string }) =>
+      !!c.locked || c.state === 'locked';
 
     // First pass: is the cursor inside an "isolated" trim hit zone
     // (not overlapped with a neighbor's zone)? An isolated trim zone
@@ -171,7 +176,8 @@ export function Lane({ track, side }: { track: Track; side: 'video' | 'audio' })
       // straddles both clips so we have to detect it BEFORE the
       // individual right-trim / left-trim checks so neither one
       // claims part of it.
-      if (nextAdjacent && x >= rightPx - edgeZone && x <= rightPx + edgeZone) {
+      if (nextAdjacent && !lockedOf(clip) && !lockedOf(next!)
+          && x >= rightPx - edgeZone && x <= rightPx + edgeZone) {
         const seamStart = rightPx - edgeZone;
         const seamEnd   = rightPx + edgeZone;
         const t1 = seamStart + (seamEnd - seamStart) / 3;
@@ -191,7 +197,7 @@ export function Lane({ track, side }: { track: Track; side: 'video' | 'audio' })
       }
 
       // ISOLATED right-trim (no adjacent next clip).
-      if (x >= rightPx - edgeZone && x <= rightPx) {
+      if (!lockedOf(clip) && x >= rightPx - edgeZone && x <= rightPx) {
         edges.add(clip.id + ':right');
         mode = 'trim';
         break;
@@ -202,7 +208,7 @@ export function Lane({ track, side }: { track: Track; side: 'video' | 'audio' })
       if (x >= leftPx && x <= leftPx + edgeZone) {
         const prev = sorted[i - 1];
         const prevAdjacent = prev && (clip.inFrame - prev.outFrame) <= 1;
-        if (!prevAdjacent) {
+        if (!prevAdjacent && !lockedOf(clip)) {
           edges.add(clip.id + ':left');
           mode = 'trim';
           break;
@@ -240,7 +246,9 @@ export function Lane({ track, side }: { track: Track; side: 'video' | 'audio' })
       if (leftClipId >= 0 && rightClipId >= 0) {
         const leftClip  = track.clips.find((c) => c.id === leftClipId);
         const rightClip = track.clips.find((c) => c.id === rightClipId);
-        if (leftClip && rightClip && leftClip.outFrame === rightClip.inFrame) {
+        if (leftClip && rightClip && leftClip.outFrame === rightClip.inFrame
+            && !leftClip.locked && leftClip.state !== 'locked'
+            && !rightClip.locked && rightClip.state !== 'locked') {
           const rect = ev.currentTarget.getBoundingClientRect();
           const pxPerFrame = rect.width / visibleSpan;
           if (pxPerFrame > 0) {
@@ -283,7 +291,7 @@ export function Lane({ track, side }: { track: Track; side: 'video' | 'audio' })
       }
       if (clipId >= 0 && edge) {
         const clip = track.clips.find((c) => c.id === clipId);
-        if (clip) {
+        if (clip && !clip.locked && clip.state !== 'locked') {
           const rect = ev.currentTarget.getBoundingClientRect();
           const pxPerFrame = rect.width / visibleSpan;
           if (pxPerFrame > 0) {

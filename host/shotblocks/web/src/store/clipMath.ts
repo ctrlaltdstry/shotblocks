@@ -217,7 +217,13 @@ export function rippleAround(
   const rightResult: Clip[] = [];
   for (const s of same) {
     if (s.inFrame >= target.inFrame) {
-      if (s.inFrame < cursor) {
+      // Locked clips don't get pushed — they're walls. Keep the clip in
+      // place and advance the cursor past it so later clips pile up
+      // after it instead of overlapping.
+      if (s.locked || s.state === 'locked') {
+        rightResult.push(s);
+        cursor = Math.max(cursor, s.outFrame);
+      } else if (s.inFrame < cursor) {
         const dur = s.outFrame - s.inFrame;
         const shifted: Clip = { ...s, inFrame: cursor, outFrame: cursor + dur };
         rightResult.push(shifted);
@@ -243,7 +249,11 @@ export function rippleAround(
   const leftShifted: Clip[] = [];
   for (const s of reversed) {
     if (s.outFrame <= target.outFrame) {
-      if (s.outFrame > leftCursor) {
+      // Locked clips are walls here too — never shift one left.
+      if (s.locked || s.state === 'locked') {
+        leftShifted.push(s);
+        leftCursor = Math.min(leftCursor, s.inFrame);
+      } else if (s.outFrame > leftCursor) {
         const dur = s.outFrame - s.inFrame;
         const newOut = leftCursor;
         const newIn = Math.max(0, newOut - dur);
@@ -276,6 +286,12 @@ export function replaceOverlap(existing: Clip[], target: { inFrame: number; outF
   const out: Clip[] = [];
   for (const s of existing) {
     if (s.id === target.id) { out.push(s); continue; }
+    // A locked clip is an immovable wall: never trim or drop it. Callers
+    // clamp the incoming target against locked clips before we get here
+    // (see placeAvoidingLocked / lockedResizeBound), so this should not
+    // even overlap — but if it somehow does, preserve the lock intact
+    // rather than destroy it.
+    if (s.locked || s.state === 'locked') { out.push(s); continue; }
     // No overlap (outFrame is exclusive, so equal boundaries are OK).
     if (s.outFrame <= target.inFrame || s.inFrame >= target.outFrame) {
       out.push(s);
@@ -301,6 +317,82 @@ export function replaceOverlap(existing: Clip[], target: { inFrame: number; outF
     }
   }
   return out;
+}
+
+/** Locked clips are immovable walls — a moving clip (fixed duration) may
+ *  butt up against one but never cross into it (which would otherwise let
+ *  replaceOverlap trim/delete the lock, or ripple shove it). Clamp the
+ *  clip's desired left edge so [in, in+dur) lands in a gap BETWEEN locked
+ *  clips (and at/after `floor` = docMin). The moving clip is excluded by
+ *  id; unlocked clips are ignored here (they get overwritten as usual).
+ *
+ *  Returns the clamped inFrame, or null when no gap is wide enough to
+ *  hold the clip without crossing a lock — the caller treats null as a
+ *  blocked move (no-op). Works for same-track and cross-track moves: the
+ *  "nearest fitting gap" pick gives the solid-wall feel (the clip butts
+ *  against whichever locked edge is closer to where it was dropped). */
+export function placeAvoidingLocked(
+  existing: Clip[],
+  movingId: number,
+  desiredIn: number,
+  duration: number,
+  floor: number,
+): number | null {
+  const dur = Math.max(1, duration);
+  const locked = existing
+    .filter((c) => c.id !== movingId && (c.locked || c.state === 'locked'))
+    .sort((a, b) => a.inFrame - b.inFrame);
+  if (!locked.length) return Math.max(floor, desiredIn);
+
+  const gaps: Array<{ start: number; end: number }> = [];
+  let cursor = -Infinity;
+  for (const L of locked) {
+    gaps.push({ start: cursor, end: L.inFrame });
+    cursor = L.outFrame;
+  }
+  gaps.push({ start: cursor, end: Infinity });
+
+  const desiredOut = desiredIn + dur;
+  // Already clear of every wall → keep the desired position.
+  for (const g of gaps) {
+    if (desiredIn >= g.start && desiredOut <= g.end) return Math.max(floor, desiredIn);
+  }
+  // Otherwise drop into the nearest gap wide enough to hold the clip.
+  let best: number | null = null;
+  let bestDist = Infinity;
+  for (const g of gaps) {
+    const lo = Math.max(g.start, floor);
+    const hi = g.end - dur;
+    if (hi < lo) continue;                 // gap too small for this clip
+    const clamped = Math.max(lo, Math.min(hi, desiredIn));
+    const dist = Math.abs(clamped - desiredIn);
+    if (dist < bestDist) { bestDist = dist; best = clamped; }
+  }
+  return best;
+}
+
+/** Boundary a resize edge can't cross because a locked clip sits beyond
+ *  it on the same track. Right edge: the nearest locked clip's inFrame to
+ *  the right (the max allowed outFrame), or +Infinity if none. Left edge:
+ *  the nearest locked clip's outFrame to the left (the min allowed
+ *  inFrame), or -Infinity if none. The resizing clip is excluded by id.
+ *  Only growth is constrained — shrinking never crosses a wall. */
+export function lockedResizeBound(
+  existing: Clip[],
+  movingId: number,
+  clip: { inFrame: number; outFrame: number },
+  edge: 'left' | 'right',
+): number {
+  const locked = existing.filter(
+    (c) => c.id !== movingId && (c.locked || c.state === 'locked'));
+  if (edge === 'right') {
+    let bound = Infinity;
+    for (const L of locked) if (L.inFrame >= clip.inFrame) bound = Math.min(bound, L.inFrame);
+    return bound;
+  }
+  let bound = -Infinity;
+  for (const L of locked) if (L.outFrame <= clip.outFrame) bound = Math.max(bound, L.outFrame);
+  return bound;
 }
 
 /** Collect every detected audio peak as a DOC-FRAME position, across
