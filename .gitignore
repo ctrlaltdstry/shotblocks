@@ -72,3 +72,8 @@ scenes/*.c4d
 # Old per-bug debugging handoffs (superseded). Note: HANDOFF.md (no
 # suffix) is the live handoff and is NOT matched by this dash pattern.
 HANDOFF-*.md
+
+# Local Claude Code MCP config — points at a per-machine localhost server
+# (e.g. the Figma Dev Mode MCP on 127.0.0.1:3845). Machine-specific, not
+# shared.
+.mcp.json
