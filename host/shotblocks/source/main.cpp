@@ -58,6 +58,13 @@ void SbWarpCursorMac(double x, double y);
 // name = cursor file stem under web/cursors/ ("" releases the force).
 void SbSetCursorModeMac(const char* name, const char* cursorsDirUtf8, void* dialogHandle);
 
+// sb_magnify_mac.mm — native trackpad pinch capture (NSEvent magnify
+// monitor). C4D routes pinch to the native viewport, not our WebView
+// dialog, so we tap AppKit directly and forward the zoom delta to JS.
+// callback == null removes the monitor.
+typedef void (*SbMagnifyCallback)(double magnification);
+void SbSetMagnifyMonitorMac(SbMagnifyCallback callback, void* dialogHandle);
+
 // Map the handful of winsock spellings the HTTP server uses onto BSD
 // sockets so the server body stays single-source.
 using SOCKET = int;
@@ -869,6 +876,21 @@ public:
 	// in dtor; nullptr when the dialog isn't alive (renders won't switch).
 	static ShotblocksDialog* GetInstance() { return s_instance; }
 
+#ifndef _WIN32
+	// Forwards a native trackpad pinch delta (from sb_magnify_mac.mm) to
+	// JS, which applies the anchored horizontal zoom. Static so it can be
+	// used as a C callback; reaches the live dialog via s_instance. Sent as
+	// fixed-point int (x10000) to dodge float->string; JS divides back.
+	static void HandleMagnify(double magnification)
+	{
+		ShotblocksDialog* inst = s_instance;
+		if (!inst)
+			return;
+		const Int32 d = (Int32)(magnification * 10000.0);
+		inst->PostWeb("{\"kind\":\"tp-magnify\",\"d\":"_s + maxon::String::IntToString(d) + "}"_s);
+	}
+#endif
+
 	ShotblocksDialog()
 		: _htmlView(nullptr)
 		, _navigated(false)
@@ -887,6 +909,9 @@ public:
 		// the accept thread can hand the main thread a request it can't
 		// service.
 		_server.Stop();
+#ifndef _WIN32
+		SbSetMagnifyMonitorMac(nullptr, nullptr);  // remove the pinch monitor
+#endif
 		if (s_instance == this) s_instance = nullptr;
 	}
 
@@ -925,6 +950,7 @@ public:
 		_htmlView = nullptr;
 		_navigated = false;
 		_jsHandshakeDone = false;
+		_magnifyMonitorInstalled = false;  // reinstall the pinch monitor on reopen
 		SetTimer(250);
 		return true;
 	}
@@ -940,6 +966,19 @@ public:
 		EnsureNavigated();
 		AnnouncePortIfReady();
 		EnsureCursorSubclass();
+#ifndef _WIN32
+		// Install the trackpad pinch monitor once the dialog's NSWindow is
+		// resolvable (mirrors EnsureCursorSubclass's lazy approach).
+		if (!_magnifyMonitorInstalled)
+		{
+			void* h = GetWindowHandle();
+			if (h)
+			{
+				SbSetMagnifyMonitorMac(&ShotblocksDialog::HandleMagnify, h);
+				_magnifyMonitorInstalled = true;
+			}
+		}
+#endif
 		// Poll for render-settings drift on every tick. C4D doesn't
 		// fire EVMSG_CHANGE for in-Render-Settings edits (AOV delete,
 		// per-tab parameter changes); without polling the Sync button
@@ -1028,6 +1067,26 @@ public:
 	// webview2-screen-coords for the rationale.
 	Int32 Message(const BaseContainer& msg, BaseContainer& result) override
 	{
+#ifndef _WIN32
+		// macOS: C4D's WKWebView never forwards key events to the embedded
+		// web page, so the JS spacebar -> toggle-play path (which works on
+		// Windows/WebView2) never fires. C4D delivers key input to the
+		// dialog as BFM_INPUT; intercept Space here and drive playback in
+		// C++ directly (verified working). Windows keeps the JS path (this
+		// block is compiled out there) so there's no double-toggle.
+		if (msg.GetId() == BFM_INPUT &&
+		    msg.GetInt32(BFM_INPUT_DEVICE) == BFM_INPUT_KEYBOARD)
+		{
+			const Int32 key  = msg.GetInt32(BFM_INPUT_CHANNEL);
+			const Int32 down = msg.GetInt32(BFM_INPUT_VALUE);
+			if (key == KEY_SPACE && down)
+			{
+				ToggleV2Play();
+				return true;   // consume — don't let C4D also act on Space
+			}
+		}
+#endif
+
 		if (msg.GetId() != BFM_DRAGRECEIVE)
 			return GeDialog::Message(msg, result);
 
@@ -1902,34 +1961,10 @@ private:
 			// Delegates to C4D's native play transport (RunAnimation);
 			// see the long note in Timer(). We point C4D's loop range at
 			// the v2 play range so native play wraps/stops there, and the
-			// EVMSG_TIMECHANGED tick keeps the v2 playhead synced.
-			BaseDocument* doc = GetActiveDocument();
-			if (!doc) return "{\"ok\":false,\"error\":\"no doc\"}";
-			if (_v2Playing)
-			{
-				_v2Playing = false;
-				RunAnimation(doc, true, true);   // stop
-			}
-			else
-			{
-				_v2Playing = true;
-				Int32 fps = doc->GetFps();
-				if (fps <= 0) fps = 30;
-				// Frames are absolute document frames (v2 mirrors C4D's
-				// own ruler, MinTime included — see memory
-				// project_v2_absolute_frame_coords). _v2Range* are absolute.
-				Int32 curFrame = doc->GetTime().GetFrame(fps);
-				// If the playhead is outside the play range, snap to
-				// rangeIn before starting.
-				if (curFrame < _v2RangeIn || curFrame >= _v2RangeOut)
-				{
-					curFrame = _v2RangeIn;
-					SetDocumentTime(doc, BaseTime(curFrame, fps));
-				}
-				ApplyV2RangeToDocLoop(doc);
-				RunAnimation(doc, true, false);  // play forward
-			}
-			PostTick();
+			// EVMSG_TIMECHANGED tick keeps the v2 playhead synced. Shared
+			// with the macOS BFM_INPUT keyboard path (see Message()).
+			if (!GetActiveDocument()) return "{\"ok\":false,\"error\":\"no doc\"}";
+			ToggleV2Play();
 			return "{\"ok\":true,\"kind\":\"toggle-play-ack\"}";
 		}
 		if (body.find("\"kind\":\"set-play-range\"") != std::string::npos)
@@ -2144,6 +2179,41 @@ private:
 	// (RunAnimation) wraps/stops there. C4D's loop *mode* button isn't
 	// SDK-settable, but the loop min/max times are. Range is stored as
 	// absolute document frames (v2 mirrors C4D's ruler).
+	// Toggle v2 playback via C4D's native transport. Shared by the
+	// toggle-play HTTP command (the JS spacebar path — works on Windows,
+	// where WebView2 forwards the key to the page) and the BFM_INPUT
+	// keyboard handler in Message() (the macOS path — C4D's WKWebView
+	// never forwards keys to the embedded page, so JS never sees Space).
+	// Main-thread only (Dispatch is drained on the main thread; Message
+	// runs on the main thread).
+	void ToggleV2Play()
+	{
+		BaseDocument* doc = GetActiveDocument();
+		if (!doc)
+			return;
+		if (_v2Playing)
+		{
+			_v2Playing = false;
+			RunAnimation(doc, true, true);   // stop
+		}
+		else
+		{
+			_v2Playing = true;
+			Int32 fps = doc->GetFps();
+			if (fps <= 0) fps = 30;
+			// Absolute document frames (v2 mirrors C4D's ruler).
+			Int32 curFrame = doc->GetTime().GetFrame(fps);
+			if (curFrame < _v2RangeIn || curFrame >= _v2RangeOut)
+			{
+				curFrame = _v2RangeIn;
+				SetDocumentTime(doc, BaseTime(curFrame, fps));
+			}
+			ApplyV2RangeToDocLoop(doc);
+			RunAnimation(doc, true, false);  // play forward
+		}
+		PostTick();
+	}
+
 	void ApplyV2RangeToDocLoop(BaseDocument* doc)
 	{
 		if (!doc)
@@ -4428,6 +4498,7 @@ private:
 	bool                 _serverStarted;
 	bool                 _jsHandshakeDone;
 	bool                 _hoverActive;
+	bool                 _magnifyMonitorInstalled{false};  // macOS pinch monitor (lazy install in Timer)
 	Float                _lastTimeChangedTickMs;
 	// Last keyframe fingerprint pushed to JS. The Timer re-pushes cameras
 	// when this moves, catching keyframe edits made while the dialog was

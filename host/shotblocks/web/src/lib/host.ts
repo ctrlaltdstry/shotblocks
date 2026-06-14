@@ -67,7 +67,12 @@ export type HostInbound =
   // Master Render Settings has drifted (stale=true) or come back into
   // sync (stale=false) with the snapshot taken at the last
   // Add-to-Queue / Sync. Inspector lights the Sync button on stale.
-  | { kind: 'render-settings-drift'; stale: boolean };
+  | { kind: 'render-settings-drift'; stale: boolean }
+  // macOS trackpad pinch: C4D's WebView never gets the gesture, so the C++
+  // side taps AppKit's magnify NSEvent and forwards the per-event delta
+  // here (fixed-point x10000; positive = pinch open = zoom in). JS applies
+  // the anchored horizontal zoom. See sb_magnify_mac.mm + useWheelScroll.
+  | { kind: 'tp-magnify'; d: number };
 
 export type HostOutbound =
   | { kind: 'ping'; t: number }
